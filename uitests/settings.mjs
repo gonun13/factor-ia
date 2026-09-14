@@ -5,8 +5,10 @@
  * Run it:  docker compose --profile uitest run --rm uitest node tests/settings.mjs
  *
  * It creates its own throwaway project and deletes it at the end, so it can run
- * against a live instance without disturbing anything already there. It asserts
- * rather than prints: a UI check nobody reads the output of is not a check.
+ * against a live instance without disturbing anything already there — the
+ * delete takes the project's `_factories/<project>/` directory with it, so a
+ * run leaves no trace in the operator's workspace either. It asserts rather
+ * than prints: a UI check nobody reads the output of is not a check.
  */
 
 import { chromium } from "playwright";
@@ -114,9 +116,12 @@ try {
   await select.selectOption(value);
   check("an override wins over the default the option names", await select.inputValue(), value);
   check("a node edit belongs to the factory, so the canvas goes dirty", await page.locator(".savebar .pill").innerText(), "unsaved changes");
-
-  console.log(`\n${passed} checks passed`);
 } finally {
   await browser.close();
-  await api(`/api/projects/${PROJECT}`, { method: "DELETE" });
+  // Cleaning up is part of the test, so it is checked like the rest: a run that
+  // silently leaves its project behind is a run that pollutes the next one.
+  const removed = await api(`/api/projects/${PROJECT}`, { method: "DELETE" });
+  check("the throwaway project deletes cleanly", removed.status, 204);
+  check("…and is gone from the list", (await api(`/api/projects/${PROJECT}`)).status, 404);
+  console.log(`\n${passed} checks passed`);
 }

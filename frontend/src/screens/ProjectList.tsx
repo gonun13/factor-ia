@@ -169,8 +169,8 @@ export function ProjectList({ onOpen }: { onOpen: (projectId: string) => void })
                   >
                     <span className="name">Delete {project.name}?</span>
                     <span className="meta">
-                      Removes it from this machine's project list. The factory
-                      definition under <code>_factories/</code> is left in place.
+                      Removes it from this machine's project list and deletes
+                      its factory and memory under <code>_factories/</code>.
                     </span>
                     <span className="card-actions">
                       <button

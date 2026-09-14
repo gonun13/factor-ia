@@ -419,12 +419,15 @@ def test_editing_the_project_mid_run_does_not_rewrite_the_record(
 def test_a_run_whose_project_was_unregistered_still_starts(
     orch: Orchestrator, factory: Factory, test_store: Store
 ) -> None:
-    """`delete_project` keeps the factory file on purpose (see `store.py`).
+    """A factory file can outlive its registry entry — a nested factory shared
+    from a project someone deleted, or a registry restored from a backup.
 
     Running one of those is not the moment to start failing — it simply has no
     project defaults to inherit.
     """
-    test_store.delete_project("demo")
+    # Unregister without touching the factory file, which `delete_project`
+    # would take with it.
+    test_store.registry_path.write_text('{"projects": []}', encoding="utf-8")
     run = asyncio.run(orch.start("demo", "main"))
     assert run.status == "waiting_input"
     assert run.node_run("n-agent").model == ""

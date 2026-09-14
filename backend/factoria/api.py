@@ -253,8 +253,10 @@ def update_project(
 
 @router.delete("/projects/{project_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_project(project_id: str, store: Store = StoreDep) -> Response:
-    """Unregisters the project. Its factory files under `_factories/` stay put —
-    that directory is a team-owned git repo, not ours to prune."""
+    """Unregisters the project and deletes its `_factories/<project>/` directory
+    — main factory and memory both belong to the project. A nested factory
+    (stage 6) can be shared with other projects, so if one is in there, it and
+    the directory stay and only the main factory goes."""
     try:
         store.delete_project(project_id)
     except Exception as exc:

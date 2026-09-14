@@ -224,6 +224,16 @@ def test_project_delete_unregisters(client: TestClient) -> None:
     assert client.get("/api/projects").json() == []
 
 
+def test_project_delete_takes_the_main_factory_with_it(client: TestClient) -> None:
+    client.post("/api/projects", json={"name": "Demo"})
+    graph = {"nodes": [{"id": "n-in", "definition": {"type": "input", "label": "Request"}}], "edges": []}
+    assert client.put("/api/projects/demo/factories/main", json=graph).status_code == 200
+    assert client.delete("/api/projects/demo").status_code == 204
+    # Re-creating the project gets a fresh main factory, not the old graph.
+    client.post("/api/projects", json={"name": "Demo"})
+    assert client.get("/api/projects/demo/factories/main").json()["nodes"] == []
+
+
 def test_project_id_is_never_a_path(client: TestClient) -> None:
     # The slug pattern is what keeps a project name out of the filesystem.
     assert client.post(

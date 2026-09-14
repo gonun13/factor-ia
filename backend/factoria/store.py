@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import tempfile
 import threading
 from pathlib import Path
@@ -187,11 +188,20 @@ class Store:
         raise NotFound(f"no such project: {project.id}")
 
     def delete_project(self, project_id: str) -> None:
-        """Unregister the project. **The factory files are left in place.**
+        """Unregister the project and delete what belongs to it on disk.
 
-        `_factories/` is a team-owned git repo; removing a tracked file from it
-        because someone tidied their local project list is not this tool's call
-        to make. Re-creating the project picks the definition back up.
+        The main factory is the project's one-to-one — `create_project` makes
+        it, nothing else can reference it — and leaving it behind means the next
+        project of the same name silently inherits a stranger's graph. `memory/`
+        under the same directory is this project's long-term memory, and equally
+        no use to anyone once the project is gone. So the whole
+        `_factories/<project>/` directory goes.
+
+        The exception is a nested factory (stage 6): those are shared surfaces
+        that other projects can point at, so if any factory file other than
+        `main.json` is still in the directory, the directory stays and only the
+        main factory is removed. Deleting one project must never take a factory
+        another project runs.
         """
         with self._lock:
             registry = self.load_registry()
@@ -200,6 +210,37 @@ class Store:
                 raise NotFound(f"no such project: {project_id}")
             registry.projects = remaining
             self._save_registry(registry)
+            self._delete_project_files(project_id)
+
+    def _delete_project_files(self, project_id: str) -> None:
+        """Best-effort. The registry write above is what the caller asked for,
+        and a read-only `_factories/` — or a file someone has open — must not
+        turn a delete into a 500 with the project already unregistered.
+        """
+        try:
+            directory = self.factories_dir(project_id)
+            main = self.factory_path(project_id, MAIN_FACTORY_ID)
+        except PathEscape:
+            return
+        try:
+            main.unlink(missing_ok=True)
+        except OSError:
+            return
+        try:
+            shared = [
+                path
+                for path in directory.glob("*.json")
+                if not path.name.startswith(".")
+            ]
+        except OSError:
+            return
+        if shared:
+            # Nested factories live here too and outlive the project.
+            return
+        try:
+            shutil.rmtree(directory)
+        except (OSError, FileNotFoundError):
+            pass
 
     # ---- factories --------------------------------------------------------
 

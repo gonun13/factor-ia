@@ -166,15 +166,55 @@ def test_factory_path_refuses_traversal(test_store: Store) -> None:
         test_store.factory_path("demo", "../../../etc/passwd")
 
 
-def test_delete_project_keeps_the_team_owned_factory_file(
+def test_delete_project_deletes_its_whole_directory(
     test_store: Store, workspace: Path
 ) -> None:
     test_store.create_project(Project(id="demo", name="Demo"))
     test_store.save_factory(three_node_graph())
+    memory = workspace / "_factories" / "demo" / "memory"
+    memory.mkdir()
+    (memory / "notes.md").write_text("# notes\n", encoding="utf-8")
     test_store.delete_project("demo")
     assert test_store.list_projects() == []
-    # _factories/ is a git repo the team owns; tidying a local project list is
-    # not a reason to delete a tracked file out of it.
+    # The main factory and the project's memory are the project's own, so a
+    # delete leaves nothing behind for the next project of the same name — and
+    # nothing behind in an operator's workspace after a UI test, either.
+    assert not (workspace / "_factories" / "demo").exists()
+    assert (workspace / "_factories").is_dir()
+
+
+def test_delete_project_spares_a_nested_factory_and_its_directory(
+    test_store: Store, workspace: Path
+) -> None:
+    test_store.create_project(Project(id="demo", name="Demo"))
+    test_store.save_factory(three_node_graph())
+    # Stands in for a nested factory (stage 6): a shared surface another project
+    # can point at, so deleting this project must not take it — nor the
+    # directory it lives in, nor the memory that factory still reads.
+    nested = workspace / "_factories" / "demo" / "shared.json"
+    nested.write_text("{}\n", encoding="utf-8")
+    memory = workspace / "_factories" / "demo" / "memory"
+    memory.mkdir()
+    test_store.delete_project("demo")
+    assert not (workspace / "_factories" / "demo" / "main.json").exists()
+    assert nested.is_file()
+    assert memory.is_dir()
+
+
+def test_delete_project_survives_a_missing_factory_file(test_store: Store) -> None:
+    # A hand-deleted factory file must not leave the project undeletable.
+    test_store.create_project(Project(id="demo", name="Demo"))
+    test_store.factory_path("demo", "main").unlink()
+    test_store.delete_project("demo")
+    assert test_store.list_projects() == []
+
+
+def test_delete_project_reports_no_such_project_before_touching_disk(
+    test_store: Store, workspace: Path
+) -> None:
+    test_store.create_project(Project(id="demo", name="Demo"))
+    with pytest.raises(NotFound):
+        test_store.delete_project("other")
     assert (workspace / "_factories" / "demo" / "main.json").is_file()
 
 
