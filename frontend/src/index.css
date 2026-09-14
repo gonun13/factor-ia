@@ -89,6 +89,16 @@ button.primary:hover:not(:disabled) {
   background: linear-gradient(180deg, #3a7fe4, #2a63bd);
 }
 
+button.destructive {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 55%, var(--edge-strong));
+}
+
+button.destructive:hover:not(:disabled) {
+  background: #2a1a1e;
+  border-color: var(--danger);
+}
+
 input,
 select {
   font: inherit;
@@ -225,6 +235,52 @@ button:focus-visible {
 .project-card .meta {
   color: var(--ink-faint);
   font-size: 0.8rem;
+}
+
+/* The delete affordance sits over the card rather than inside it: the card is
+   itself a button, and a button inside a button is not a thing the DOM has. */
+.project-slot {
+  position: relative;
+  display: grid;
+}
+
+.project-slot .project-card {
+  height: 100%;
+  padding-right: 2.4rem;
+}
+
+.card-delete {
+  position: absolute;
+  top: 0.45rem;
+  right: 0.45rem;
+  padding: 0;
+  width: 1.6rem;
+  height: 1.6rem;
+  line-height: 1;
+  font-size: 1.05rem;
+  border-color: transparent;
+  background: none;
+  /* Faint but always drawn — hover-only controls are invisible to touch and
+     to anyone scanning for the way out. */
+  color: var(--ink-faint);
+}
+
+.card-delete:hover:not(:disabled) {
+  color: var(--danger);
+  background: #2a1a1e;
+  border-color: color-mix(in srgb, var(--danger) 55%, transparent);
+}
+
+.project-card.is-confirming {
+  border-color: color-mix(in srgb, var(--danger) 60%, var(--edge));
+  background: linear-gradient(180deg, #1f1a20, var(--panel));
+}
+
+.card-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-top: 0.35rem;
 }
 
 .project-card-new {

@@ -65,6 +65,10 @@ export const api = {
       body: JSON.stringify({ name, codebase_ids: codebaseIds }),
     }),
   project: (id: string) => request<Project>(`/api/projects/${id}`),
+  /** Unregisters the project. The factory files under `_factories/` survive —
+      that is the server's call, and the confirmation says so. */
+  deleteProject: (id: string) =>
+    request<void>(`/api/projects/${id}`, { method: "DELETE" }),
   /** Sparse: an omitted key means *unchanged*. `settings` is the exception and
       is replaced whole, because the panel that sends it always knows both
       halves. Writes to `/data/projects.json`, which is machine-local and not
