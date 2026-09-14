@@ -1,0 +1,62 @@
+name: factor-ia
+
+services:
+  factoria:
+    build:
+      context: .
+      target: runtime
+      args:
+        # Filled by bin/bootstrap into .env; 1000 is the fallback for a bare
+        # `docker compose` call on a Linux host.
+        FACTOR_IA_UID: ${FACTOR_IA_UID:-1000}
+        FACTOR_IA_GID: ${FACTOR_IA_GID:-1000}
+    # Reap orphans: the container spawns provider CLIs whose own children
+    # outlive them, and PID 1 never calls wait() — every killed run would leave
+    # a <defunct> agent behind.
+    init: true
+    ports:
+      # Loopback only. This is remote code execution as a service; LAN exposure
+      # would require auth (DESIGN.md, Non-functional requirements).
+      - "127.0.0.1:8000:8000"
+    volumes:
+      # The one surface shared with the host. A sibling of the repo, never
+      # inside it — nesting makes every project reachable a second time under
+      # the repo tree and puts the operator's real work where `git clean` runs.
+      - ${FACTOR_IA_WORKSPACE_HOST:-../factor-ia-workspace}:/workspace
+      # Every provider's config and auth. Named, never bound: the container
+      # holds a live credential, which is the same reason the host's ~/.claude
+      # is never mounted.
+      - agent-home:/home/factoria
+      # Projects registry, run history, event logs.
+      - factoria-data:/data
+    environment:
+      # Paths are stated by the image (FACTOR_IA_WORKSPACE, FACTOR_IA_DATA,
+      # CLAUDE_CONFIG_DIR). Repeating one here is how the two drift.
+      #
+      # Commit identity for what a run produces. Bare names, never `${VAR:-}`:
+      # the default form passes these through as empty strings on a host that
+      # sets none, and git reads all four ahead of every config file — so an
+      # empty one beats the configured identity and `git commit` fails with
+      # "empty ident name" instead. The bare form leaves an unset variable
+      # unset, which is the whole difference.
+      - GIT_AUTHOR_NAME
+      - GIT_AUTHOR_EMAIL
+      - GIT_COMMITTER_NAME
+      - GIT_COMMITTER_EMAIL
+      - TZ=${TZ:-UTC}
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/api/health').status == 200 else 1)"
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+
+volumes:
+  # Discarded only by an explicit `docker compose down -v`: losing this means
+  # signing the container in again.
+  agent-home:
+  factoria-data:

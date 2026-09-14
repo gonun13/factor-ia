@@ -1,0 +1,1 @@
+{"type": "control_request", "request_id": "req_7", "request": {"subtype": "can_use_tool", "tool_name": "Bash", "input": {"command": "rm -rf build"}, "permission_suggestions": []}, "session_id": "c6a67cf2-620d-471a-a813-591e2f8715d1"}

@@ -1,0 +1,110 @@
+"""The settings surface: agent account, sign-in, and git access.
+
+This is the second face of the CLI subprocess layer (`DESIGN.md`, *The Claude
+CLI is the one runtime dependency*) — the same supervisor pointed at different
+subcommands. The frontend never executes anything itself; it drives these
+invocations, which is what lets a browser tab sign the container in.
+
+**Sign-in is polled, not streamed.** SSE is stage 5's, and a login has perhaps
+four state changes over a minute of human time — a `GET` every second is less
+machinery than a second event transport, and it reconnects for free when the
+operator's tab sleeps. The state is server-side and single-flighted, so polling
+from two tabs shows both the same flow rather than starting a second.
+
+**Scrubbing.** Everything returned from here that came from a subprocess passes
+through `scrub.scrub_text` first — this is one of the two boundaries the design
+names. The single exception is the verification URL, which carries a PKCE
+challenge by design and is the entire payload of the sign-in flow; it goes to
+the tab that asked and is never logged or persisted.
+
+Mutating routes are `POST` (never `GET`), so the Origin check in
+`security.py` covers every one of them. A `GET /api/agent/login` that *started*
+a login would be a sign-in any page in the operator's browser could trigger.
+"""
+
+from __future__ import annotations
+
+from fastapi import APIRouter, HTTPException, status
+from pydantic import BaseModel, ConfigDict, Field
+
+from . import sshkeys
+from .agent import cli, login
+from .scrub import scrub_text
+
+router = APIRouter(prefix="/api")
+
+
+class CodeSubmission(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    #: `<code>#<state>`, exactly as the provider showed it. Reaches the child's
+    #: stdin verbatim — see `agent/login.py` for why the `#` must survive.
+    code: str = Field(min_length=1, max_length=4096)
+
+
+class AgentStatus(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    account: cli.AccountStatus
+    handshake: cli.Handshake
+
+
+def _scrubbed(account: cli.AccountStatus) -> cli.AccountStatus:
+    return account.model_copy(update={"detail": scrub_text(account.detail)})
+
+
+@router.get("/agent/status", response_model=AgentStatus)
+async def agent_status() -> AgentStatus:
+    """Account status plus what the CLI says it offers.
+
+    Two subprocess calls, both free of tokens and both answering while signed
+    out — which is what makes the default model readable before the operator
+    has ever signed in.
+    """
+    account = _scrubbed(await cli.auth_status())
+    handshake = await cli.handshake()
+    return AgentStatus(account=account, handshake=handshake)
+
+
+@router.get("/agent/login", response_model=login.LoginState)
+async def read_login() -> login.LoginState:
+    """The current sign-in flow, for polling. Never starts one."""
+    return login.login_state()
+
+
+@router.post("/agent/login", response_model=login.LoginState)
+async def begin_login() -> login.LoginState:
+    """Start a sign-in, or join the one already in progress (single-flight)."""
+    return await login.start_login()
+
+
+@router.post("/agent/login/code", response_model=login.LoginState)
+async def submit_login_code(body: CodeSubmission) -> login.LoginState:
+    # `async` deliberately: FastAPI runs a plain `def` handler in a worker
+    # thread, and writing to the child's stdin transport from off the event
+    # loop is not safe. This one touches a live subprocess.
+    return login.submit_code(body.code)
+
+
+@router.post("/agent/login/cancel", response_model=login.LoginState)
+async def cancel_login() -> login.LoginState:
+    return await login.cancel_login()
+
+
+@router.get("/ssh/key", response_model=sshkeys.SshKeyStatus)
+async def read_ssh_key() -> sshkeys.SshKeyStatus:
+    """The **public** half and its fingerprint. There is no private counterpart
+    to this route, here or anywhere — see `sshkeys.py`."""
+    return await sshkeys.status()
+
+
+@router.post(
+    "/ssh/key", response_model=sshkeys.SshKeyStatus, status_code=status.HTTP_201_CREATED
+)
+async def create_ssh_key() -> sshkeys.SshKeyStatus:
+    try:
+        return await sshkeys.generate()
+    except sshkeys.KeyExists as exc:
+        # Regenerating would silently orphan every forge the old key is
+        # enrolled in. Deleting the key is a deliberate act with no UI.
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc

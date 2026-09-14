@@ -1,0 +1,70 @@
+#!/usr/bin/env sh
+# Prepare the host side of the stack: the workspace sibling, and the .env that
+# tells compose where it is and who to run as. Idempotent — run it again any
+# time, including after a `git pull`.
+set -eu
+
+REPO_ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+cd "$REPO_ROOT"
+
+ENV_FILE="$REPO_ROOT/.env"
+
+# Precedence, highest first: the shell environment, then an existing .env, then
+# the sibling default. Compose reads .env itself but ranks it *below* the
+# environment, so matching that order here keeps the two from disagreeing.
+if [ -z "${FACTOR_IA_WORKSPACE_HOST:-}" ] && [ -f "$ENV_FILE" ]; then
+  FACTOR_IA_WORKSPACE_HOST=$(sed -n 's/^[[:space:]]*FACTOR_IA_WORKSPACE_HOST=//p' "$ENV_FILE" | tail -n 1)
+fi
+# A sibling of the repo, never inside it: with the workspace under the repo, a
+# dev-mode bind of the source tree makes every project reachable a second time
+# under /app, and it puts the operator's real work inside the tree that
+# `git clean` operates on (DESIGN.md, "Workspace — the one shared surface").
+FACTOR_IA_WORKSPACE_HOST="${FACTOR_IA_WORKSPACE_HOST:-$REPO_ROOT/../factor-ia-workspace}"
+
+if [ -e "$FACTOR_IA_WORKSPACE_HOST" ] && [ ! -d "$FACTOR_IA_WORKSPACE_HOST" ]; then
+  echo "factor-ia: FACTOR_IA_WORKSPACE_HOST is not a directory: $FACTOR_IA_WORKSPACE_HOST" >&2
+  exit 1
+fi
+
+# Created here, at the caller's uid — a bind source that Docker autocreates is
+# root-owned, which is exactly what running as the host user exists to avoid.
+mkdir -p "$FACTOR_IA_WORKSPACE_HOST"
+# Absolute, so the value does not depend on compose's project directory.
+FACTOR_IA_WORKSPACE_HOST=$(CDPATH= cd -- "$FACTOR_IA_WORKSPACE_HOST" && pwd)
+
+case "$FACTOR_IA_WORKSPACE_HOST" in
+  "$REPO_ROOT"/*)
+    echo "factor-ia: refusing a workspace inside the repo: $FACTOR_IA_WORKSPACE_HOST" >&2
+    echo "  It must be a sibling. See DESIGN.md, 'Workspace — the one shared surface'." >&2
+    exit 1
+    ;;
+esac
+
+# Factory definitions live here, not in any codebase and not in this repo. A
+# plain directory the operator may `git init` or clone from their own remote;
+# underscore-prefixed, so codebase discovery skips it.
+mkdir -p "$FACTOR_IA_WORKSPACE_HOST/_factories"
+
+FACTOR_IA_UID=$(id -u)
+FACTOR_IA_GID=$(id -g)
+
+# Rewrite only the three keys this script owns; anything else the operator put
+# in .env (TZ, a git identity) is carried through untouched.
+TMP_ENV="$ENV_FILE.tmp.$$"
+: > "$TMP_ENV"
+if [ -f "$ENV_FILE" ]; then
+  grep -v -E '^[[:space:]]*(FACTOR_IA_WORKSPACE_HOST|FACTOR_IA_UID|FACTOR_IA_GID)=' "$ENV_FILE" >> "$TMP_ENV" || true
+fi
+{
+  echo "FACTOR_IA_WORKSPACE_HOST=$FACTOR_IA_WORKSPACE_HOST"
+  echo "FACTOR_IA_UID=$FACTOR_IA_UID"
+  echo "FACTOR_IA_GID=$FACTOR_IA_GID"
+} >> "$TMP_ENV"
+mv "$TMP_ENV" "$ENV_FILE"
+
+echo "factor-ia: workspace  $FACTOR_IA_WORKSPACE_HOST"
+echo "factor-ia:            $FACTOR_IA_WORKSPACE_HOST/_factories"
+echo "factor-ia: runs as    uid=$FACTOR_IA_UID gid=$FACTOR_IA_GID"
+echo "factor-ia: wrote      $ENV_FILE"
+echo
+echo "Next: docker compose up --build"

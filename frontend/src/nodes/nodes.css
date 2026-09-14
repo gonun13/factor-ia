@@ -1,0 +1,422 @@
+/* Machines on the line. Every node type shares one chassis so a run lighting
+   them up later reads as one system; the type colour, glyph and body differ. */
+
+.node {
+  width: 15rem;
+  border-radius: 12px;
+  border: 1px solid var(--edge);
+  background: linear-gradient(180deg, #1a222e, #141a24);
+  box-shadow: var(--shadow);
+  font-size: 0.8rem;
+  position: relative;
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+
+.node::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto;
+  height: 3px;
+  border-radius: 12px 12px 0 0;
+  background: currentColor;
+  opacity: 0.9;
+}
+
+.node:hover {
+  border-color: var(--edge-strong);
+}
+
+.react-flow__node.selected .node {
+  border-color: currentColor;
+  box-shadow: var(--shadow), 0 0 0 1px currentColor;
+}
+
+.react-flow__node.selected .node.invalid,
+.node.invalid {
+  border-color: var(--input);
+  box-shadow: var(--shadow), 0 0 0 1px var(--input), 0 0 22px -6px var(--input);
+}
+
+.node-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.6rem 0.65rem 0.35rem;
+}
+
+.node-head .eyebrow {
+  color: currentColor;
+  opacity: 0.85;
+  flex: 1;
+}
+
+.node-body {
+  padding: 0 0.65rem 0.7rem;
+  display: grid;
+  gap: 0.5rem;
+  color: var(--ink);
+}
+
+.node-title {
+  width: 100%;
+  border: 1px solid transparent;
+  background: transparent;
+  padding: 0.15rem 0.25rem;
+  margin-left: -0.25rem;
+  font-size: 0.95rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  border-radius: 6px;
+}
+
+.node-title:hover {
+  border-color: var(--edge);
+}
+
+.node-title:focus {
+  background: #0f151e;
+  border-color: var(--edge-strong);
+  outline: none;
+}
+
+.node-note {
+  color: var(--ink-faint);
+  font-size: 0.72rem;
+  line-height: 1.4;
+}
+
+/* The status pip. Dark while `data.runtime` is null — which is every node you
+   have only ever drawn — and lit by the orchestrator's `node.status` events. */
+.pip {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--edge-strong);
+  flex: 0 0 auto;
+}
+
+.pip[data-status="running"] {
+  background: var(--agent);
+  box-shadow: 0 0 10px var(--agent);
+  animation: pulse 1.4s ease-in-out infinite;
+}
+
+.pip[data-status="waiting_input"] {
+  background: var(--input);
+  box-shadow: 0 0 10px var(--input);
+}
+
+.pip[data-status="succeeded"] {
+  background: var(--output);
+  box-shadow: 0 0 10px var(--output);
+}
+
+.pip[data-status="failed"] {
+  background: var(--danger);
+  box-shadow: 0 0 10px var(--danger);
+}
+
+@keyframes pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+
+/* ---- the codebase slot --------------------------------------------------
+   A workspace requirement, not a belt. It is drawn *inside* the machine as a
+   bolted-on plate with a dashed edge and its own colour, and it touches none
+   of the connection perimeter — no handle, no port, nothing an edge could ever
+   land on. The belts enter and leave on the left and right; this arrives from
+   underneath the chassis. */
+
+.slot {
+  text-align: left;
+  border: 1px dashed color-mix(in srgb, var(--codebase) 55%, transparent);
+  background: color-mix(in srgb, var(--codebase) 9%, transparent);
+  border-radius: 8px;
+  padding: 0.45rem 0.5rem;
+  display: grid;
+  gap: 0.35rem;
+  color: var(--codebase);
+}
+
+.slot-head {
+  display: flex;
+  white-space: nowrap;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.6rem;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.slot-head svg {
+  width: 11px;
+  height: 11px;
+}
+
+.slot select {
+  width: 100%;
+  font-size: 0.78rem;
+  padding: 0.3rem 0.4rem;
+  background: #12101c;
+  border-color: color-mix(in srgb, var(--codebase) 40%, transparent);
+  color: var(--ink);
+}
+
+.slot.empty {
+  border-color: color-mix(in srgb, var(--input) 65%, transparent);
+  background: color-mix(in srgb, var(--input) 9%, transparent);
+  color: var(--input);
+}
+
+.slot.empty select {
+  border-color: color-mix(in srgb, var(--input) 45%, transparent);
+  background: #171309;
+}
+
+.slot .branch {
+  font-size: 0.68rem;
+  color: var(--ink-faint);
+  display: flex;
+  gap: 0.3rem;
+  align-items: center;
+}
+
+.slot .warn {
+  font-size: 0.68rem;
+  color: var(--input);
+}
+
+/* The codebase's own git state, on the node that owns it. Clean is quiet;
+   dirty is the amber the canvas already uses for "this blocks a run". */
+.slot .gitstate {
+  font-size: 0.68rem;
+  color: var(--ok, #6ee7a8);
+  display: flex;
+  gap: 0.3rem;
+  align-items: center;
+}
+
+.slot .gitstate.dirty {
+  color: var(--input);
+  font-weight: 600;
+}
+
+/* The run's own branch, once it exists. */
+.slot .worktree-line {
+  font-size: 0.68rem;
+  color: var(--agent, #5aa9ff);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---- belts --------------------------------------------------------------
+   Two strokes: a dark casing and a dashed tread that crawls along it. The
+   metaphor is the point — material moving down a line. */
+
+.belt-casing {
+  stroke: var(--belt-casing);
+  stroke-width: 9;
+  stroke-linecap: round;
+  fill: none;
+}
+
+.belt-tread {
+  stroke: var(--belt-tread);
+  stroke-width: 3;
+  stroke-dasharray: 5 9;
+  fill: none;
+  animation: belt 900ms linear infinite;
+}
+
+.react-flow__edge.selected .belt-casing {
+  stroke: var(--agent);
+}
+
+@keyframes belt {
+  to {
+    stroke-dashoffset: -14;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .belt-tread,
+  .pip {
+    animation: none;
+  }
+}
+
+.react-flow__connection .react-flow__connection-path {
+  stroke: var(--belt-tread);
+  stroke-width: 3;
+  stroke-dasharray: 5 9;
+}
+
+/* ---- resetting React Flow's own chrome -----------------------------------
+   Two of our node types are called `input` and `output`, which is also what
+   React Flow calls its two built-in nodes — so `.react-flow__node-input` picks
+   up the library's default 150px white card and wraps our chassis in it. The
+   names are the data model's (DESIGN.md) and are not moving, so the defaults
+   are reset instead. Everything else here is the library's light-mode chrome
+   brought into the dark theme. */
+
+.react-flow__node {
+  font-size: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: default;
+}
+
+.react-flow__node-input,
+.react-flow__node-output,
+.react-flow__node-default,
+.react-flow__node-agent {
+  width: auto;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: none;
+  box-shadow: none;
+}
+
+.react-flow__controls {
+  box-shadow: var(--shadow);
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid var(--edge);
+}
+
+.react-flow__controls-button {
+  background: var(--panel);
+  border-bottom: 1px solid var(--edge);
+  fill: var(--ink-dim);
+  width: 26px;
+  height: 26px;
+}
+
+.react-flow__controls-button:hover {
+  background: var(--raised);
+  fill: var(--ink);
+}
+
+.react-flow__minimap {
+  background: var(--panel);
+  border: 1px solid var(--edge);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+}
+
+.react-flow__minimap-svg {
+  border-radius: 8px;
+}
+
+.react-flow__minimap-mask {
+  fill: rgb(8 10 14 / 0.6);
+}
+
+.react-flow__minimap-node {
+  rx: 3;
+  stroke: none;
+}
+
+/* ---- the live half ------------------------------------------------------
+   Everything below renders from `data.runtime`, which only exists while a run
+   is in flight. A node that has never run is byte-for-byte the node you drew:
+   no reserved space, no empty panels, no "waiting" placeholder. */
+
+.node.live {
+  border-color: color-mix(in srgb, currentColor 45%, var(--edge));
+}
+
+.node.live[data-status="running"] {
+  box-shadow: var(--shadow), 0 0 24px -8px currentColor;
+}
+
+.node.live[data-status="failed"] {
+  border-color: color-mix(in srgb, var(--danger) 60%, var(--edge));
+}
+
+.node .status-word {
+  font-size: 0.6rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--ink-faint);
+}
+
+.runtime {
+  display: grid;
+  gap: 0.35rem;
+  border-top: 1px solid var(--edge);
+  padding-top: 0.45rem;
+}
+
+.runtime-detail {
+  font-size: 0.7rem;
+  line-height: 1.35;
+  color: var(--ink-dim);
+}
+
+.runtime[data-status="failed"] .runtime-detail {
+  color: var(--danger);
+}
+
+/* The tool in flight: name plus the argument that says what it acts on. */
+.runtime .tool {
+  display: flex;
+  gap: 0.35rem;
+  align-items: baseline;
+  font-size: 0.68rem;
+  color: var(--ink-dim);
+  background: #0f151e;
+  border: 1px solid var(--edge);
+  border-radius: 6px;
+  padding: 0.25rem 0.4rem;
+  overflow: hidden;
+}
+
+.runtime .tool b {
+  color: var(--agent);
+  flex: 0 0 auto;
+}
+
+.runtime .tool .target {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.runtime .tool[data-state="running"] b {
+  animation: pulse 1.4s ease-in-out infinite;
+}
+
+.runtime .tool[data-state="error"] b {
+  color: var(--danger);
+}
+
+/* The agent's own words, as they arrive. Fixed height and pinned to the
+   bottom: a node that grows with every delta would shove the graph around. */
+.runtime .stream {
+  margin: 0;
+  max-height: 5.5rem;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 0.68rem;
+  line-height: 1.45;
+  color: var(--ink);
+  background: #0b1017;
+  border: 1px solid var(--edge);
+  border-radius: 6px;
+  padding: 0.35rem 0.45rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.runtime-foot {
+  display: flex;
+  gap: 0.6rem;
+  font-size: 0.65rem;
+  color: var(--ink-faint);
+}

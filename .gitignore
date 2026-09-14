@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+
+# Node
+node_modules/
+frontend/dist/
+
+# Local environment — bin/bootstrap writes this, it is machine-specific
+.env
+
+# Editors / OS
+.DS_Store
+*.swp
+.idea/
+.vscode/
+
+# Agent provider directories — operator-local, never part of the repo
+.claude/
+.cursor/
+.codex/
+.opencode/
+
+# Internal working docs — build log and PRDs stay operator-local
+docs/*_STATE.md
+docs/*_state.md
+docs/*_PRD.md
+docs/*_prd.md

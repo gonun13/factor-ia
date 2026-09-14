@@ -1,0 +1,127 @@
+/**
+ * The chassis every node type shares.
+ *
+ * It renders from `data.definition` and from `data.runtime` — the two halves a
+ * node has carried since stage 2, and the reason a run needs no second surface
+ * to watch it on. When `runtime` is null the node is exactly what it was while
+ * you drew it; when the orchestrator fills it in, the same node grows a pip, a
+ * line of tool activity and the agent's own words, in place, without moving.
+ * That is the "building and operating are the same surface" constraint being
+ * mechanical rather than aspirational (DESIGN.md).
+ */
+
+import { useEffect, useRef, type ReactNode } from "react";
+import { Handle, Position } from "@xyflow/react";
+import type { NodeData } from "../graph";
+import type { NodeRuntime } from "../types";
+import { useCanvas } from "../canvasContext";
+import { AgentGlyph, InputGlyph, OutputGlyph } from "./Glyphs";
+
+const GLYPHS = {
+  input: InputGlyph,
+  agent: AgentGlyph,
+  output: OutputGlyph,
+} as const;
+
+const TYPE_NAME = {
+  input: "request",
+  agent: "agent",
+  output: "commit",
+} as const;
+
+export type ShellKind = keyof typeof GLYPHS;
+
+export function NodeShell({
+  id,
+  kind,
+  data,
+  children,
+}: {
+  id: string;
+  kind: ShellKind;
+  data: NodeData;
+  children?: ReactNode;
+}) {
+  const { patch, invalid } = useCanvas();
+  const Glyph = GLYPHS[kind];
+  const runtime = data.runtime;
+  const status = runtime?.status ?? "idle";
+  const live = runtime !== null;
+
+  return (
+    <div
+      className={`node type-${kind}${invalid.has(id) ? " invalid" : ""}${live ? " live" : ""}`}
+      data-status={status}
+    >
+      {kind !== "input" && <Handle type="target" position={Position.Left} />}
+      <div className="node-head">
+        <span className="glyph">
+          <Glyph />
+        </span>
+        <span className="eyebrow">{TYPE_NAME[kind]}</span>
+        {live && <span className="status-word">{status.replace("_", " ")}</span>}
+        <span className="pip" data-status={status} title={`status: ${status}`} />
+      </div>
+      <div className="node-body">
+        <input
+          className="node-title nodrag"
+          value={data.definition.label}
+          spellCheck={false}
+          aria-label={`${TYPE_NAME[kind]} name`}
+          // Editable while live on purpose: the graph stays editable-shaped
+          // during a run. A run reads the saved file, so a rename mid-run
+          // changes the next run, not this one.
+          onChange={(event) => patch(id, { label: event.target.value })}
+        />
+        {children}
+        {runtime && <Runtime runtime={runtime} />}
+      </div>
+      {kind !== "output" && <Handle type="source" position={Position.Right} />}
+    </div>
+  );
+}
+
+/** The live half. Everything here is assembled from the event stream. */
+function Runtime({ runtime }: { runtime: NodeRuntime }) {
+  const tail = useRef<HTMLPreElement>(null);
+  const text = runtime.text ?? "";
+
+  useEffect(() => {
+    // Follow the stream. Without this the node shows the first words of a
+    // reply forever, which reads as "stuck" rather than "working".
+    const element = tail.current;
+    if (element) element.scrollTop = element.scrollHeight;
+  }, [text]);
+
+  const done = runtime.todos?.filter((item) => item.status === "completed").length ?? 0;
+
+  return (
+    <div className="runtime" data-status={runtime.status}>
+      {runtime.detail && <span className="runtime-detail">{runtime.detail}</span>}
+      {runtime.tool && (
+        <span className="tool nodrag" data-state={runtime.tool.state}>
+          <b>{runtime.tool.name}</b>
+          {runtime.tool.target && <span className="target mono">{runtime.tool.target}</span>}
+        </span>
+      )}
+      {text && (
+        <pre className="stream nowheel" ref={tail}>
+          {text}
+        </pre>
+      )}
+      <span className="runtime-foot">
+        {runtime.todos && runtime.todos.length > 0 && (
+          <span title={runtime.todos.map((item) => `${item.status}: ${item.content}`).join("\n")}>
+            ☑ {done}/{runtime.todos.length}
+          </span>
+        )}
+        {runtime.toolCount ? (
+          <span>
+            {runtime.toolCount} {runtime.toolCount === 1 ? "tool" : "tools"}
+          </span>
+        ) : null}
+        {runtime.costUsd ? <span className="mono">${runtime.costUsd.toFixed(4)}</span> : null}
+      </span>
+    </div>
+  );
+}

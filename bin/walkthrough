@@ -1,0 +1,166 @@
+#!/usr/bin/env sh
+# Stage 2 verification, end to end, against the running container.
+#
+#   create a project -> list discovered codebases -> save a 3-node graph
+#   -> restart the container -> the graph is still there
+#
+# Every step prints what it is asserting before it asserts it, so a failure
+# names the claim that stopped being true rather than a status code. Safe to
+# re-run: it deletes its own project first.
+set -eu
+
+BASE="${FACTOR_IA_BASE:-http://127.0.0.1:8000}"
+PROJECT="${FACTOR_IA_WALKTHROUGH_PROJECT:-walkthrough}"
+REPO_ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+FAILED=0
+
+say()  { printf '\n\033[1m== %s\033[0m\n' "$*"; }
+want() { printf '   assert: %s\n' "$*"; }
+ok()   { printf '   \033[32mok\033[0m   %s\n' "$*"; }
+bad()  { printf '   \033[31mFAIL\033[0m %s\n' "$*"; FAILED=1; }
+
+# jq is not assumed: this must run on a machine that only has curl.
+field() { sed -n "s/.*\"$2\"[[:space:]]*:[[:space:]]*\"\{0,1\}\([^\",}]*\)\"\{0,1\}.*/\1/p" <<EOF | head -n 1
+$1
+EOF
+}
+
+api() { # method path [body]
+  if [ $# -ge 3 ]; then
+    curl -sS -X "$1" -H 'Content-Type: application/json' -d "$3" "$BASE$2"
+  else
+    curl -sS -X "$1" "$BASE$2"
+  fi
+}
+status() { # method path [body]
+  if [ $# -ge 3 ]; then
+    curl -sS -o /dev/null -w '%{http_code}' -X "$1" -H 'Content-Type: application/json' -d "$3" "$BASE$2"
+  else
+    curl -sS -o /dev/null -w '%{http_code}' -X "$1" "$BASE$2"
+  fi
+}
+
+say "0. the server is up at $BASE"
+want "GET /api/health reports status ok and a writable workspace"
+HEALTH=$(api GET /api/health)
+[ "$(field "$HEALTH" status)" = "ok" ] && ok "$HEALTH" || bad "$HEALTH"
+
+# Re-runnable. Two things have to go, because they live in two different
+# places on purpose: the registry entry (machine-local, /data) and the factory
+# file (/workspace/_factories, team-owned). Deleting a project deliberately
+# leaves its factory behind — re-creating it picks the definition back up —
+# which is correct and would make step 1's "opens empty" assertion false on a
+# second run. So this scratch project's directory is removed here, by the
+# operator's own hand, rather than by the API.
+WORKSPACE_HOST="${FACTOR_IA_WORKSPACE_HOST:-$REPO_ROOT/../factor-ia-workspace}"
+curl -sS -o /dev/null -X DELETE "$BASE/api/projects/$PROJECT" || true
+case "$PROJECT" in
+  */*|.*|"") printf 'refusing to clean a suspicious project name: %s\n' "$PROJECT" >&2; exit 1 ;;
+  *) rm -rf "$WORKSPACE_HOST/_factories/$PROJECT" ;;
+esac
+
+say "1. create a project"
+want "POST /api/projects returns 201 and the slug '$PROJECT'"
+CREATED=$(api POST /api/projects "{\"name\":\"$PROJECT\"}")
+[ "$(field "$CREATED" id)" = "$PROJECT" ] && ok "$CREATED" || bad "$CREATED"
+
+want "the new project opens with an empty main factory"
+EMPTY=$(api GET "/api/projects/$PROJECT/factories/main")
+case "$EMPTY" in *'"nodes":[]'*) ok "nodes: []" ;; *) bad "$EMPTY" ;; esac
+
+say "2. list discovered codebases"
+want "GET /api/codebases returns at least one git repo under /workspace"
+CODEBASES=$(api GET /api/codebases)
+CODEBASE=$(field "$CODEBASES" id)
+[ -n "$CODEBASE" ] && ok "$CODEBASES" || bad "no codebase discovered — create a git repo in the workspace first"
+
+want "_factories/ is NOT offered as a codebase (it is a git repo, and it is ours)"
+case "$CODEBASES" in
+  *'"_factories"'*) bad "_factories leaked into discovery" ;;
+  *) ok "_factories excluded" ;;
+esac
+
+say "3. save a 3-node graph: input -> agent -> output"
+want "PUT .../factories/main returns 200 with the codebase attached to the agent node"
+GRAPH=$(cat <<JSON
+{
+  "nodes": [
+    {"id": "n-in",    "definition": {"type": "input",  "label": "Request", "position": {"x": 0,   "y": 0}}},
+    {"id": "n-agent", "definition": {"type": "agent",  "label": "Agent",   "position": {"x": 260, "y": 0},
+                                     "codebase_id": "$CODEBASE"}},
+    {"id": "n-out",   "definition": {"type": "output", "label": "Commit",  "position": {"x": 520, "y": 0}}}
+  ],
+  "edges": [
+    {"id": "e-1", "source": "n-in",    "target": "n-agent"},
+    {"id": "e-2", "source": "n-agent", "target": "n-out"}
+  ]
+}
+JSON
+)
+SAVED=$(api PUT "/api/projects/$PROJECT/factories/main" "$GRAPH")
+case "$SAVED" in
+  *"\"codebase_id\":\"$CODEBASE\""*) ok "saved, agent attached to '$CODEBASE'" ;;
+  *) bad "$SAVED" ;;
+esac
+
+want "an unattachable path cannot be smuggled in as a codebase id (422)"
+CODE=$(status PUT "/api/projects/$PROJECT/factories/main" \
+  '{"nodes":[{"id":"x","definition":{"type":"agent","codebase_id":"../../etc"}}],"edges":[]}')
+[ "$CODE" = "422" ] && ok "refused with 422" || bad "expected 422, got $CODE"
+
+say "4. the Origin check"
+want "a cross-origin POST is refused with 403"
+CODE=$(curl -sS -o /dev/null -w '%{http_code}' -X POST -H 'Origin: https://evil.example' \
+  -H 'Content-Type: application/json' -d '{"name":"evil"}' "$BASE/api/projects")
+[ "$CODE" = "403" ] && ok "refused with 403" || bad "expected 403, got $CODE"
+
+want "a same-origin POST from the served SPA still works (204 on a delete of a temp project)"
+ORIGIN_HOST=$(printf '%s' "$BASE" | sed 's#^https\{0,1\}://##')
+curl -sS -o /dev/null -X POST -H "Origin: http://$ORIGIN_HOST" -H 'Content-Type: application/json' \
+  -d '{"name":"origin-probe"}' "$BASE/api/projects"
+CODE=$(curl -sS -o /dev/null -w '%{http_code}' -X DELETE -H "Origin: http://$ORIGIN_HOST" \
+  "$BASE/api/projects/origin-probe")
+[ "$CODE" = "204" ] && ok "same-origin mutation allowed" || bad "expected 204, got $CODE"
+
+say "5. restart the container"
+want "the graph survives a restart — it is a file, not process state"
+( cd "$REPO_ROOT" && docker compose restart )
+printf '   waiting for the server'
+i=0
+while [ "$i" -lt 60 ]; do
+  if curl -sS -o /dev/null "$BASE/api/health" 2>/dev/null; then break; fi
+  printf '.'; i=$((i + 1)); sleep 1
+done
+printf '\n'
+
+RELOADED=$(api GET "/api/projects/$PROJECT/factories/main")
+case "$RELOADED" in
+  *'"n-in"'*'"n-agent"'*'"n-out"'*) ok "3 nodes back: n-in, n-agent, n-out" ;;
+  *) bad "$RELOADED" ;;
+esac
+case "$RELOADED" in
+  *"\"codebase_id\":\"$CODEBASE\""*) ok "the agent still carries codebase '$CODEBASE'" ;;
+  *) bad "codebase attachment lost across the restart" ;;
+esac
+case "$RELOADED" in
+  *'"e-1"'*'"e-2"'*) ok "both edges back" ;;
+  *) bad "edges lost across the restart" ;;
+esac
+
+say "6. the factory on the host side"
+want "the JSON under _factories/ is readable and diffable by a human"
+HOST_FILE="${FACTOR_IA_WORKSPACE_HOST:-$REPO_ROOT/../factor-ia-workspace}/_factories/$PROJECT/main.json"
+if [ -f "$HOST_FILE" ]; then
+  ok "$HOST_FILE"
+  sed 's/^/   | /' "$HOST_FILE"
+else
+  bad "not found on the host: $HOST_FILE"
+fi
+
+printf '\n'
+if [ "$FAILED" -eq 0 ]; then
+  printf '\033[32mwalkthrough passed\033[0m\n'
+else
+  printf '\033[31mwalkthrough FAILED\033[0m\n'
+fi
+exit "$FAILED"
