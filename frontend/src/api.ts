@@ -65,6 +65,10 @@ export const api = {
       body: JSON.stringify({ name, codebase_ids: codebaseIds }),
     }),
   project: (id: string) => request<Project>(`/api/projects/${id}`),
+  /** Unregisters the project. The factory files under `_factories/` survive —
+      that is the server's call, and the confirmation says so. */
+  deleteProject: (id: string) =>
+    request<void>(`/api/projects/${id}`, { method: "DELETE" }),
 
   factory: (projectId: string, factoryId = "main") =>
     request<Factory>(`/api/projects/${projectId}/factories/${factoryId}`),

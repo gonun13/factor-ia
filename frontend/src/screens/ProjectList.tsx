@@ -18,8 +18,11 @@ export function ProjectList({ onOpen }: { onOpen: (projectId: string) => void })
   const [creating, setCreating] = useState(false);
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
+  const [confirmingDelete, setConfirmingDelete] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const nameInput = useRef<HTMLInputElement | null>(null);
+  const cancelDeleteButton = useRef<HTMLButtonElement | null>(null);
 
   useEffect(() => {
     let live = true;
@@ -39,6 +42,12 @@ export function ProjectList({ onOpen }: { onOpen: (projectId: string) => void })
   useEffect(() => {
     if (creating) nameInput.current?.focus();
   }, [creating]);
+
+  // Focus lands on Cancel, not Delete: the keyboard's default answer to a
+  // destructive question should be "no".
+  useEffect(() => {
+    if (confirmingDelete) cancelDeleteButton.current?.focus();
+  }, [confirmingDelete]);
 
   function cancelCreate() {
     setCreating(false);
@@ -61,6 +70,23 @@ export function ProjectList({ onOpen }: { onOpen: (projectId: string) => void })
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function remove(projectId: string) {
+    if (deleting) return;
+    setDeleting(projectId);
+    setError(null);
+    try {
+      await api.deleteProject(projectId);
+      setProjects((current) =>
+        current === null ? current : current.filter((p) => p.id !== projectId),
+      );
+      setConfirmingDelete(null);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setDeleting(null);
     }
   }
 
@@ -132,20 +158,65 @@ export function ProjectList({ onOpen }: { onOpen: (projectId: string) => void })
                 </button>
               )}
 
-              {projects.map((project) => (
-                <button
-                  key={project.id}
-                  className="project-card"
-                  onClick={() => onOpen(project.id)}
-                >
-                  <span className="name">{project.name}</span>
-                  <span className="meta mono">{project.id}</span>
-                  <span className="meta">
-                    main factory · created{" "}
-                    {new Date(project.created_at).toLocaleDateString()}
-                  </span>
-                </button>
-              ))}
+              {projects.map((project) =>
+                confirmingDelete === project.id ? (
+                  <div
+                    key={project.id}
+                    className="project-card is-confirming"
+                    onKeyDown={(event) => {
+                      if (event.key === "Escape" && !deleting) setConfirmingDelete(null);
+                    }}
+                  >
+                    <span className="name">Delete {project.name}?</span>
+                    <span className="meta">
+                      Removes it from this machine's project list. The factory
+                      definition under <code>_factories/</code> is left in place.
+                    </span>
+                    <span className="card-actions">
+                      <button
+                        type="button"
+                        className="destructive"
+                        onClick={() => remove(project.id)}
+                        disabled={deleting !== null}
+                      >
+                        {deleting === project.id ? "Deleting…" : "Delete"}
+                      </button>
+                      <button
+                        ref={cancelDeleteButton}
+                        type="button"
+                        className="link-button"
+                        onClick={() => setConfirmingDelete(null)}
+                        disabled={deleting !== null}
+                      >
+                        Cancel
+                      </button>
+                    </span>
+                  </div>
+                ) : (
+                  <div key={project.id} className="project-slot">
+                    <button className="project-card" onClick={() => onOpen(project.id)}>
+                      <span className="name">{project.name}</span>
+                      <span className="meta mono">{project.id}</span>
+                      <span className="meta">
+                        main factory · created{" "}
+                        {new Date(project.created_at).toLocaleDateString()}
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      className="card-delete"
+                      aria-label={`Delete ${project.name}`}
+                      title="Delete project"
+                      onClick={() => {
+                        setError(null);
+                        setConfirmingDelete(project.id);
+                      }}
+                    >
+                      ×
+                    </button>
+                  </div>
+                ),
+              )}
             </div>
           )}
 
