@@ -115,8 +115,18 @@ in the container for good.
 
 - Project list; create a project. Codebases discovered by scanning `/workspace`.
 - One project = one main factory, one attached codebase.
-- Canvas with three node types: **input (request)**, **agent**, **output
-  (commit/branch)**.
+- Canvas with three node types — **input**, **agent**, **output** — and a
+  **kind** on each end of the line. Inputs come in `request` (a sentence, typed
+  when the run starts) and `prd` (a `PRD.md`, handed over whole); outputs in
+  `commit`, `commit-push` and `commit-merge`. The kind lives in the node's
+  freeform `config`, not in `NodeType`, so the structural rule below stays one
+  check rather than a list of type names.
+- **A factory starts with an input and ends with an output**, and needs at least
+  one of each. Stated as two rules about the ends of the line — every node with
+  no incoming belt is an input, every node with no outgoing belt is an output —
+  which is the only form a graph can be checked against. Both `runcheck` and the
+  canvas enforce it; the canvas additionally draws no target handle on an input
+  and no source handle on an output, so it is unreachable by dragging.
 - Codebase attachment to an agent node, with validation that blocks a run without
   one.
 - Provider sign-in from the UI, credential persisted in a container-owned volume.
@@ -459,7 +469,30 @@ generalizes: it already drives `claude`, `cursor`, `codex`, `copilot` and
     explicit server-side opt-in and render it as dangerous whenever active.
 - **Blast radius** (operator's explicit priority). Agents write only inside a git
   worktree on a dedicated branch. No force-push, no writes to the default branch,
-  no deletes outside the worktree. Every attached codebase must be a clean git
+  no deletes outside the worktree.
+
+  > **Amendment — the `commit-merge` output node.** "No writes to the default
+  > branch" now has one exception, and it is drawn rather than configured: an
+  > operator who puts a *commit & merge* node on the line has asked for the base
+  > branch to be fast-forwarded. Three things keep the clause meaningful rather
+  > than merely narrowed:
+  >
+  > - **It happens on the remote, never locally.** `git push origin <branch>:<base>`.
+  >   The operator has the base branch checked out in their own working tree, and
+  >   moving that ref underneath them is the promise this project is *for*. Their
+  >   local branch moves when they pull, in their own terminal.
+  > - **No force, so no third outcome.** The remote either fast-forwards or
+  >   refuses. Nothing here resolves a conflict, because nothing here ever has
+  >   one; a base branch that moved fails the node with git's own words.
+  > - **The branch goes up first.** A refused merge still leaves the run's own
+  >   ref on the remote, so the work is never lost to a race — it becomes a pull
+  >   request instead.
+  >
+  > `gitwork` grants the capability as a *shape*, not a subcommand: a push is
+  > exactly one remote **name** (never a URL — that would exfiltrate the
+  > operator's repository with the operator's own key) and one plain `src:dst`
+  > refspec, with a three-flag allowlist. `merge`, `fetch`, `reset` and
+  > `checkout` remain absent from the process entirely. Every attached codebase must be a clean git
   repo before a run starts. v1 runs no arbitrary shell — and when shell/test nodes
   land, they get a **dind sidecar**, never a bind of the host's
   `/var/run/docker.sock`, which is root-equivalent and would undo the whole

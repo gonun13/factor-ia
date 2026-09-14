@@ -98,11 +98,26 @@ export const api = {
     request<Run>(`/api/projects/${projectId}/factories/${factoryId}/runs`, {
       method: "POST",
     }),
-  /** The request, submitted once (open question 2). This starts the walk. */
-  submitRunInput: (runId: string, text: string) =>
+  /**
+   * One input node's submission. The last one starts the walk.
+   *
+   * `nodeId` addresses a single node, which is what a factory with a request
+   * *and* a PRD needs. Omitting it keeps the original meaning — every input
+   * node still waiting takes this text — so the single-request factory posts
+   * exactly what it always did.
+   */
+  submitRunInput: (
+    runId: string,
+    text: string,
+    options: { nodeId?: string; filename?: string } = {},
+  ) =>
     request<Run>(`/api/runs/${runId}/input`, {
       method: "POST",
-      body: JSON.stringify({ text }),
+      body: JSON.stringify({
+        text,
+        node_id: options.nodeId ?? null,
+        filename: options.filename ?? null,
+      }),
     }),
   /** Explicit cancel — closing the tab is not a decision to stop work. */
   cancelRun: (runId: string) =>

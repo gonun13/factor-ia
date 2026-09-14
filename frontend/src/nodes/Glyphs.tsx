@@ -42,6 +42,42 @@ export function OutputGlyph() {
   );
 }
 
+/** PRD: a document with a title rule and lines of requirement. */
+export function PrdGlyph() {
+  return (
+    <svg viewBox="0 0 16 16" aria-hidden>
+      <path d="M3.5 1.8h6L12.5 5v9.2h-9z" {...stroke} />
+      <path d="M9.3 1.8v3.3h3.2" {...stroke} />
+      <path d="M5.6 8h4.8M5.6 10.4h4.8M5.6 12.2h2.6" {...stroke} />
+    </svg>
+  );
+}
+
+/** Commit & push: the commit glyph, with the branch leaving the machine. */
+export function PushGlyph() {
+  return (
+    <svg viewBox="0 0 16 16" aria-hidden>
+      <circle cx="4" cy="11.8" r="1.9" {...stroke} />
+      <path d="M4 9.9V4.2A1.6 1.6 0 0 1 5.6 2.6h3.2" {...stroke} />
+      <path d="M8.4 6.2h5.4" {...stroke} />
+      <path d="m11.6 4 2.2 2.2-2.2 2.2" {...stroke} />
+    </svg>
+  );
+}
+
+/** Commit & merge: two lines becoming one. */
+export function MergeGlyph() {
+  return (
+    <svg viewBox="0 0 16 16" aria-hidden>
+      <circle cx="4" cy="3.4" r="1.7" {...stroke} />
+      <circle cx="4" cy="12.6" r="1.7" {...stroke} />
+      <circle cx="12.2" cy="8" r="1.7" {...stroke} />
+      <path d="M5.6 4.1c1.4 2.2 2.8 3.4 4.9 3.8" {...stroke} />
+      <path d="M5.6 11.9c1.4-2.2 2.8-3.4 4.9-3.8" {...stroke} />
+    </svg>
+  );
+}
+
 /** Codebase: a stack — deliberately not an arrow, because it is not a flow. */
 export function CodebaseGlyph() {
   return (

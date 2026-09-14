@@ -77,6 +77,22 @@ def render(run: Run) -> str:
         if made.commit_sha:
             lines.append(f"- Commit `{made.commit_sha[:12]}` — {made.subject}")
             lines.append(f"- {len(made.files)} file(s) changed")
+            # A push is the one thing a run does that outlives the machine it
+            # ran on, so it belongs in the post-mortem more than anything else
+            # on this list. Stated even when the merge that followed it failed:
+            # the branch really did go up, and a reader looking for their work
+            # should be told where it is.
+            if made.pushed_branch:
+                lines.append(
+                    f"- Pushed `{made.pushed_branch}` to `{made.remote}`"
+                    + (f" — {made.push_detail}" if made.push_detail else "")
+                )
+            if made.merged_into:
+                lines.append(
+                    f"- Fast-forwarded `{made.remote}/{made.merged_into}` to this "
+                    "commit. Your local branch learns about it on the next "
+                    "`git pull`."
+                )
             if made.stat:
                 lines += ["", "```", made.stat, "```"]
             lines += [

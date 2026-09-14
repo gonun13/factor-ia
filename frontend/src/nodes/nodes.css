@@ -204,6 +204,51 @@
   font-weight: 600;
 }
 
+/* ---- the reach slot on a pushing output ---------------------------------
+   Same plate as the codebase slot, in the output node's own green for a push
+   and in amber for a merge. Amber is the colour this canvas already uses for
+   "read this before you press Run", and a node that fast-forwards a branch
+   other people pull from has earned it. */
+
+.slot.reach {
+  border-color: color-mix(in srgb, var(--output) 55%, transparent);
+  background: color-mix(in srgb, var(--output) 9%, transparent);
+  color: var(--output);
+}
+
+.slot.reach input {
+  width: 100%;
+  font-size: 0.78rem;
+  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  padding: 0.3rem 0.4rem;
+  border-radius: 6px;
+  border: 1px solid color-mix(in srgb, var(--output) 40%, transparent);
+  background: #0c1512;
+  color: var(--ink);
+}
+
+.slot.reach .reach-note {
+  font-size: 0.68rem;
+  line-height: 1.35;
+  color: var(--ink-faint);
+  white-space: normal;
+}
+
+.node.kind-commit-merge .slot.reach {
+  border-color: color-mix(in srgb, var(--input) 60%, transparent);
+  background: color-mix(in srgb, var(--input) 10%, transparent);
+  color: var(--input);
+}
+
+.node.kind-commit-merge .slot.reach input {
+  border-color: color-mix(in srgb, var(--input) 45%, transparent);
+  background: #171309;
+}
+
+.node.kind-commit-merge .slot.reach .reach-note {
+  color: var(--input);
+}
+
 /* The run's own branch, once it exists. */
 .slot .worktree-line {
   font-size: 0.68rem;

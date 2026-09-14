@@ -80,7 +80,20 @@ from .agent.adapter import AgentAdapter, AgentRun, RunConfig
 from .agent.claude import ClaudeAdapter, PermissionDenied, resolve_permission_mode
 from .agent.fake import FakeAdapter
 from .discovery import discover_codebases
-from .models import Codebase, Factory, Node, NodeRun, NodeStatus, Run, RunStatus, utcnow
+from .models import (
+    Codebase,
+    Factory,
+    Node,
+    NodeRun,
+    NodeStatus,
+    PUSHING_OUTPUT_KINDS,
+    Run,
+    RunStatus,
+    RunWorktree,
+    node_kind,
+    node_remote,
+    utcnow,
+)
 from .runcheck import NotRunnable
 from .runevents import (
     AgentStreamEvent,
@@ -261,7 +274,15 @@ class Orchestrator:
                 adapter=_run_adapter_id(factory),
                 dangerous=run_is_dangerous(factory),
                 node_runs=[
-                    NodeRun(node_id=node.id, type=node.definition.type)
+                    NodeRun(
+                        node_id=node.id,
+                        type=node.definition.type,
+                        # Frozen here, not re-read later: the factory file is
+                        # editable while a run is in flight, and a run record
+                        # has to describe the run that actually happened.
+                        kind=node_kind(node),
+                        label=node.definition.label or node.id,
+                    )
                     for node in factory.nodes
                 ],
             )
@@ -288,15 +309,36 @@ class Orchestrator:
             await self._set_node(state, node.id, "pending")
         for node in factory.nodes:
             if node.definition.type == "input":
-                await self._set_node(state, node.id, "waiting_input", "waiting for the request")
+                await self._set_node(
+                    state, node.id, "waiting_input", _waiting_detail(node_kind(node))
+                )
         return run
 
-    async def submit_input(self, run_id: str, text: str) -> Run:
-        """The one-shot request (open question 2). Starts the walk.
+    async def submit_input(
+        self,
+        run_id: str,
+        text: str,
+        *,
+        node_id: str | None = None,
+        filename: str | None = None,
+    ) -> Run:
+        """One input node's submission. Starts the walk once the last one is in.
 
-        Every `input` node receives the same text: a factory with two request
-        nodes is not a shape the MVP draws, and asking twice for one submission
-        would be the conversational input this design deliberately does not have.
+        Still one-shot per node, and still not a chat (open question 2) — what
+        changed is that a factory may now have more than one input node, and
+        they do not all want the same thing. A `request` node wants a sentence
+        and a `prd` node wants a document, so a single broadcast of one string
+        to every input node stopped being a simplification and became a bug.
+
+        `node_id` addresses one node. Omitting it keeps the old meaning — every
+        input node still waiting receives the text — which is what the
+        single-request factory, and every existing client, already posts.
+
+        **The walk starts once, when no input node is still waiting.** A run
+        with two inputs therefore sits in `waiting_input` after the first
+        submission rather than starting a walk that would block on a node with
+        nothing in it, and `state.task` guards the transition so two
+        submissions racing cannot both create a walk.
         """
         state = self._active.get(run_id)
         if state is None:
@@ -304,21 +346,65 @@ class Orchestrator:
         if state.run.status != "waiting_input":
             raise RunConflict(f"run {run_id} is {state.run.status}, not waiting for input")
 
-        state.run.input_text = text
+        def is_waiting(node: Node) -> bool:
+            node_run = state.run.node_run(node.id)
+            return (
+                node.definition.type == "input"
+                and node_run is not None
+                and node_run.status == "waiting_input"
+            )
+
+        waiting = [node for node in state.factory.nodes if is_waiting(node)]
+        if node_id is not None:
+            waiting = [node for node in waiting if node.id == node_id]
+            if not waiting:
+                raise RunConflict(
+                    f"node {node_id} is not an input node of run {run_id} that is "
+                    "waiting for a submission"
+                )
+
+        for node in waiting:
+            kind = node_kind(node)
+            await state.channel.emit(
+                RunInputEvent(
+                    run_id=run_id,
+                    node_id=node.id,
+                    text=text,
+                    kind=kind,
+                    filename=filename,
+                )
+            )
+            node_run = state.run.node_run(node.id)
+            if node_run is not None:
+                node_run.output_text = text
+                node_run.filename = filename
+            await self._set_node(state, node.id, "running")
+            await self._set_node(
+                state,
+                node.id,
+                "succeeded",
+                f"{filename} received" if filename else "request submitted",
+            )
+
+        still_waiting = [
+            node_run
+            for node_run in state.run.node_runs
+            if node_run.type == "input" and node_run.status == "waiting_input"
+        ]
+        if still_waiting or state.task is not None:
+            # More inputs to collect — or a walk already started, which means two
+            # submissions raced and the first one won. Either way the run record
+            # is now different, so it is written before it is handed back.
+            await self._persist(state)
+            return state.run
+
+        # The subject line of the commit, and the fallback any node with no
+        # incoming belt reads. Computed from the submissions rather than from
+        # whichever one arrived last, so it does not depend on click order.
+        state.run.input_text = _request_line(state)
         state.run.status = "running"
         state.run.started_at = utcnow()
         await self._persist(state)
-
-        for node in state.factory.nodes:
-            if node.definition.type == "input":
-                await state.channel.emit(
-                    RunInputEvent(run_id=run_id, node_id=node.id, text=text)
-                )
-                node_run = state.run.node_run(node.id)
-                if node_run is not None:
-                    node_run.output_text = text
-                await self._set_node(state, node.id, "running")
-                await self._set_node(state, node.id, "succeeded", "request submitted")
 
         await state.channel.emit(RunStatusEvent(run_id=run_id, status="running"))
         state.input_ready.set()
@@ -438,7 +524,7 @@ class Orchestrator:
             await self._set_node(state, node.id, "succeeded")
 
     async def _run_output(self, state: ActiveRun, node: Node, incoming: str) -> None:
-        """The commit. One per worktree the run touched, on the run's branch.
+        """The commit, and — for the two pushing kinds — where it goes next.
 
         **Failing when there is nothing to commit is deliberate.** The design's
         happy path ends with *"a commit or branch containing the change"*; a
@@ -447,9 +533,22 @@ class Orchestrator:
         supposed to be an answer to. It also leaves the worktree behind (the
         failed-run policy), which is where the operator can see what the agent
         actually did with its time.
+
+        **The three kinds are one code path with two optional steps**, in
+        increasing order of reach (`models.OutputKind`):
+
+        1. commit on the run's branch — every kind does this;
+        2. push that branch to the remote — `commit-push` and `commit-merge`;
+        3. fast-forward the base branch on the remote to it — `commit-merge`.
+
+        A failure at step 2 or 3 fails the node, and the commit from step 1 is
+        still on the branch in the operator's own repository. That is the whole
+        recovery story and it needs no code: the work is never only on the
+        remote, so a network that is down costs a push and not a run.
         """
         node_run = state.run.node_run(node.id)
         assert state.workspaces is not None
+        kind = node_kind(node)
         made_all = state.workspaces.all
         if not made_all:
             await self._set_node(
@@ -465,6 +564,7 @@ class Orchestrator:
             factory_name=state.run.factory_name or state.run.factory_id,
             run_id=state.run.id,
             agent_summary=incoming,
+            sources=_input_sources(state),
         )
         committed: list[str] = []
         empty: list[str] = []
@@ -508,7 +608,103 @@ class Orchestrator:
                 f"nothing to commit — the agent left {', '.join(empty)} unchanged.",
             )
             return
-        await self._set_node(state, node.id, "succeeded", "committed " + "; ".join(committed))
+
+        detail = "committed " + "; ".join(committed)
+        if kind in PUSHING_OUTPUT_KINDS:
+            pushed = await self._push_all(state, node, kind, made_all)
+            if pushed is None:
+                return  # `_push_all` already failed the node, with git's words
+            detail = f"{detail} · {pushed}"
+            state.run.worktrees = state.workspaces.all
+        await self._set_node(state, node.id, "succeeded", detail)
+
+    async def _push_all(
+        self,
+        state: ActiveRun,
+        node: Node,
+        kind: str,
+        made_all: list[RunWorktree],
+    ) -> str | None:
+        """Step 2 and step 3 of `_run_output`. `None` means the node failed.
+
+        A `commit-merge` merges into **the branch the worktree was cut from**
+        (`RunWorktree.base_branch`) rather than a branch named in the node's
+        config or a remote HEAD looked up over the network. That is the branch
+        the operator had checked out when they pressed Run, so it is the one
+        they meant, and it is already recorded on the run for the diff to have a
+        left-hand side. A detached HEAD has no such branch and is refused.
+        """
+        assert state.workspaces is not None
+        remote = node_remote(node)
+        reported: list[str] = []
+        for made in made_all:
+            if not made.commit_sha:
+                continue  # nothing was produced here; nothing to send anywhere
+            merge_into: str | None = None
+            if kind == "commit-merge":
+                if not made.base_branch:
+                    await self._set_node(
+                        state,
+                        node.id,
+                        "failed",
+                        f"“{made.codebase_name or made.codebase_id}” was on a detached "
+                        "HEAD when the run branched, so there is no base branch to "
+                        "merge into. Check out a branch and run again.",
+                    )
+                    return None
+                merge_into = made.base_branch
+            try:
+                await asyncio.to_thread(
+                    state.workspaces.push, made, remote=remote, merge_into=merge_into
+                )
+            except gitwork.GitError as error:
+                await self._set_node(
+                    state,
+                    node.id,
+                    "failed",
+                    # git's own words. A non-fast-forward is the expected
+                    # failure here and git explains it better than we would.
+                    f"{made.branch} is committed but the push was refused: {error}",
+                )
+                return None
+
+            await state.channel.emit(
+                RunArtifactEvent(
+                    run_id=state.run.id,
+                    node_id=node.id,
+                    kind="push",
+                    codebase_id=made.codebase_id,
+                    branch=made.branch,
+                    path=made.path,
+                    base_branch=made.base_branch,
+                    base_commit=made.base_commit,
+                    commit_sha=made.commit_sha,
+                    file_count=len(made.files),
+                    detail=made.push_detail,
+                    remote=remote,
+                )
+            )
+            reported.append(f"pushed {made.branch} to {remote}")
+            if merge_into:
+                await state.channel.emit(
+                    RunArtifactEvent(
+                        run_id=state.run.id,
+                        node_id=node.id,
+                        kind="merge",
+                        codebase_id=made.codebase_id,
+                        branch=made.branch,
+                        path=made.path,
+                        base_branch=made.base_branch,
+                        base_commit=made.base_commit,
+                        commit_sha=made.commit_sha,
+                        file_count=len(made.files),
+                        detail=made.push_detail,
+                        remote=remote,
+                        merged_into=merge_into,
+                    )
+                )
+                reported.append(f"fast-forwarded {remote}/{merge_into}")
+        return "; ".join(reported) if reported else None
 
     async def _run_agent(self, state: ActiveRun, node: Node, prompt: str) -> None:
         node_run = state.run.node_run(node.id)
@@ -705,6 +901,63 @@ class Orchestrator:
             summary.write(run)
             interrupted.append(run.id)
         return interrupted
+
+
+def _waiting_detail(kind: str) -> str:
+    """What a node says while it waits for a human. One sentence, per kind."""
+    return "waiting for a PRD" if kind == "prd" else "waiting for the request"
+
+
+def prd_title(text: str, filename: str | None = None) -> str:
+    """A one-line name for a PRD, for the commit subject and the run list.
+
+    The document's first ATX heading, because a PRD that has one has put its
+    title there; the filename when it has not; and a stated fallback when there
+    is neither. Never the first 68 characters of the body — a commit subject
+    reading "## Background This document describes" is worse than useless.
+    """
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("#"):
+            heading = stripped.lstrip("#").strip()
+            if heading:
+                return heading
+        elif stripped:
+            break  # prose before any heading: this document has no title
+    if filename:
+        return filename
+    return "Factor-ia run from a PRD"
+
+
+def _request_line(state: ActiveRun) -> str:
+    """The run's one-line description of what it was asked to do.
+
+    A `request` node's text if the factory has one — that is a human writing a
+    sentence, which is exactly what a commit subject wants. Otherwise the title
+    of the first PRD. Read in **factory node order** rather than submission
+    order, so a factory produces the same subject however the operator happened
+    to fill the forms in.
+    """
+    inputs = [node for node in state.factory.nodes if node.definition.type == "input"]
+    for node in inputs:
+        node_run = state.run.node_run(node.id)
+        if node_run and node_kind(node) == "request" and node_run.output_text.strip():
+            return node_run.output_text
+    for node in inputs:
+        node_run = state.run.node_run(node.id)
+        if node_run and node_run.output_text.strip():
+            return prd_title(node_run.output_text, node_run.filename)
+    return ""
+
+
+def _input_sources(state: ActiveRun) -> list[str]:
+    """The documents this run was fed, for the commit's `Factor-ia-Source`
+    trailers. Filenames only — a trailer is a reference, not a payload."""
+    return [
+        node_run.filename
+        for node_run in state.run.node_runs
+        if node_run.type == "input" and node_run.filename
+    ]
 
 
 async def _hard_cancel_after(task: asyncio.Task[None], grace: float) -> None:

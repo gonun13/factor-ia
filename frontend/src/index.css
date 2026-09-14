@@ -558,6 +558,63 @@ button:focus-visible {
   border-color: var(--agent);
 }
 
+.request label .hint {
+  color: var(--ink-faint);
+}
+
+/* A run with two inputs shows two of these, stacked. The rule keeps them from
+   reading as one long form. */
+.request + .request {
+  margin-top: 0.2rem;
+}
+
+/* ---- the PRD drop -------------------------------------------------------
+   A file read in the browser and posted as text: there is no upload endpoint
+   and nothing lands on disk, so the only state here is the name and the size,
+   shown so the operator can tell they picked the file they meant. */
+
+.prd-drop {
+  display: grid;
+  gap: 0.4rem;
+  padding: 0.7rem;
+  border-radius: 8px;
+  border: 1px dashed var(--edge-strong);
+  background: #0f151e;
+  text-align: center;
+}
+
+.prd-drop.has-file {
+  border-style: solid;
+  border-color: color-mix(in srgb, var(--input) 55%, transparent);
+  background: color-mix(in srgb, var(--input) 8%, transparent);
+}
+
+.prd-drop input[type="file"] {
+  font-size: 0.72rem;
+  color: var(--ink-dim);
+  width: 100%;
+}
+
+.prd-drop .prd-chosen {
+  font-size: 0.75rem;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+.prd-drop .hint {
+  font-size: 0.72rem;
+  color: var(--ink-faint);
+}
+
+/* A notice is not a blocker: it is the sentence an operator should read before
+   pressing a button that changes a repository other people pull from. Amber,
+   and with the marker the blockers use, so it lands in the same place on the
+   page — but the Run button stays enabled. */
+.problems li.notice .marker,
+.problems li.notice span {
+  color: var(--input);
+}
+
 /* ---- save state --------------------------------------------------------- */
 
 .savebar {
