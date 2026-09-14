@@ -55,6 +55,34 @@ services:
       retries: 5
       start_period: 10s
 
+  # Browser-driven checks against the real, statically-served bundle. Behind a
+  # profile, so it is never built or started by a plain `docker compose up` —
+  # the image it builds carries a browser the runtime has no use for.
+  #
+  #   docker compose --profile uitest run --rm uitest node tests/settings.mjs
+  uitest:
+    profiles: ["uitest"]
+    build:
+      context: .
+      target: uitest
+      args:
+        FACTOR_IA_UID: ${FACTOR_IA_UID:-1000}
+        FACTOR_IA_GID: ${FACTOR_IA_GID:-1000}
+    # No `init: true` here, unlike the app: this image's ENTRYPOINT is already
+    # tini, and Docker's own init would take PID 1 from it — which is exactly
+    # the case tini warns about rather than handles.
+    depends_on:
+      factoria:
+        condition: service_healthy
+    # No published port: it reaches the app over the compose network, at the
+    # service name. Nothing here is exposed to the host.
+    environment:
+      - FACTOR_IA_URL=http://factoria:8000
+    volumes:
+      # Bind-mounted so a test can be edited on the host and re-run without a
+      # rebuild. Read-only: a test has no business writing to the repo.
+      - ./uitests:/app/uitest/tests:ro
+
 volumes:
   # Discarded only by an explicit `docker compose down -v`: losing this means
   # signing the container in again.

@@ -465,3 +465,16 @@
   font-size: 0.65rem;
   color: var(--ink-faint);
 }
+
+/* The model plate. Neutral on purpose: the codebase slot is violet because it
+   is *required*, and two identically-coloured plates would flatten that. */
+.slot.model {
+  border-color: color-mix(in srgb, var(--ink-faint) 55%, transparent);
+  background: color-mix(in srgb, var(--ink-faint) 8%, transparent);
+  color: var(--ink-dim);
+}
+
+.slot.model select {
+  border-color: color-mix(in srgb, var(--ink-faint) 45%, transparent);
+  background: #10141b;
+}

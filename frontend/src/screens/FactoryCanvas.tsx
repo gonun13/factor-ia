@@ -56,10 +56,13 @@ import {
   OutputGlyph,
   PrdGlyph,
   PushGlyph,
+  SettingsGlyph,
 } from "../nodes/Glyphs";
+import { ProjectSettingsPanel } from "./ProjectSettingsPanel";
 import { useRun, type RunState } from "../run";
 import { blockers, runProblems, type Problem } from "../validation";
 import type {
+  AgentStatus,
   Codebase,
   CodebaseGit,
   Factory,
@@ -110,11 +113,15 @@ function CanvasInner({ projectId, onBack }: { projectId: string; onBack: () => v
   const [factory, setFactory] = useState<Factory | null>(null);
   const [codebases, setCodebases] = useState<Codebase[]>([]);
   const [gitStates, setGitStates] = useState<Record<string, CodebaseGit>>({});
+  const [agent, setAgent] = useState<AgentStatus | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [savedAt, setSavedAt] = useState<string | null>(null);
   /** The last thing the server acknowledged, as the exact bytes a save sends. */
   const baseline = useRef<string>("");
+  /** So closing the settings panel puts focus back where it came from. */
+  const cogRef = useRef<HTMLButtonElement>(null);
   const { screenToFlowPosition, fitView } = useReactFlow<FlowNode, FlowEdge>();
 
   useEffect(() => {
@@ -135,6 +142,30 @@ function CanvasInner({ projectId, onBack }: { projectId: string; onBack: () => v
       live = false;
     };
   }, [projectId, setNodes, setEdges]);
+
+  /**
+   * What the CLI says it offers, fetched once and handed to every node through
+   * the canvas context.
+   *
+   * Deliberately **not** in the load above. That `Promise.all` is what the
+   * canvas waits on before it renders a graph, and this call shells out twice
+   * (`settings_api.agent_status`) and answers slowly — or not at all, on a
+   * machine where the CLI is missing. Neither may delay the canvas or turn a
+   * perfectly good factory into an error screen, so a failure here is swallowed
+   * and the model pickers simply say they have no list.
+   */
+  useEffect(() => {
+    let live = true;
+    api
+      .agentStatus()
+      .then((status) => live && setAgent(status))
+      .catch(() => {
+        /* the pickers fall back to "the CLI's own default" */
+      });
+    return () => {
+      live = false;
+    };
+  }, []);
 
   /**
    * Re-read every discovered codebase's git state.
@@ -284,8 +315,20 @@ function CanvasInner({ projectId, onBack }: { projectId: string; onBack: () => v
   );
 
   const context = useMemo(
-    () => ({ codebases, gitStates, invalid, patch }),
-    [codebases, gitStates, invalid, patch],
+    () => ({
+      codebases,
+      gitStates,
+      invalid,
+      patch,
+      models: agent?.handshake.models ?? [],
+      cliDefaultModel: agent?.handshake.default_model ?? null,
+      containerProvider: agent?.default_provider ?? "claude",
+      projectSettings: project?.settings ?? {
+        default_provider: null,
+        default_model: null,
+      },
+    }),
+    [codebases, gitStates, invalid, patch, agent, project],
   );
 
   return (
@@ -300,6 +343,16 @@ function CanvasInner({ projectId, onBack }: { projectId: string; onBack: () => v
           <small>· {factory?.name ?? "main"} factory</small>
         </span>
         <span className="spacer" />
+        <button
+          ref={cogRef}
+          className="icon-button"
+          aria-label="Project settings"
+          aria-expanded={settingsOpen}
+          title="Project settings"
+          onClick={() => setSettingsOpen(true)}
+        >
+          <SettingsGlyph />
+        </button>
         <div className="savebar">
           {dirty ? (
             <span className="pill dirty">unsaved changes</span>
@@ -422,6 +475,25 @@ function CanvasInner({ projectId, onBack }: { projectId: string; onBack: () => v
         </CanvasContext.Provider>
         )}
       </div>
+
+      {/* A sibling of the canvas, never a child: inside React Flow's subtree the
+          viewport transform would scale it, and every control in it would need
+          `nodrag`/`nowheel`. `onSaved` is what makes each node's "— project
+          default —" label update the instant this saves, since `project` feeds
+          the context memo above. */}
+      {settingsOpen && project && (
+        <ProjectSettingsPanel
+          project={project}
+          models={agent?.handshake.models ?? []}
+          cliDefaultModel={agent?.handshake.default_model ?? null}
+          containerProvider={agent?.default_provider ?? "claude"}
+          onSaved={setProject}
+          onClose={() => {
+            setSettingsOpen(false);
+            cogRef.current?.focus();
+          }}
+        />
+      )}
     </div>
   );
 }

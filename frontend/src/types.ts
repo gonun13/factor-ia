@@ -110,6 +110,9 @@ export type NodeRuntime = {
   todos?: TodoItem[];
   /** The worktree this node is writing in, and the commit it produced. */
   artifact?: RunArtifact | null;
+  /** The model the provider says it chose, off `session.init`. Not what we
+   * asked for — the two differ whenever we asked for nothing. */
+  model?: string;
 };
 
 /** Something durable that now exists outside `/data` — a branch in the
@@ -172,10 +175,20 @@ export type Factory = {
   updated_at: string;
 };
 
+/** Project-wide execution defaults an agent node inherits unless it overrides
+ * them. `null` means *ask nobody*: the provider falls through to the
+ * container's, and the model to the CLI's own — which is the only place a model
+ * id ever comes from. */
+export type ProjectSettings = {
+  default_provider: "claude" | "fake" | null;
+  default_model: string | null;
+};
+
 export type Project = {
   id: string;
   name: string;
   codebase_ids: string[];
+  settings: ProjectSettings;
   created_at: string;
   updated_at: string;
 };
@@ -223,7 +236,14 @@ export type Handshake = {
   detail: string;
 };
 
-export type AgentStatus = { account: AccountStatus; handshake: Handshake };
+export type AgentStatus = {
+  account: AccountStatus;
+  handshake: Handshake;
+  /** What a run uses when neither the node nor the project names a provider.
+   * An environment fact on the container (`FACTOR_IA_ADAPTER`), which the
+   * browser has no other way to learn. */
+  default_provider: "claude" | "fake";
+};
 
 export type LoginPhase =
   | "starting"
@@ -269,6 +289,9 @@ export type NodeRun = {
   ended_at: string | null;
   cost_usd: number;
   session_id: string | null;
+  /** What this node actually ran on, reported by the provider itself. `""`
+   * until the first `session.init`, and on every node that is not an agent. */
+  model: string;
   output_text: string;
   /** The document a `prd` input node was given. The contents are `output_text`;
    * this is only ever the label. */

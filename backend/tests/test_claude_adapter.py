@@ -68,6 +68,29 @@ def test_no_model_flag_when_the_node_did_not_override_one() -> None:
     assert build_argv("s", RunConfig(model="haiku"))[-2:] == ["--model", "haiku"]
 
 
+def test_from_node_config_falls_back_to_the_project_default() -> None:
+    config = RunConfig.from_node_config({}, default_model="test-model-x")
+    assert config.model == "test-model-x"
+    assert build_argv("s", config)[-2:] == ["--model", "test-model-x"]
+
+
+def test_a_node_model_wins_over_the_project_default() -> None:
+    config = RunConfig.from_node_config(
+        {"model": "test-model-node"}, default_model="test-model-x"
+    )
+    assert config.model == "test-model-node"
+
+
+def test_a_blank_node_model_does_not_shadow_the_project_default() -> None:
+    """A `<select>` cleared back to "project default" can leave `""` behind.
+
+    An empty string is falsy everywhere downstream, so it would not reach the
+    CLI as a flag — it would just silently eat the project's answer.
+    """
+    config = RunConfig.from_node_config({"model": ""}, default_model="test-model-x")
+    assert config.model == "test-model-x"
+
+
 def test_prompt_is_one_user_frame() -> None:
     import json
 

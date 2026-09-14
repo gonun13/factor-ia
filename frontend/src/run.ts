@@ -179,10 +179,16 @@ function reduceAgent(runtimes: Runtimes, nodeId: string, event: AgentEvent): Run
       return withNode(runtimes, nodeId, {
         detail: `asked to use ${event.tool_name} — denied by policy (no human is watching an unattended run)`,
       });
+    case "session.init":
+      // The one thing worth taking off this event: the model the provider
+      // actually chose. Which is not necessarily the one anything asked for —
+      // a node and a project may both defer, and then the CLI decides. The
+      // node reports what happened rather than what was requested.
+      return event.model ? withNode(runtimes, nodeId, { model: event.model }) : runtimes;
     default:
-      // `thinking.delta`, `tool.delta`, `session.init`, `turn.end`, `exit`:
-      // logged and replayable, but the node's surface says nothing about them.
-      // An event this reducer ignores is still in `events.jsonl`.
+      // `thinking.delta`, `tool.delta`, `turn.end`, `exit`: logged and
+      // replayable, but the node's surface says nothing about them. An event
+      // this reducer ignores is still in `events.jsonl`.
       return runtimes;
   }
 }

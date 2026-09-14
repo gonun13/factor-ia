@@ -12,6 +12,9 @@ ARG UV_IMAGE=ghcr.io/astral-sh/uv:0.12.13
 # bump deliberately, never via @latest.
 ARG CLAUDE_CODE_VERSION=2.1.236
 ARG PNPM_VERSION=12.4.1
+# Only ever installed in the `uitest` stage. Pinned for the same reason the CLI
+# is: a browser that updates itself turns a UI assertion into a coin toss.
+ARG PLAYWRIGHT_VERSION=1.63.0
 
 FROM ${NODE_IMAGE} AS nodedist
 FROM ${UV_IMAGE} AS uvdist
@@ -111,3 +114,42 @@ EXPOSE 8000
 # for the same reason — the CLI's children outlive it otherwise.
 ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["uvicorn", "factoria.main:app", "--host", "0.0.0.0", "--port", "8000"]
+
+
+# ---- uitest: runtime + a real browser --------------------------------------
+#
+# A separate target, never part of `runtime`. The production image hosts one
+# runtime dependency (DESIGN.md, Assumptions) and has no business carrying a
+# browser and the X/GTK libraries it links against — measured, that is roughly
+# a gigabyte on top of the 900MB runtime, none of which a run ever executes.
+#
+#   docker compose --profile uitest run --rm uitest node tests/settings.mjs
+#
+# Drives the app over the compose network at http://factoria:8000, so it tests
+# the same statically-served bundle an operator loads, not a dev server.
+FROM runtime AS uitest
+ARG PLAYWRIGHT_VERSION
+
+USER root
+
+# NOT under /home/factoria. A named volume mounts there and shadows whatever
+# the image baked in, so browsers cached in the default `$HOME/.cache` would
+# survive exactly one rebuild and then silently go stale — see the warning
+# above. Root-owned and world-readable: the runtime user only ever reads it.
+ENV PLAYWRIGHT_BROWSERS_PATH=/usr/local/ms-playwright
+
+# A real package directory rather than a global install: `import "playwright"`
+# is an ESM bare specifier, and ESM resolution walks node_modules up from the
+# importing file — it does not consult NODE_PATH, so a global would not resolve.
+WORKDIR /app/uitest
+RUN npm init -y >/dev/null \
+    && npm install --no-audit --no-fund playwright@${PLAYWRIGHT_VERSION} \
+    && npx playwright install --with-deps chromium \
+    && npm cache clean --force \
+    && chmod -R a+rX /usr/local/ms-playwright \
+    && chown -R factoria:factoria /app/uitest
+
+USER factoria
+# Chromium wants a writable cwd for its profile; /app/uitest is the user's own.
+ENTRYPOINT ["/usr/bin/tini", "--"]
+CMD ["node", "--version"]

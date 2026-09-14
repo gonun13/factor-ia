@@ -539,7 +539,12 @@ Defaults chosen where the operator didn't specify. Each is cheap to reverse.
   spending a single token.
 - **Agent model** defaults to whatever the provider CLI reports as its default,
   read from its own `initialize` handshake rather than hardcoded — Overseer's
-  §1.1.1 approach. Overridable per agent node.
+  §1.1.1 approach. Defaulted per project, overridable per agent node: the ladder
+  is node → project → CLI, and every rung above the last is a value the operator
+  chose from the handshake's own list. The **provider** is defaulted the same
+  way, with one clamp — a container pinned to `fake` stays fake, because that
+  pin is what makes a machine with no credential, and the whole test suite,
+  spend nothing.
 - The **`claude` CLI is installed in the image** and pinned to a known-good
   version; its stream-json output shape is a parsing dependency, so an unpinned
   upgrade is a breaking change.

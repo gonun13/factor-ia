@@ -650,6 +650,110 @@ button:focus-visible {
   gap: 0.6rem;
 }
 
+/* ---- slide-over -----------------------------------------------------------
+ *
+ * The first overlay in this app, so it sets the convention. It sits outside the
+ * React Flow subtree on purpose: inside it, the canvas transform would scale it
+ * and `nodrag`/`nowheel` would have to be sprinkled over every control.
+ */
+
+.icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--ink-faint);
+}
+
+.icon-button:hover {
+  color: var(--ink);
+  border-color: var(--edge);
+}
+
+.icon-button svg {
+  width: 17px;
+  height: 17px;
+}
+
+.slideover-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  justify-content: flex-end;
+  background: rgb(8 10 14 / 0.55);
+}
+
+.slideover {
+  display: flex;
+  flex-direction: column;
+  width: min(26rem, 100vw);
+  height: 100%;
+  background: var(--panel);
+  border-left: 1px solid var(--edge);
+  box-shadow: var(--shadow);
+  animation: slide-over-in 160ms ease-out;
+}
+
+@keyframes slide-over-in {
+  from {
+    transform: translateX(100%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .slideover {
+    animation: none;
+  }
+}
+
+.slideover-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  padding: 0.85rem 1rem;
+  border-bottom: 1px solid var(--edge);
+}
+
+.slideover-head h2 {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0;
+  font-size: 0.95rem;
+}
+
+.slideover-head svg {
+  width: 15px;
+  height: 15px;
+  color: var(--ink-faint);
+}
+
+.slideover-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 1rem;
+}
+
+.slideover-body .setting {
+  display: grid;
+  gap: 0.4rem;
+}
+
+.slideover-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.6rem;
+  padding: 0.85rem 1rem;
+  border-top: 1px solid var(--edge);
+}
+
 .pill {
   font-size: 0.7rem;
   padding: 0.2rem 0.5rem;

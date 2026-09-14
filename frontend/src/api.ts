@@ -65,6 +65,19 @@ export const api = {
       body: JSON.stringify({ name, codebase_ids: codebaseIds }),
     }),
   project: (id: string) => request<Project>(`/api/projects/${id}`),
+  /** Sparse: an omitted key means *unchanged*. `settings` is the exception and
+      is replaced whole, because the panel that sends it always knows both
+      halves. Writes to `/data/projects.json`, which is machine-local and not
+      the git-tracked factory file — so this saves immediately rather than
+      joining the canvas's explicit-save policy. */
+  updateProject: (
+    id: string,
+    body: Partial<Pick<Project, "name" | "codebase_ids" | "settings">>,
+  ) =>
+    request<Project>(`/api/projects/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    }),
 
   factory: (projectId: string, factoryId = "main") =>
     request<Factory>(`/api/projects/${projectId}/factories/${factoryId}`),

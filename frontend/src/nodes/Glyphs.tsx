@@ -88,3 +88,34 @@ export function CodebaseGlyph() {
     </svg>
   );
 }
+
+/**
+ * Settings: a cog with real teeth.
+ *
+ * Deliberately heavier than `AgentGlyph`, which is also gear-shaped — that one
+ * is a machine seen from the side, this one is the thing you turn. They sit on
+ * the same screen, so they must not be mistaken for each other.
+ */
+export function SettingsGlyph() {
+  return (
+    <svg viewBox="0 0 16 16" aria-hidden>
+      <circle cx="8" cy="8" r="2.5" {...stroke} />
+      <path
+        d="M8 1.2 9.1 3a5.6 5.6 0 0 1 1.5.6l2-.5.9 1.6-1.3 1.6a5.6 5.6 0 0 1 0 1.4l1.3 1.6-.9 1.6-2-.5a5.6 5.6 0 0 1-1.5.6L8 14.8 6.9 13a5.6 5.6 0 0 1-1.5-.6l-2 .5-.9-1.6 1.3-1.6a5.6 5.6 0 0 1 0-1.4L2.5 4.7l.9-1.6 2 .5A5.6 5.6 0 0 1 6.9 3Z"
+        {...stroke}
+      />
+    </svg>
+  );
+}
+
+/** Model: a chip. A property of the machine, not something that flows through it. */
+export function ModelGlyph() {
+  return (
+    <svg viewBox="0 0 16 16" aria-hidden>
+      <rect x="4.2" y="4.2" width="7.6" height="7.6" rx="1.4" {...stroke} />
+      <path d="M6.6 6.6h2.8v2.8H6.6z" {...stroke} />
+      <path d="M6.4 1.8v2.4M9.6 1.8v2.4M6.4 11.8v2.4M9.6 11.8v2.4" {...stroke} />
+      <path d="M1.8 6.4h2.4M1.8 9.6h2.4M11.8 6.4h2.4M11.8 9.6h2.4" {...stroke} />
+    </svg>
+  );
+}

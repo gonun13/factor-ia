@@ -86,6 +86,7 @@ from .models import (
     Node,
     NodeRun,
     NodeStatus,
+    ProjectSettings,
     PUSHING_OUTPUT_KINDS,
     Run,
     RunStatus,
@@ -105,7 +106,7 @@ from .runevents import (
 )
 from .worktree import RunWorkspaces, WorktreeError
 from .runlog import RunChannel, RunStore
-from .store import Store, get_store
+from .store import NotFound, Store, get_store
 
 CANCEL_GRACE_S = 10.0
 """How long a cancelled run may take to stop before the task is killed."""
@@ -138,26 +139,39 @@ def _fake_delay() -> float:
         return 0.35
 
 
-def adapter_name_for(node: Node) -> str:
-    """`fake` or `claude`, per node. The node wins over the container's default.
+def adapter_name_for(node: Node, settings: ProjectSettings | None = None) -> str:
+    """`fake` or `claude`. The node, then the project, then the container.
 
     Per node rather than per run so one machine on a busy canvas can be dry-run
     while the rest are real — which is how you debug a factory without paying
-    for the parts that already work.
+    for the parts that already work. The project sits underneath as the answer
+    for every node that names nothing, which is most of them.
+
+    **A container pinned to `fake` stays fake**, and neither rung above can lift
+    it. `FACTOR_IA_ADAPTER=fake` is a deliberate pin — a machine with no
+    credential, a test suite that must cost nothing — and a stored project
+    setting that could spend money against it would make the pin advisory. The
+    override direction worth having is the other one: dry-running one machine
+    on a live canvas.
     """
-    requested = node.definition.config.get("adapter")
-    name = str(requested or config.adapter_name()).strip().lower()
+    container = config.adapter_name()
+    if container == "fake":
+        return "fake"
+    requested = node.definition.config.get("adapter") or (
+        settings.default_provider if settings else None
+    )
+    name = str(requested or container).strip().lower()
     return "fake" if name == "fake" else "claude"
 
 
-def adapter_for(node: Node) -> AgentAdapter:
+def adapter_for(node: Node, settings: ProjectSettings | None = None) -> AgentAdapter:
     """The seam stage 5 left. Same signature, real body.
 
     The fake's script is still read from the node's freeform `config`, so a
     factory that exercises the failure path is a graph rather than a code
     change — stage 2 left `config` freeform for exactly this.
     """
-    if adapter_name_for(node) == "fake":
+    if adapter_name_for(node, settings) == "fake":
         script = str(
             node.definition.config.get("fake_script")
             or os.environ.get("FACTOR_IA_FAKE_SCRIPT")
@@ -167,6 +181,22 @@ def adapter_for(node: Node) -> AgentAdapter:
             script = "success"
         return FakeAdapter(script=script, delay_s=_fake_delay())  # type: ignore[arg-type]
     return ClaudeAdapter()
+
+
+def model_for(node: Node, settings: ProjectSettings | None = None) -> str:
+    """What this node asked to run on. `""` when it defers to the CLI's default.
+
+    The same ladder `adapter_name_for` walks, and the same reason for existing:
+    one reader, so the run record, the spawn and anything that comes later all
+    resolve the model identically. Non-agent nodes never have one.
+    """
+    if node.definition.type != "agent":
+        return ""
+    resolved = RunConfig.from_node_config(
+        node.definition.config,
+        default_model=settings.default_model if settings else None,
+    ).model
+    return resolved or ""
 
 
 def run_is_dangerous(factory: Factory) -> bool:
@@ -195,6 +225,11 @@ class ActiveRun:
     run: Run
     factory: Factory
     channel: RunChannel
+    #: The project's defaults as they stood when the run was created. Frozen
+    #: here and never re-read, for the same reason `NodeRun.kind` is: the
+    #: registry is editable while a run is in flight, and a run record has to
+    #: describe the run that actually happened.
+    settings: ProjectSettings = field(default_factory=ProjectSettings)
     #: Every worktree this run owns, created on demand (`worktree.py`).
     workspaces: RunWorkspaces | None = None
     task: asyncio.Task[None] | None = None
@@ -252,6 +287,15 @@ class Orchestrator:
             factory = await asyncio.to_thread(
                 self.store.get_factory, project_id, factory_id
             )
+            try:
+                project = await asyncio.to_thread(self.store.get_project, project_id)
+                settings = project.settings
+            except NotFound:
+                # A factory file outliving its registry entry is a shape this
+                # store creates on purpose — `delete_project` unregisters and
+                # leaves `_factories/` alone. Running one of those is not the
+                # moment to start failing; it just has no project defaults.
+                settings = ProjectSettings()
             codebases = await asyncio.to_thread(discover_codebases)
             # In a thread: the clean-repo precondition shells out to git once
             # per attached codebase, and the event loop is also serving an SSE
@@ -271,7 +315,7 @@ class Orchestrator:
                 # from the first frame; the ref itself is created with the first
                 # worktree (`DESIGN.md`, Assumptions).
                 branch=worktree.branch_name(factory_id, run_id),
-                adapter=_run_adapter_id(factory),
+                adapter=_run_adapter_id(factory, settings),
                 dangerous=run_is_dangerous(factory),
                 node_runs=[
                     NodeRun(
@@ -282,6 +326,11 @@ class Orchestrator:
                         # has to describe the run that actually happened.
                         kind=node_kind(node),
                         label=node.definition.label or node.id,
+                        # What the graph asked for. `session.init` overwrites it
+                        # with what the CLI actually chose, which is the answer
+                        # worth keeping — but a run that dies before that event
+                        # still says what it was reaching for.
+                        model=model_for(node, settings),
                     )
                     for node in factory.nodes
                 ],
@@ -292,6 +341,7 @@ class Orchestrator:
                 run=run,
                 factory=factory,
                 channel=channel,
+                settings=settings,
                 workspaces=RunWorkspaces(run_id=run.id, branch=run.branch or ""),
             )
             self._active[run.id] = state
@@ -711,9 +761,13 @@ class Orchestrator:
         assert node_run is not None
         codebase = self._codebase(node)
         cwd = await self._worktree_for(state, node, codebase)
-        adapter = adapter_for(node)
+        adapter = adapter_for(node, state.settings)
         agent_run = adapter.create_run(
-            prompt, cwd, RunConfig.from_node_config(node.definition.config)
+            prompt,
+            cwd,
+            RunConfig.from_node_config(
+                node.definition.config, default_model=state.settings.default_model
+            ),
         )
         state.agent_run = agent_run
         collected: list[str] = []
@@ -727,6 +781,10 @@ class Orchestrator:
                 )
                 if event.type == "session.init":
                     node_run.session_id = event.session_id
+                    # The CLI's own answer, which is the only honest one: we may
+                    # have asked for nothing at all and let it choose.
+                    if event.model:
+                        node_run.model = event.model
                 elif event.type == "text.delta":
                     collected.append(event.text)
                 elif event.type == "turn.end":
@@ -967,7 +1025,7 @@ async def _hard_cancel_after(task: asyncio.Task[None], grace: float) -> None:
         task.cancel()
 
 
-def _run_adapter_id(factory: Factory) -> str:
+def _run_adapter_id(factory: Factory, settings: ProjectSettings | None = None) -> str:
     """What the run record says drove it. The agent nodes decide, not the run.
 
     A mixed factory — one fake machine among real ones — reports `mixed`, which
@@ -975,7 +1033,7 @@ def _run_adapter_id(factory: Factory) -> str:
     on.
     """
     names = {
-        adapter_name_for(node)
+        adapter_name_for(node, settings)
         for node in factory.nodes
         if node.definition.type == "agent"
     }

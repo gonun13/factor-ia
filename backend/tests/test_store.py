@@ -16,6 +16,7 @@ from factoria.models import (
     NodeRuntime,
     Position,
     Project,
+    ProjectSettings,
 )
 from factoria.paths import PathEscape
 from factoria.store import Conflict, Corrupt, NotFound, Store
@@ -179,3 +180,48 @@ def test_delete_project_keeps_the_team_owned_factory_file(
 
 def test_missing_registry_reads_as_empty(test_store: Store) -> None:
     assert test_store.list_projects() == []
+
+
+# ---- project settings ------------------------------------------------------
+
+
+def test_a_registry_written_before_settings_existed_still_loads(
+    test_store: Store, data_dir: Path
+) -> None:
+    """The back-compat claim, enforced rather than asserted in a comment.
+
+    `Project.settings` was added after the first `projects.json` was written, so
+    every existing installation has a registry file without the key. It must
+    hydrate the default rather than fail validation — that is the whole reason
+    the field defaults instead of being required, and why nothing was migrated.
+    """
+    (data_dir / "projects.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "projects": [
+                    {
+                        "id": "demo",
+                        "name": "Demo",
+                        "codebase_ids": [],
+                        "created_at": "2026-01-01T00:00:00Z",
+                        "updated_at": "2026-01-01T00:00:00Z",
+                    }
+                ],
+            }
+        )
+    )
+    project = test_store.get_project("demo")
+    assert project.settings.default_provider is None
+    assert project.settings.default_model is None
+
+
+def test_project_settings_round_trip_through_update(test_store: Store) -> None:
+    test_store.create_project(Project(id="demo", name="Demo"))
+    project = test_store.get_project("demo")
+    project.settings = ProjectSettings(default_provider="fake", default_model="m-1")
+    test_store.update_project(project)
+
+    reloaded = Store().get_project("demo")
+    assert reloaded.settings.default_provider == "fake"
+    assert reloaded.settings.default_model == "m-1"

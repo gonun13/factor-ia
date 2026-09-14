@@ -29,7 +29,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 # Bumped when the on-disk shape changes incompatibly. Present from the first
 # file written, because adding a version field to files that lack one is the
@@ -293,6 +293,33 @@ class FactorySummary(Base):
     updated_at: datetime
 
 
+class ProjectSettings(Base):
+    """Project-wide defaults an agent node inherits unless it overrides them.
+
+    Both fields are `None`, and `None` means *ask nobody*: the provider falls
+    through to the container's own, and the model to the CLI's — the only place
+    a model id is ever allowed to come from (`DESIGN.md`, Assumptions). That is
+    why neither default is a string here, and why nothing in this package ever
+    names one.
+    """
+
+    #: The adapter every agent in this project uses unless it names its own.
+    #: `None` defers to `FACTOR_IA_ADAPTER`, which defaults to the real one.
+    default_provider: Literal["claude", "fake"] | None = None
+    #: A model id as the CLI's own handshake spells it. Deliberately **not**
+    #: validated against that list: the list is a subprocess away and the CLI is
+    #: the authority, so a stale id is stored, sent, and refused by the CLI in
+    #: its own words rather than by a guess of ours.
+    default_model: str | None = Field(default=None, max_length=120)
+
+    @field_validator("default_model", mode="before")
+    @classmethod
+    def _blank_is_unset(cls, value: object) -> object:
+        # A `<select>` reset to "— CLI default —" posts `""`, and an empty
+        # string as a model id would reach the CLI as `--model ""`.
+        return None if isinstance(value, str) and not value.strip() else value
+
+
 class Project(Base):
     """A named workspace owning codebases and factories."""
 
@@ -300,6 +327,10 @@ class Project(Base):
     name: str
     # v1 attaches exactly one; the model allows many (`DESIGN.md`, Data model).
     codebase_ids: list[str] = Field(default_factory=list)
+    # Last, so an existing registry gains a key rather than changing shape — a
+    # file written before this field existed loads with the default and needs
+    # no migration and no `schema_version` bump.
+    settings: ProjectSettings = Field(default_factory=ProjectSettings)
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)
 
@@ -324,6 +355,11 @@ class ProjectCreate(Base):
 class ProjectUpdate(Base):
     name: str | None = Field(default=None, min_length=1, max_length=80)
     codebase_ids: list[str] | None = None
+    #: Replaced whole, not merged. The panel that sends this has one Save button
+    #: and always knows both fields; a per-field update model could not express
+    #: "clear this one" without inventing a sentinel. Omitting the key leaves
+    #: the project's settings exactly as they were.
+    settings: ProjectSettings | None = None
 
 
 class FactoryCreate(Base):
@@ -397,6 +433,14 @@ class NodeRun(Base):
     cost_usd: float = 0.0
     #: The provider session this node ran as, for correlation with the log.
     session_id: str | None = None
+    #: The model this node ran on. Set when the run is created to what the graph
+    #: and the project *asked for* (`""` when both defer to the CLI), then
+    #: overwritten by `session.init`, which reports what the CLI actually chose.
+    #: One field rather than a requested/actual pair: the two differ only
+    #: between the spawn and that first event, and a run that dies in that
+    #: window keeps the request — which is the whole debugging value a second
+    #: field would have carried.
+    model: str = ""
     #: What travels down the outgoing belts. Freeform text (open question 4).
     output_text: str = ""
     #: The name of the file a `prd` input node was given, for the log and the

@@ -22,8 +22,13 @@ from pathlib import Path
 import pytest
 
 from factoria import gitwork, worktree
-from factoria.models import Edge, Factory, Node, NodeDefinition, Project
-from factoria.orchestrator import Orchestrator, adapter_for, adapter_name_for
+from factoria.models import Edge, Factory, Node, NodeDefinition, Project, ProjectSettings
+from factoria.orchestrator import (
+    Orchestrator,
+    adapter_for,
+    adapter_name_for,
+    model_for,
+)
 from factoria.runcheck import NotRunnable, run_problems
 from factoria.runlog import RunLog, run_dir
 from factoria.store import Store
@@ -100,6 +105,71 @@ def test_a_single_node_can_be_dry_run_on_an_otherwise_real_canvas(monkeypatch) -
         id="a", definition=NodeDefinition(type="agent", config={"adapter": "fake"})
     )
     assert adapter_for(node).id == "fake"
+
+
+# ---- the resolution ladder -------------------------------------------------
+#
+# Node, then project, then the container. Three rungs, asserted one at a time so
+# a regression names which rung moved.
+
+
+def test_a_project_default_provider_drives_an_agent_that_names_none(
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("FACTOR_IA_ADAPTER", raising=False)
+    node = Node(id="a", definition=NodeDefinition(type="agent"))
+    settings = ProjectSettings(default_provider="fake")
+    assert adapter_name_for(node, settings) == "fake"
+    assert adapter_for(node, settings).id == "fake"
+
+
+def test_a_node_provider_beats_the_project_default(monkeypatch) -> None:
+    monkeypatch.delenv("FACTOR_IA_ADAPTER", raising=False)
+    node = Node(
+        id="a", definition=NodeDefinition(type="agent", config={"adapter": "fake"})
+    )
+    assert adapter_name_for(node, ProjectSettings(default_provider="claude")) == "fake"
+
+
+def test_a_container_pinned_to_fake_cannot_be_overridden(monkeypatch) -> None:
+    """The pin is a pin, not a suggestion.
+
+    `FACTOR_IA_ADAPTER=fake` is how a machine with no credential — and this
+    suite — guarantees it spends nothing. A stored project setting that could
+    lift it would make every zero-token promise conditional on a JSON file
+    nobody reviews.
+    """
+    monkeypatch.setenv("FACTOR_IA_ADAPTER", "fake")
+    node = Node(
+        id="a", definition=NodeDefinition(type="agent", config={"adapter": "claude"})
+    )
+    assert adapter_name_for(node, ProjectSettings(default_provider="claude")) == "fake"
+
+
+def test_a_project_default_model_is_used_when_the_node_names_none() -> None:
+    node = Node(id="a", definition=NodeDefinition(type="agent"))
+    assert model_for(node, ProjectSettings(default_model="test-model-x")) == "test-model-x"
+
+
+def test_a_node_model_beats_the_project_default() -> None:
+    node = Node(
+        id="a",
+        definition=NodeDefinition(type="agent", config={"model": "test-model-node"}),
+    )
+    settings = ProjectSettings(default_model="test-model-x")
+    assert model_for(node, settings) == "test-model-node"
+
+
+def test_no_model_anywhere_resolves_to_nothing_at_all() -> None:
+    """The bottom rung is the CLI's own, and it is reached by saying nothing."""
+    node = Node(id="a", definition=NodeDefinition(type="agent"))
+    assert model_for(node, ProjectSettings()) == ""
+    assert model_for(node, None) == ""
+
+
+def test_only_agent_nodes_resolve_a_model() -> None:
+    node = Node(id="o", definition=NodeDefinition(type="output"))
+    assert model_for(node, ProjectSettings(default_model="test-model-x")) == ""
 
 
 # ---- the happy path --------------------------------------------------------
@@ -209,7 +279,9 @@ def test_a_run_that_changed_nothing_fails_rather_than_ticking_green(
     from factoria.agent.fake import FakeAdapter
 
     original = orch_module.adapter_for
-    orch_module.adapter_for = lambda node: FakeAdapter(script="success", delay_s=0, write_files=False)
+    orch_module.adapter_for = lambda node, settings=None: FakeAdapter(
+        script="success", delay_s=0, write_files=False
+    )
     try:
         run = run_to_completion(orch)
     finally:

@@ -267,6 +267,55 @@ def test_null_origin_is_refused(client: TestClient) -> None:
     assert response.status_code == 403
 
 
+# ---- project settings ------------------------------------------------------
+
+
+def test_patch_sets_project_settings(client: TestClient) -> None:
+    client.post("/api/projects", json={"name": "Demo"})
+    response = client.patch(
+        "/api/projects/demo",
+        json={"settings": {"default_provider": "fake", "default_model": "m-1"}},
+    )
+    assert response.status_code == 200
+    assert response.json()["settings"] == {
+        "default_provider": "fake",
+        "default_model": "m-1",
+    }
+    assert client.get("/api/projects/demo").json()["settings"]["default_model"] == "m-1"
+
+
+def test_patching_something_else_leaves_the_settings_alone(client: TestClient) -> None:
+    """`ProjectUpdate` is sparse: an omitted key means *unchanged*, not *cleared*.
+
+    The rename in the topbar and the Save in the settings panel are different
+    requests, and neither may quietly undo the other.
+    """
+    client.post("/api/projects", json={"name": "Demo"})
+    client.patch("/api/projects/demo", json={"settings": {"default_model": "m-1"}})
+    renamed = client.patch("/api/projects/demo", json={"name": "Renamed"})
+    assert renamed.json()["name"] == "Renamed"
+    assert renamed.json()["settings"]["default_model"] == "m-1"
+
+
+def test_an_unknown_provider_is_refused(client: TestClient) -> None:
+    """The provider is a closed set — there are two adapters, and that is all."""
+    client.post("/api/projects", json={"name": "Demo"})
+    response = client.patch(
+        "/api/projects/demo", json={"settings": {"default_provider": "gpt"}}
+    )
+    assert response.status_code == 422
+
+
+def test_a_blank_model_is_stored_as_unset(client: TestClient) -> None:
+    """The panel's "— CLI default —" option posts `""`, which is not a model id."""
+    client.post("/api/projects", json={"name": "Demo"})
+    client.patch("/api/projects/demo", json={"settings": {"default_model": "m-1"}})
+    response = client.patch(
+        "/api/projects/demo", json={"settings": {"default_model": "  "}}
+    )
+    assert response.json()["settings"]["default_model"] is None
+
+
 def test_cross_origin_read_is_allowed(client: TestClient) -> None:
     response = client.get("/api/health", headers={"Origin": "https://evil.example"})
     assert response.status_code == 200
