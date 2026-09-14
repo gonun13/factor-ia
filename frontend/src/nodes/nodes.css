@@ -281,6 +281,20 @@
   stroke: var(--agent);
 }
 
+/* The fail belt. Same casing — it is still a belt and material still moves
+   down it — but tinted and drawn thinner, so a glance at a canvas separates
+   "what normally happens" from "what happens when it doesn't" without having
+   to trace either line to its end. */
+.belt-fail .belt-casing {
+  stroke: color-mix(in srgb, var(--danger) 28%, var(--belt-casing));
+}
+
+.belt-fail .belt-tread {
+  stroke: var(--danger);
+  stroke-width: 2;
+  opacity: 0.75;
+}
+
 @keyframes belt {
   to {
     stroke-dashoffset: -14;
@@ -477,4 +491,34 @@
 .slot.model select {
   border-color: color-mix(in srgb, var(--ink-faint) 45%, transparent);
   background: #10141b;
+}
+
+/* ---- the two ports ------------------------------------------------------
+   An agent and a human node leave by `success` or by `fail`. React Flow puts
+   every right-hand handle at the vertical middle, so two of them need saying
+   apart: position does it at a glance and colour confirms it. Both are pulled
+   in from the edge slightly less than the single handle, because a node with
+   two of them is a node whose right edge is worth reading. */
+
+.react-flow__handle.handle-success,
+.react-flow__handle.handle-fail {
+  height: 14px;
+}
+
+.react-flow__handle.handle-success {
+  top: 34%;
+  background: color-mix(in srgb, var(--output) 45%, var(--belt-casing));
+}
+
+.react-flow__handle.handle-fail {
+  top: 72%;
+  background: color-mix(in srgb, var(--danger) 45%, var(--belt-casing));
+}
+
+.react-flow__handle.handle-success:hover {
+  background: var(--output);
+}
+
+.react-flow__handle.handle-fail:hover {
+  background: var(--danger);
 }

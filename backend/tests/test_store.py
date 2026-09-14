@@ -265,3 +265,59 @@ def test_project_settings_round_trip_through_update(test_store: Store) -> None:
     reloaded = Store().get_project("demo")
     assert reloaded.settings.default_provider == "fake"
     assert reloaded.settings.default_model == "m-1"
+
+
+def test_a_belt_drawn_before_ports_existed_still_loads_and_means_success(
+    test_store: Store, workspace: Path
+) -> None:
+    """Stage 8 gave agent and human nodes two ways out. It did so on a field the
+    file already had (`source_handle`), so `schema_version` did not move and a
+    factory written before any of it existed reads back unchanged — with its
+    belts meaning exactly what they always meant."""
+    from factoria.models import edge_outcome
+
+    test_store.create_project(Project(id="demo", name="Demo"))
+    path = test_store.factory_path("demo", "main")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "id": "main",
+                "project_id": "demo",
+                "name": "main",
+                "nodes": [
+                    {"id": "n-in", "definition": {"type": "input"}},
+                    {"id": "n-agent", "definition": {"type": "agent"}},
+                ],
+                "edges": [{"id": "e-1", "source": "n-in", "target": "n-agent"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    factory = test_store.get_factory("demo", "main")
+    assert factory.edges[0].source_handle is None
+    assert edge_outcome(factory.edges[0]) == "success"
+
+
+def test_a_port_survives_a_save_and_is_readable_in_the_file(
+    test_store: Store, workspace: Path
+) -> None:
+    """The fail belt is a thing a reviewer reads in a pull request, so it has to
+    be a word in the file and not a positional accident."""
+    from factoria.models import Edge, Node, NodeDefinition
+
+    test_store.create_project(Project(id="demo", name="Demo"))
+    factory = test_store.get_factory("demo", "main")
+    factory.nodes = [
+        Node(id="n-agent", definition=NodeDefinition(type="agent")),
+        Node(id="n-out", definition=NodeDefinition(type="output")),
+    ]
+    factory.edges = [
+        Edge(id="e-1", source="n-agent", target="n-out", source_handle="fail")
+    ]
+    test_store.save_factory(factory)
+
+    assert '"source_handle": "fail"' in test_store.factory_path("demo", "main").read_text()
+    assert Store().get_factory("demo", "main").edges[0].source_handle == "fail"

@@ -47,6 +47,13 @@ export type RunState = {
   /** The branch this run owns, and the commit it produced. Survives the run —
    * it names a ref in the operator's own repository. */
   artifacts: RunArtifact[];
+  /** The human nodes the walk is parked on, by node id.
+   *
+   * Driven by `run.decision.request` rather than by the run record, which is a
+   * snapshot from before the walk started and never sees a node that parks
+   * mid-graph. The event carries what the belts delivered, so a tab that joined
+   * late renders the same form from the log alone. */
+  decisions: Record<string, { prompt: string; incoming: string }>;
   /** Blockers the *server* refused the run with, or a control-call failure. */
   problems: string[];
   error: string | null;
@@ -60,6 +67,7 @@ const EMPTY: RunState = {
   runtimes: {},
   costUsd: 0,
   artifacts: [],
+  decisions: {},
   problems: [],
   error: null,
   busy: false,
@@ -86,19 +94,62 @@ function withNode(
   return { ...runtimes, [nodeId]: { ...existing, ...patch } };
 }
 
+/** Drop one key. Its own function so the reducer stays a list of returns. */
+function withoutNode<T>(map: Record<string, T>, nodeId: string): Record<string, T> {
+  const { [nodeId]: _removed, ...rest } = map;
+  return rest;
+}
+
 /**
  * One envelope applied to the state. Pure, so the same function replays a log.
  */
 export function reduceRunEvent(state: RunState, event: RunEvent): RunState {
   switch (event.type) {
-    case "run.status":
-      return { ...state, status: event.status, detail: event.detail };
-    case "node.status":
+    case "run.status": {
+      if (!TERMINAL_RUN_STATUSES.includes(event.status)) {
+        return { ...state, status: event.status, detail: event.detail };
+      }
+      // The run is over, so `pending` no longer means "about to start" — it
+      // means the walk never came this way, either because the branch above it
+      // was not taken or because the run ended first. Said as a detail, not as
+      // a status: inventing a sixth node state would make a replay describe
+      // something that never happened (`models.NodeStatus`).
+      const runtimes: Runtimes = {};
+      for (const [nodeId, runtime] of Object.entries(state.runtimes)) {
+        runtimes[nodeId] =
+          runtime.status === "pending" ? { ...runtime, detail: "not reached" } : runtime;
+      }
+      return { ...state, status: event.status, detail: event.detail, runtimes, decisions: {} };
+    }
+    case "node.status": {
+      // A node that moved off `waiting_input` is no longer asking anything —
+      // including when it moved because the run was cancelled out from under it.
+      const decisions = state.decisions[event.node_id] && event.status !== "waiting_input"
+        ? withoutNode(state.decisions, event.node_id)
+        : state.decisions;
       return {
         ...state,
+        decisions,
         runtimes: withNode(state.runtimes, event.node_id, {
           status: event.status,
           detail: event.detail,
+        }),
+      };
+    }
+    case "run.decision.request":
+      return {
+        ...state,
+        decisions: {
+          ...state.decisions,
+          [event.node_id]: { prompt: event.prompt, incoming: event.incoming },
+        },
+      };
+    case "run.decision":
+      return {
+        ...state,
+        decisions: withoutNode(state.decisions, event.node_id),
+        runtimes: withNode(state.runtimes, event.node_id, {
+          text: event.note || undefined,
         }),
       };
     case "run.input":
@@ -318,6 +369,33 @@ export function useRun(projectId: string, factoryId: string) {
     [state.run?.id],
   );
 
+  const decide = useCallback(
+    async (nodeId: string, approved: boolean, note = "") => {
+      const runId = state.run?.id;
+      if (!runId) return;
+      setState((previous) => ({ ...previous, busy: true, error: null }));
+      try {
+        const run = await api.submitRunDecision(runId, nodeId, approved, note);
+        // The form is cleared by the stream, not here: the server is the
+        // authority on what is still being asked, and a form that vanished
+        // because this call returned could disagree with it.
+        setState((previous) => ({ ...previous, run, busy: false }));
+      } catch (cause) {
+        setState((previous) => ({ ...previous, busy: false, error: message(cause) }));
+      }
+    },
+    [state.run?.id],
+  );
+
+  /** The human nodes the walk is parked on, in factory order. */
+  const parked = useMemo(
+    () =>
+      (state.run?.node_runs ?? [])
+        .filter((node_run) => state.decisions[node_run.node_id])
+        .map((node_run) => ({ nodeRun: node_run, ...state.decisions[node_run.node_id] })),
+    [state.run, state.decisions],
+  );
+
   /** The input nodes that still need a human, in factory order. */
   const awaiting = useMemo(
     () =>
@@ -349,5 +427,5 @@ export function useRun(projectId: string, factoryId: string) {
     [state.status],
   );
 
-  return { ...state, live, awaiting, start, submit, cancel, watch, clear };
+  return { ...state, live, awaiting, parked, start, submit, decide, cancel, watch, clear };
 }

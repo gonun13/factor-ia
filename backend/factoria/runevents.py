@@ -15,12 +15,18 @@ late joiner starts at 0 and gets the log from the beginning. There is no
 wall-clock ordering anywhere in the protocol, because two events in the same
 millisecond are common and a clock that steps backwards is not.
 
-Five envelope types, not one with optional fields:
+Seven envelope types, not one with optional fields:
 
 - `run.status` — the run as a whole moved.
 - `node.status` — one node's state machine moved. The canvas's pips.
 - `run.input`  — the one-shot request was submitted (open question 2). Logged
   because a run's transcript is unreadable without the thing that was asked.
+- `run.decision.request` — a human node stopped the run to ask something. The
+  canvas renders its form from this rather than from the run record, because
+  the run record a watching tab holds is a snapshot from before the walk.
+- `run.decision` — a person answered. The `run.input` of a human node: logged
+  because a transcript that shows a run taking the fail belt without showing
+  who sent it there is unreadable.
 - `agent`      — an adapter event, verbatim, on a node.
 - `run.artifact` — a worktree was created, or a commit was made. The one event
   that still means something after the process that wrote it is gone.
@@ -75,6 +81,37 @@ class RunInputEvent(RunEventBase):
     kind: str = "request"
     #: The document's name, when the text came from one. Never a path.
     filename: str | None = None
+
+
+class RunDecisionRequestEvent(RunEventBase):
+    """A human node is parked, waiting for a person.
+
+    Carries everything the form needs, so a canvas that joined late can render
+    it from the log alone — the same standard `run.artifact` is held to. In
+    particular it carries `incoming`: what the belts brought into this node is
+    the thing the operator is being asked to judge, and it lives in the run
+    record's `output_text`, which a watching tab has no reason to have refetched.
+    """
+
+    type: Literal["run.decision.request"] = "run.decision.request"
+    node_id: str
+    #: The question as the graph words it. Empty when the node asks none.
+    prompt: str = ""
+    #: What arrived on the incoming belts, and what the node passes on unchanged
+    #: if the operator approves without writing a note.
+    incoming: str = ""
+    #: `approval` today — see `models.HumanKind`.
+    kind: str = "approval"
+
+
+class RunDecisionEvent(RunEventBase):
+    """A person answered. `approved` decides which belt the run leaves by."""
+
+    type: Literal["run.decision"] = "run.decision"
+    node_id: str
+    approved: bool
+    #: What they wrote, if anything. Becomes the node's output when non-empty.
+    note: str = ""
 
 
 class AgentStreamEvent(RunEventBase):
@@ -134,6 +171,8 @@ RunEvent = Annotated[
         RunStatusEvent,
         NodeStatusEvent,
         RunInputEvent,
+        RunDecisionRequestEvent,
+        RunDecisionEvent,
         AgentStreamEvent,
         RunArtifactEvent,
         RunCostEvent,

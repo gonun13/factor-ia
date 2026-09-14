@@ -1,4 +1,4 @@
-"""The Orchestrator: a topological walk, a state machine per node, one bus.
+"""The Orchestrator: an edge-driven walk, a state machine per node, one bus.
 
 `DESIGN.md`, Architecture: *"Walks the graph, decides what's runnable, drives
 node state machines (`pending → waiting_input → running → succeeded/failed`),
@@ -22,21 +22,28 @@ state, including by cancellation.
         │                             └─────► failed
         └───────────────────────────────────► (stays pending)
 
-- `pending → waiting_input`: the run was created. Only an `input` node takes
-  this arrow — it is the one node whose work is a human's (open question 2: a
-  one-shot request submission, not a chat).
-- `waiting_input → running → succeeded`: the request was submitted.
-- `pending → running`: the walk reached the node and its predecessors all
-  succeeded.
+- `pending → waiting_input`: the run was created, for an `input` node; or the
+  walk arrived at a `human` node, which parks the line until a person answers.
+  Both are one-shot submissions rather than a chat (open question 2).
+- `waiting_input → running → succeeded`: the request, or the verdict, arrived.
+- `pending → running`: the walk reached the node along a belt that was taken.
 - `running → succeeded`: an agent's stream ended in `exit.cause: completed`;
   any other node type finished its work.
 - `running → failed`: any other exit cause, an adapter that raised, or a
   cancel. **Cancellation is `failed` with a detail**, not a sixth node state —
   see `models.NodeStatus`.
-- Nodes downstream of a failure **stay `pending`** rather than moving to some
-  "skipped" state. They did not run; a canvas showing them dark is telling the
-  truth, and inventing `skipped` would make replay describe something that
-  never happened.
+- Nodes downstream of a failure, and nodes on a branch the run did not take,
+  **stay `pending`** rather than moving to some "skipped" state. They did not
+  run; a canvas showing them dark is telling the truth, and inventing `skipped`
+  would make replay describe something that never happened.
+
+**Which belt the run leaves by is the node's outcome.** An `agent` and a `human`
+node have two ports — `success` and `fail` (`models.EdgeOutcome`, carried on the
+belt's `source_handle`) — so the walk cannot be a precomputed order and is a
+readiness traversal instead (`_walk`). A failure with a belt on its fail port is
+an *outcome*: the run carries on down it and can still end `succeeded`. A failure
+with nothing wired there is what it always was — the end of the run. Loops are
+still refused by `runcheck`; this is the shape they will arrive into.
 
 **Cancel actually stops work.** `DESIGN.md` names explicit cancellation as the
 answer to SSE's one weakness (*"the server keeps working after the client
@@ -82,16 +89,21 @@ from .agent.fake import FakeAdapter
 from .discovery import discover_codebases
 from .models import (
     Codebase,
+    Edge,
     Factory,
     Node,
     NodeRun,
     NodeStatus,
+    OUTCOME_NODE_TYPES,
     ProjectSettings,
     PUSHING_OUTPUT_KINDS,
     Run,
+    RunDecision,
     RunStatus,
     RunWorktree,
+    edge_outcome,
     node_kind,
+    node_prompt,
     node_remote,
     utcnow,
 )
@@ -101,6 +113,8 @@ from .runevents import (
     NodeStatusEvent,
     RunArtifactEvent,
     RunCostEvent,
+    RunDecisionEvent,
+    RunDecisionRequestEvent,
     RunInputEvent,
     RunStatusEvent,
 )
@@ -218,6 +232,19 @@ def run_is_dangerous(factory: Factory) -> bool:
     return False
 
 
+def _carries(node: Node, edge: Edge, outcome: str) -> bool:
+    """Whether `edge` leaves `node` by the port matching `outcome`.
+
+    The one reader of a belt's outcome during a walk, so the rule that an input
+    node's single unnamed handle still means *success* is stated once. A node
+    type with one way out takes it on success and has nowhere to route a
+    failure — which is why an output node that fails still ends the run.
+    """
+    if node.definition.type in OUTCOME_NODE_TYPES:
+        return edge_outcome(edge) == outcome
+    return outcome == "success"
+
+
 @dataclass
 class ActiveRun:
     """A run's in-process half: the task, the bus, the adapter run in flight."""
@@ -236,6 +263,17 @@ class ActiveRun:
     agent_run: AgentRun | None = None
     cancelled: bool = False
     input_ready: asyncio.Event = field(default_factory=asyncio.Event)
+    #: The walk's own bookkeeping, by id. A belt is `taken` when its source ran
+    #: and its outcome matched the belt's port, and `dead` when it did not — or
+    #: when the source itself was never reached. A node is `settled` once it has
+    #: run or is known never to. Held here rather than local to `_walk` because
+    #: `_incoming_text` has to know which belts actually delivered.
+    taken: set[str] = field(default_factory=set)
+    dead: set[str] = field(default_factory=set)
+    settled: set[str] = field(default_factory=set)
+    #: Human nodes the walk is parked on, by node id. Resolved by
+    #: `submit_decision`, cancelled by `cancel`.
+    decisions: dict[str, "asyncio.Future[RunDecision]"] = field(default_factory=dict)
 
 
 class Orchestrator:
@@ -326,6 +364,7 @@ class Orchestrator:
                         # has to describe the run that actually happened.
                         kind=node_kind(node),
                         label=node.definition.label or node.id,
+                        prompt=node_prompt(node),
                         # What the graph asked for. `session.init` overwrites it
                         # with what the CLI actually chose, which is the answer
                         # worth keeping — but a run that dies before that event
@@ -461,6 +500,32 @@ class Orchestrator:
         state.task = asyncio.create_task(self._walk(state), name=f"run:{run_id}")
         return state.run
 
+    async def submit_decision(self, run_id: str, decision: RunDecision) -> Run:
+        """One human node's verdict. Resumes the walk down the matching belt.
+
+        `node_id` is required, unlike on `submit_input`. A run can only ever be
+        parked at one human node, so "whichever is waiting" would in practice
+        work — but a verdict is not re-postable, and addressing it by name is
+        what makes a stale form in a second tab fail loudly instead of
+        answering a question it was not showing.
+
+        The run handed back still says `waiting_input`: the walk resumes on its
+        own task and the transition arrives on the stream a moment later, which
+        is where every other transition arrives from. Returning a run this call
+        had to wait for would mean blocking the endpoint on the rest of the
+        graph.
+        """
+        state = self._active.get(run_id)
+        if state is None:
+            raise RunConflict(f"run {run_id} is not in flight")
+        future = state.decisions.get(decision.node_id)
+        if future is None or future.done():
+            raise RunConflict(
+                f"node {decision.node_id} of run {run_id} is not waiting for a decision"
+            )
+        future.set_result(decision)
+        return state.run
+
     async def cancel(self, run_id: str) -> Run:
         """Stop the run and everything it spawned.
 
@@ -476,6 +541,14 @@ class Orchestrator:
             raise RunConflict(f"run {run_id} already finished as {run.status}")
 
         state.cancelled = True
+        for future in list(state.decisions.values()):
+            # Parked on a person: unblock the walk now rather than leave the
+            # watchdog to hard-cancel the task `CANCEL_GRACE_S` from now. The
+            # `CancelledError` this raises inside `_run_human` unwinds into
+            # `_walk`'s own handler, which is the same path every other cancel
+            # takes.
+            if not future.done():
+                future.cancel()
         if state.agent_run is not None:
             # Stage 4's interrupt: SIGTERM to the process *group*, then SIGKILL.
             # Not a control request the CLI might be too busy to read.
@@ -499,31 +572,106 @@ class Orchestrator:
     # ---- the walk ---------------------------------------------------------
 
     async def _walk(self, state: ActiveRun) -> None:
-        order = runcheck.topological_order(state.factory.nodes, state.factory.edges)
-        assert order is not None  # a cycle is a run precondition, checked in start()
+        """Follow the belts, leaving each node by the port its outcome matched.
+
+        **Edge-driven, not a precomputed order.** Until stage 8 this iterated
+        `runcheck.topological_order` and stopped at the first failure, which is
+        the same thing as saying every machine has exactly one way out. An agent
+        and a human node have two — `success` and `fail` (`models.EdgeOutcome`)
+        — so what runs next is a property of what just happened, and cannot be
+        computed before the run starts.
+
+        The bookkeeping is three sets on `ActiveRun`, and the invariant is that
+        a node runs when **every** belt into it has been decided and **at least
+        one** of them was taken:
+
+        - a node all of whose incoming belts are `dead` was never reached. It
+          stays `pending` — the module docstring's refusal to invent `skipped`
+          applies to an untaken branch for the same reason it applied to a
+          branch below a failure — and every belt out of it is `dead` in turn,
+          which is what propagates the miss to the rest of that branch;
+        - fan-in therefore waits for the branch that will never arrive to be
+          *ruled out*, rather than for it to succeed. That is the whole reason
+          `dead` is a set and not the absence of one.
+
+        It terminates because the graph is acyclic — `runcheck` still refuses a
+        cycle, unchanged — so some unsettled node always has all its
+        predecessors settled. **Loops are the one thing this does not yet do.**
+        When they arrive they are a typed back-edge and an iteration cap here,
+        not another rewrite: that is what this shape buys.
+
+        A failure with nothing wired to the fail port is still a failure of the
+        whole run, and breaks the walk exactly where the old loop broke it. A
+        failure the graph *drew a belt for* is an outcome, not an accident: the
+        walk carries on and `failure` stays `None`, so the run can still end
+        `succeeded` with a red node on it.
+        """
+        nodes = state.factory.nodes
+        edges = state.factory.edges
+        incoming: dict[str, list[Edge]] = {
+            node.id: [edge for edge in edges if edge.target == node.id] for node in nodes
+        }
+        outgoing: dict[str, list[Edge]] = {
+            node.id: [edge for edge in edges if edge.source == node.id] for node in nodes
+        }
+        decided = lambda edge: edge.id in state.taken or edge.id in state.dead  # noqa: E731
         failure: str | None = None
         try:
-            for node in order:
-                if state.cancelled:
+            while not state.cancelled:
+                ready = [
+                    node
+                    for node in nodes  # factory order, so the walk is deterministic
+                    if node.id not in state.settled
+                    and all(decided(edge) for edge in incoming[node.id])
+                ]
+                if not ready:
                     break
-                node_run = state.run.node_run(node.id)
-                if node_run is None or node_run.status == "succeeded":
-                    continue  # the input node, already done by submit_input
-                try:
-                    await self._run_node(state, node)
-                except (WorktreeError, gitwork.GitError) as exc:
-                    # Already a sentence about git; prefixing it with a class
-                    # name would only make it less readable on the node.
-                    await self._set_node(state, node.id, "failed", str(exc))
-                except Exception as exc:  # an adapter that raised rather than exited
-                    await self._set_node(state, node.id, "failed", f"{type(exc).__name__}: {exc}")
-                if (state.run.node_run(node.id) or node_run).status == "failed":
+                node = ready[0]
+                state.settled.add(node.id)
+
+                # No incoming belts at all means an input node, which the run
+                # check guarantees and `submit_input` has already succeeded.
+                reached = not incoming[node.id] or any(
+                    edge.id in state.taken for edge in incoming[node.id]
+                )
+                if not reached:
+                    state.dead.update(edge.id for edge in outgoing[node.id])
+                    continue
+
+                outcome = await self._settle(state, node)
+                for edge in outgoing[node.id]:
+                    carried = state.taken if _carries(node, edge, outcome) else state.dead
+                    carried.add(edge.id)
+                if outcome == "fail" and not any(
+                    _carries(node, edge, "fail") for edge in outgoing[node.id]
+                ):
                     failure = node.definition.label or node.id
                     break
         except asyncio.CancelledError:
             state.cancelled = True
         finally:
             await self._finalize(state, failure)
+
+    async def _settle(self, state: ActiveRun, node: Node) -> str:
+        """Run one node and say which port it leaves by.
+
+        The outcome is read back off the `NodeRun` rather than returned by the
+        runners, so `_set_node` stays the single place a node's state moves —
+        including for the two failure modes that never reach a runner at all.
+        """
+        node_run = state.run.node_run(node.id)
+        if node_run is None or node_run.status == "succeeded":
+            return "success"  # an input node, already done by submit_input
+        try:
+            await self._run_node(state, node)
+        except (WorktreeError, gitwork.GitError) as exc:
+            # Already a sentence about git; prefixing it with a class name
+            # would only make it less readable on the node.
+            await self._set_node(state, node.id, "failed", str(exc))
+        except Exception as exc:  # an adapter that raised rather than exited
+            await self._set_node(state, node.id, "failed", f"{type(exc).__name__}: {exc}")
+        current = state.run.node_run(node.id) or node_run
+        return "fail" if current.status == "failed" else "success"
 
     async def _finalize(self, state: ActiveRun, failure: str | None) -> None:
         for node_run in state.run.node_runs:
@@ -561,17 +709,119 @@ class Orchestrator:
 
     async def _run_node(self, state: ActiveRun, node: Node) -> None:
         kind = node.definition.type
-        await self._set_node(state, node.id, "running")
+        if kind != "human":
+            # A human node takes `pending → waiting_input` instead. It has done
+            # no work yet, and a pip reading "running" over a form nobody has
+            # opened would be a lie for as long as the operator took to answer.
+            await self._set_node(state, node.id, "running")
         incoming = self._incoming_text(state, node)
         if kind == "agent":
             await self._run_agent(state, node, incoming)
         elif kind == "output":
             await self._run_output(state, node, incoming)
+        elif kind == "human":
+            await self._run_human(state, node, incoming)
         else:
             node_run = state.run.node_run(node.id)
             if node_run is not None:
                 node_run.output_text = incoming
             await self._set_node(state, node.id, "succeeded")
+
+    async def _run_human(self, state: ActiveRun, node: Node, incoming: str) -> None:
+        """Stop the line and ask a person which belt the run leaves by.
+
+        The second node type whose work is a human's, and deliberately the same
+        shape as the first: a **one-shot** answer, not a conversation (open
+        question 2). That is what keeps run state one-way and SSE sufficient —
+        `DESIGN.md` names a human-in-the-middle node as the one deferred feature
+        that might have forced a `/ws` back-channel, and a verdict plus a note,
+        posted once, does not.
+
+        What it parks on is a future rather than the run-level `input_ready`
+        event: `submit_input` collects every input node *before* the walk
+        starts, so one event for the whole run was enough. This happens **inside**
+        the walk, at a node, and the walk's own task is what is suspended.
+
+        Approving without writing anything passes on exactly what arrived, so a
+        human node in the middle of a line is a gate and not a rewrite. A note
+        replaces it — which is how the fail belt carries a reason rather than a
+        copy of the thing that was rejected.
+
+        A rejection is `failed`. Not a sixth node state and not a special case
+        in the walk: the operator saying no is an outcome on the fail port, and
+        making it the *same* outcome an agent's crash produces is what lets one
+        belt handle both. `detail` says which it was.
+        """
+        node_run = state.run.node_run(node.id)
+        prompt = node_run.prompt if node_run is not None else node_prompt(node)
+        if node_run is not None:
+            node_run.output_text = incoming
+
+        # **Registered before the node is announced as waiting.** The events
+        # below are what tell a client a form is open, and a client that answers
+        # the instant it sees one would otherwise be refused for the width of
+        # this function — the run record would say `waiting_input` while
+        # `submit_decision` could still find nothing to resolve.
+        future: asyncio.Future[RunDecision] = asyncio.get_running_loop().create_future()
+        state.decisions[node.id] = future
+
+        await self._set_node(
+            state, node.id, "waiting_input", prompt or "waiting for a decision"
+        )
+        # The *run* is waiting too — a canvas that joined late reads this to
+        # know the line is stopped on a person rather than wedged on a machine.
+        state.run.status = "waiting_input"
+        await self._persist(state)
+        await state.channel.emit(
+            RunStatusEvent(
+                run_id=state.run.id, status="waiting_input", detail=prompt or None
+            )
+        )
+        await state.channel.emit(
+            RunDecisionRequestEvent(
+                run_id=state.run.id,
+                node_id=node.id,
+                prompt=prompt,
+                incoming=incoming,
+                kind=node_kind(node),
+            )
+        )
+
+        try:
+            decision = await future
+        finally:
+            # Including when the future was cancelled out from under us by
+            # `cancel()`: a run being torn down must not leave a node id in here
+            # for a later submission to resolve.
+            state.decisions.pop(node.id, None)
+
+        await state.channel.emit(
+            RunDecisionEvent(
+                run_id=state.run.id,
+                node_id=node.id,
+                approved=decision.approved,
+                note=decision.note,
+            )
+        )
+        state.run.status = "running"
+        await self._persist(state)
+        await state.channel.emit(RunStatusEvent(run_id=state.run.id, status="running"))
+        await self._set_node(state, node.id, "running")
+
+        note = decision.note.strip()
+        if note and node_run is not None:
+            node_run.output_text = note
+        if decision.approved:
+            await self._set_node(
+                state,
+                node.id,
+                "succeeded",
+                "approved, with a note" if note else "approved",
+            )
+        else:
+            await self._set_node(
+                state, node.id, "failed", f"rejected: {note}" if note else "rejected"
+            )
 
     async def _run_output(self, state: ActiveRun, node: Node, incoming: str) -> None:
         """The commit, and — for the two pushing kinds — where it goes next.
@@ -823,8 +1073,18 @@ class Orchestrator:
         Freeform text, joined (open question 4, *"start freeform"*). A typed
         payload is an added field on the edge, not a change to this function's
         callers.
+
+        **Only the belts that actually delivered.** Since stage 8 a predecessor
+        may be `pending` because its branch was never taken, or `failed` with
+        its output routed down a belt that does not end here. Reading every
+        predecessor would hand a node the text of a branch the run did not go
+        down, which is worse than handing it nothing.
         """
-        sources = [edge.source for edge in state.factory.edges if edge.target == node.id]
+        sources = [
+            edge.source
+            for edge in state.factory.edges
+            if edge.target == node.id and edge.id in state.taken
+        ]
         parts = [
             (state.run.node_run(source_id).output_text if state.run.node_run(source_id) else "")
             for source_id in sources

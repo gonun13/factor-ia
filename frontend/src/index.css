@@ -645,6 +645,35 @@ button:focus-visible {
   color: var(--ink-faint);
 }
 
+/* The human node's form. What arrived is shown above the note, capped in
+   height — it is context for a decision, not a document viewer, and a long
+   agent reply must not push the two buttons off the panel. */
+.decision-incoming {
+  max-height: 8.5rem;
+  margin: 0;
+  font-size: 0.75rem;
+  line-height: 1.45;
+  padding: 0.45rem 0.55rem;
+  border-radius: 8px;
+  border: 1px solid var(--edge);
+  background: #0f151e;
+  color: var(--ink-dim);
+  overflow: auto;
+  white-space: pre-wrap;
+}
+
+/* Side by side and equally weighted. Approve is the primary button because it
+   is the common answer, not because it is the safe one — the whole point of a
+   sign-off is that rejecting is exactly as easy. */
+.decision-actions {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.decision-actions button {
+  flex: 1;
+}
+
 /* A run with two inputs shows two of these, stacked. The rule keeps them from
    reading as one long form. */
 .request + .request {

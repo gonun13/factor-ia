@@ -42,6 +42,16 @@ export function OutputGlyph() {
   );
 }
 
+/** Human: a person at the line — the one machine that is not one. */
+export function HumanGlyph() {
+  return (
+    <svg viewBox="0 0 16 16" aria-hidden>
+      <circle cx="8" cy="4.6" r="2.4" {...stroke} />
+      <path d="M2.8 14.2a5.2 5.2 0 0 1 10.4 0" {...stroke} />
+    </svg>
+  );
+}
+
 /** PRD: a document with a title rule and lines of requirement. */
 export function PrdGlyph() {
   return (

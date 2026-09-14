@@ -21,10 +21,30 @@ export type NodeType = "input" | "agent" | "output" | "human" | "factory-ref";
  */
 export type InputKind = "request" | "prd";
 export type OutputKind = "commit" | "commit-push" | "commit-merge";
-export type NodeKind = InputKind | OutputKind;
+export type HumanKind = "approval";
+export type NodeKind = InputKind | OutputKind | HumanKind;
 
 export const DEFAULT_INPUT_KIND: InputKind = "request";
 export const DEFAULT_OUTPUT_KIND: OutputKind = "commit";
+export const DEFAULT_HUMAN_KIND: HumanKind = "approval";
+
+/**
+ * Which of a node's two outcomes a belt carries away — `models.EdgeOutcome`.
+ *
+ * It rides on the belt's `source_handle`, which React Flow has always set and
+ * which has always round-tripped through the factory file, so a graph that says
+ * what happens when a machine fails is not a file format change. `null` means
+ * `success`, which is what makes every belt drawn before ports existed — and
+ * every belt out of an input node, which has one way out — mean what it always
+ * meant.
+ */
+export type EdgeOutcome = "success" | "fail";
+export const DEFAULT_EDGE_OUTCOME: EdgeOutcome = "success";
+export const EDGE_OUTCOMES: EdgeOutcome[] = ["success", "fail"];
+
+/** The node types that split their outcome across two ports. An input has
+ * nothing to fail at; an output that fails has nowhere left to route. */
+export const OUTCOME_NODE_TYPES: NodeType[] = ["agent", "human"];
 
 /** `commit-push` and `commit-merge` put a ref on a remote; `commit` does not. */
 export const PUSHING_OUTPUT_KINDS: OutputKind[] = ["commit-push", "commit-merge"];
@@ -283,6 +303,8 @@ export type NodeRun = {
   /** Likewise frozen. It is what the run surface calls this node when it asks
    * a human for something, and a second tab has no canvas to read it off. */
   label: string;
+  /** A `human` node's question, frozen the same way and for the same reason. */
+  prompt: string;
   status: RunStatus;
   detail: string | null;
   started_at: string | null;
@@ -373,6 +395,17 @@ export type RunEvent = { seq: number; run_id: string; timestamp: string } & (
       kind: string;
       filename: string | null;
     }
+  | {
+      type: "run.decision.request";
+      node_id: string;
+      prompt: string;
+      /** What the belts brought in — the thing being judged. It travels with
+       * the question so a canvas that joined late can render the form from the
+       * log alone, without refetching the run. */
+      incoming: string;
+      kind: string;
+    }
+  | { type: "run.decision"; node_id: string; approved: boolean; note: string }
   | { type: "agent"; node_id: string; event: AgentEvent }
   | {
       type: "run.artifact";
@@ -396,6 +429,8 @@ export const RUN_EVENT_TYPES: RunEvent["type"][] = [
   "run.status",
   "node.status",
   "run.input",
+  "run.decision.request",
+  "run.decision",
   "agent",
   "run.artifact",
   "run.cost",

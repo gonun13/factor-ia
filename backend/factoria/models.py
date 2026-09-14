@@ -76,17 +76,48 @@ fast-forward, so nothing rewrites history and the operator's own working tree is
 still never the cwd of anything. See `gitwork._check`.
 """
 
+HumanKind = Literal["approval"]
+"""What a `human` node asks a person for.
+
+One member so far, and a kind rather than a node type for the same reason
+`InputKind` is one: *"a factory starts with an input and ends with an output"*
+stays a rule about the type union, and a human node that later learns to ask
+for an edit or a redirection is a new word in `config["kind"]` rather than a
+sixth member of `NodeType`.
+"""
+
 DEFAULT_INPUT_KIND: InputKind = "request"
 DEFAULT_OUTPUT_KIND: OutputKind = "commit"
+DEFAULT_HUMAN_KIND: HumanKind = "approval"
 
 INPUT_KINDS: frozenset[str] = frozenset({"request", "prd"})
 OUTPUT_KINDS: frozenset[str] = frozenset({"commit", "commit-push", "commit-merge"})
+HUMAN_KINDS: frozenset[str] = frozenset({"approval"})
 
 #: `commit-push` and `commit-merge` need a remote to push to; `commit` does not.
 PUSHING_OUTPUT_KINDS: frozenset[str] = frozenset({"commit-push", "commit-merge"})
 
 #: The remote a pushing output node uses when its config names none.
 DEFAULT_REMOTE = "origin"
+
+EdgeOutcome = Literal["success", "fail"]
+"""Which of a node's two outcomes a belt carries away.
+
+**The port, not a new field.** It rides on `Edge.source_handle`, which React
+Flow has always set and which has always round-tripped through the factory file
+— so a graph that says what happens when a machine fails is not a file format
+change, and `schema_version` stays at 1. `None` means `success`, which is what
+makes every belt already on disk, and every belt out of an input node, mean
+exactly what it meant before this existed.
+"""
+
+DEFAULT_EDGE_OUTCOME: EdgeOutcome = "success"
+EDGE_OUTCOMES: frozenset[str] = frozenset({"success", "fail"})
+
+#: The node types that split their outcome across two ports. Everything else
+#: has one unnamed source handle and only ever leaves by it: an input has
+#: nothing to fail at, and an output that fails has nowhere left to route.
+OUTCOME_NODE_TYPES: frozenset[str] = frozenset({"agent", "human"})
 
 Slug = Annotated[str, Field(pattern=r"^[a-z0-9][a-z0-9-]{0,63}$")]
 
@@ -181,6 +212,8 @@ def node_kind(node_or_definition: "Node | NodeDefinition") -> str:
             return DEFAULT_INPUT_KIND
         if definition.type == "output":
             return DEFAULT_OUTPUT_KIND
+        if definition.type == "human":
+            return DEFAULT_HUMAN_KIND
         return ""
     return str(raw).strip()
 
@@ -194,6 +227,35 @@ def node_remote(node_or_definition: "Node | NodeDefinition") -> str:
     )
     raw = definition.config.get("remote")
     return str(raw).strip() if raw and str(raw).strip() else DEFAULT_REMOTE
+
+
+def node_prompt(node_or_definition: "Node | NodeDefinition") -> str:
+    """The question a `human` node puts to the operator. Empty unless it says."""
+    definition = (
+        node_or_definition.definition
+        if isinstance(node_or_definition, Node)
+        else node_or_definition
+    )
+    raw = definition.config.get("prompt")
+    return str(raw).strip() if raw else ""
+
+
+def edge_outcome(edge: "Edge") -> str:
+    """Which outcome this belt carries away from its source.
+
+    The same contract as `node_kind`, and for the same reason: a handle this
+    version has never heard of is returned **as written** rather than defaulted,
+    so it is refused at run time by name (`runcheck._outcome_problems`) instead
+    of silently behaving like a success belt. Saying `"success"` about a belt
+    whose file says `"timeout"` would route a run down a path nobody drew.
+
+    `None` is not an unknown value — it is what every belt on disk says, and it
+    has always meant the node's one and only way out.
+    """
+    raw = edge.source_handle
+    if raw is None or not str(raw).strip():
+        return DEFAULT_EDGE_OUTCOME
+    return str(raw).strip()
 
 
 NodeStatus = Literal["pending", "waiting_input", "running", "succeeded", "failed"]
@@ -423,6 +485,10 @@ class NodeRun(Base):
     #: node when it asks a human for something, and a run that is being watched
     #: from a second tab has no canvas to read it off.
     label: str = ""
+    #: A `human` node's question, frozen the same way and for the same reason:
+    #: it is what the operator is asked, and the tab doing the asking may not
+    #: be the one that drew it.
+    prompt: str = ""
     status: NodeStatus = "pending"
     #: Why it is in that state, in words a human reads on the canvas.
     detail: str | None = None
@@ -548,3 +614,26 @@ class RunInput(Base):
     #: commit trailer; never used to open anything, so it is a label and not a
     #: path — `paths.safe_name` is applied before it is stored.
     filename: str | None = Field(default=None, max_length=255)
+
+
+class RunDecision(Base):
+    """One human node's verdict: which of its two belts the run leaves by.
+
+    A separate shape from `RunInput`, and a separate endpoint, because it is a
+    separate act. `RunInput` is a one-shot submission that *starts* a run and
+    carries the work; this answers a question the run stopped to ask, and the
+    field that matters is a boolean. Folding the two together would have made
+    both docstrings untrue.
+
+    `node_id` is required here, unlike on `RunInput`: a run may be parked at
+    exactly one human node, but "whichever one is waiting" is a guess, and a
+    verdict posted at the wrong machine is not recoverable by re-posting.
+
+    The note is a sentence, not a document — it is why the operator said no,
+    and it becomes what the fail belt carries. `RunInput`'s 400 kB is sized for
+    a PRD; this is sized for a reason.
+    """
+
+    node_id: str
+    approved: bool
+    note: str = Field(default="", max_length=20_000)

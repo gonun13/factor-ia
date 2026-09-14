@@ -11,7 +11,13 @@
  */
 
 import { nodeKind, type FlowEdge, type FlowNode } from "./graph";
-import { PUSHING_OUTPUT_KINDS, type Codebase, type CodebaseGit } from "./types";
+import {
+  EDGE_OUTCOMES,
+  OUTCOME_NODE_TYPES,
+  PUSHING_OUTPUT_KINDS,
+  type Codebase,
+  type CodebaseGit,
+} from "./types";
 
 export type Problem = {
   /** Shown in the Run tooltip and next to the button. */
@@ -199,6 +205,29 @@ export function runProblems(
       nodeIds: pushing.map((n) => n.id),
       severity: "notice",
     });
+  }
+
+  // A belt leaving by a port its source node does not have. The server refuses
+  // the same two (`runcheck._outcome_problems`) and its refusal is the one that
+  // counts; this is the canvas saying so while the belt is still being drawn.
+  // Dragging cannot produce either — the handles are the only things you can
+  // drag from — but `main.json` is a file people edit in a pull request.
+  const byId = new Map(nodes.map((n) => [n.id, n]));
+  for (const edge of edges) {
+    const source = byId.get(edge.source);
+    if (!source || !edge.sourceHandle) continue;
+    const type = source.data.definition.type;
+    if (!(EDGE_OUTCOMES as string[]).includes(edge.sourceHandle)) {
+      problems.push({
+        message: `The belt out of “${label(source)}” leaves by “${edge.sourceHandle}”, which is not a port this version knows.`,
+        nodeIds: [source.id],
+      });
+    } else if (!(OUTCOME_NODE_TYPES as string[]).includes(type)) {
+      problems.push({
+        message: `“${label(source)}” is a ${type} node, which has one way out — its belt cannot leave by “${edge.sourceHandle}”.`,
+        nodeIds: [source.id],
+      });
+    }
   }
 
   if (dirty) {

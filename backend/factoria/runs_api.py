@@ -39,7 +39,7 @@ from typing import Any, AsyncIterator
 from fastapi import APIRouter, Header, HTTPException, Query, Request, status
 from fastapi.responses import StreamingResponse
 
-from .models import Run, RunInput
+from .models import Run, RunDecision, RunInput
 from .orchestrator import Orchestrator, RunBusy, RunConflict, get_orchestrator
 from .runcheck import NotRunnable
 from .runlog import RunLog
@@ -122,6 +122,22 @@ async def submit_run_input(run_id: str, body: RunInput) -> Run:
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
 
 
+@router.post("/runs/{run_id}/decision", response_model=Run)
+async def submit_run_decision(run_id: str, body: RunDecision) -> Run:
+    """One human node's verdict. Resumes the walk down the belt it names.
+
+    A sibling of `/input` rather than a widening of it. Both stop a run to ask a
+    person something, but a submission *carries the work* and a decision *routes
+    it* — different bodies, different preconditions, and one endpoint serving
+    both would have to document which of its fields are meaningful when. The
+    reply still says `waiting_input`; the transition arrives on `/events`.
+    """
+    try:
+        return await orchestrator().submit_decision(run_id, body)
+    except RunConflict as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+
+
 def _label(filename: str | None) -> str | None:
     """A submitted filename, reduced to something safe to display and to write
     into a commit trailer.
@@ -136,6 +152,7 @@ def _label(filename: str | None) -> str | None:
     base = filename.replace("\\", "/").rsplit("/", 1)[-1].strip()
     cleaned = "".join(char for char in base if char.isprintable()).strip()
     return cleaned[:120] or None
+
 
 
 @router.post("/runs/{run_id}/cancel", response_model=Run)

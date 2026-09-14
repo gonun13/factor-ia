@@ -140,8 +140,14 @@ def render(run: Run) -> str:
     lines += ["## The line", "", "| machine | kind | status | detail |", "|---|---|---|---|"]
     for node_run in run.node_runs:
         detail = (node_run.detail or "").replace("|", "\\|").replace("\n", " ")
+        # A run is over by the time this is written, so `pending` no longer
+        # means "about to start" — it means the walk never came this way, either
+        # because a branch above it was not taken or because the run ended
+        # first. Saying so is a rendering, not a sixth node state
+        # (`models.NodeStatus`).
+        status = "not reached" if node_run.status == "pending" else node_run.status
         lines.append(
-            f"| `{node_run.node_id}` | {node_run.type} | {node_run.status} | {detail} |"
+            f"| `{node_run.node_id}` | {node_run.type} | {status} | {detail} |"
         )
 
     agent_text = "\n\n".join(

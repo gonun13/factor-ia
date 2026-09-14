@@ -58,6 +58,10 @@ from .models import (
     Edge,
     Factory,
     Node,
+    EDGE_OUTCOMES,
+    HUMAN_KINDS,
+    OUTCOME_NODE_TYPES,
+    edge_outcome,
     node_kind,
     node_remote,
 )
@@ -115,6 +119,7 @@ def run_problems(
             "produce nothing without it."
         )
     problems += _kind_problems(nodes, label)
+    problems += _outcome_problems(nodes, edges, label)
 
     for node in by_type.get("agent", []):
         attached = node.definition.codebase_id
@@ -178,9 +183,11 @@ def run_problems(
 
     # Cycle detection is the one blocker the client does not check, because the
     # client never has to walk the graph. The orchestrator does, and a cycle is
-    # how a topological walk becomes an infinite one. Loops are a named later
-    # feature (`DESIGN.md`, Later) and will arrive as a typed edge, not as a
-    # relaxation of this.
+    # how a walk becomes an infinite one. Stage 8 made that walk edge-driven —
+    # it follows outcomes rather than a precomputed order — which is the half of
+    # loops that is now done. The other half is a typed back-edge and an
+    # iteration cap, and until both exist this stays exactly as strict as it was
+    # (`DESIGN.md`, Later).
     if topological_order(nodes, edges) is None:
         problems.append("The belts form a loop — a run walks the graph once, top to bottom.")
 
@@ -191,10 +198,48 @@ def run_problems(
     problems += _permission_problems(by_type.get("agent", []), label)
 
     for node in nodes:
-        if node.definition.type in ("human", "factory-ref"):
+        if node.definition.type == "factory-ref":
             problems.append(
                 f"“{label(node)}” is a {node.definition.type} node, which nothing "
                 "executes yet."
+            )
+    return problems
+
+
+def _outcome_problems(
+    nodes: list[Node], edges: list[Edge], label: Callable[[Node], str]
+) -> list[str]:
+    """A belt leaving by a port its source node does not have.
+
+    Checked here rather than at save time for the same reason kinds are (see
+    `_kind_problems`): a handle is a string React Flow wrote, a factory file may
+    have been drawn by a newer Factor-ia that has ports this one has never heard
+    of, and refusing to *load* it would strand the operator with a file they
+    cannot open to fix. Refusing to *run* it names the belt and the word.
+
+    The stakes are higher here than for a kind, which is why it is not simply
+    defaulted: `models.edge_outcome` returns an unknown port **as written**, so
+    a belt marked `timeout` is refused rather than quietly treated as the
+    success path and followed by a run nobody drew.
+    """
+    problems: list[str] = []
+    by_id = {node.id: node for node in nodes}
+    for edge in edges:
+        source = by_id.get(edge.source)
+        if source is None:
+            continue  # a dangling belt; `validate_graph` already said so
+        if edge.source_handle is None:
+            continue  # the one unnamed way out, which is every belt on disk
+        outcome = edge_outcome(edge)
+        if outcome not in EDGE_OUTCOMES:
+            problems.append(
+                f"The belt out of “{label(source)}” leaves by {outcome!r}, which is "
+                f"not a port this version knows ({', '.join(sorted(EDGE_OUTCOMES))})."
+            )
+        elif source.definition.type not in OUTCOME_NODE_TYPES:
+            problems.append(
+                f"“{label(source)}” is a {source.definition.type} node, which has one "
+                f"way out — its belt cannot leave by {outcome!r}."
             )
     return problems
 
@@ -216,6 +261,11 @@ def _kind_problems(nodes: list[Node], label: Callable[[Node], str]) -> list[str]
             problems.append(
                 f"Input “{label(node)}” is of kind {node_kind(node)!r}, which this "
                 f"version does not know how to ask for ({', '.join(sorted(INPUT_KINDS))})."
+            )
+        elif kind == "human" and node_kind(node) not in HUMAN_KINDS:
+            problems.append(
+                f"Human “{label(node)}” is of kind {node_kind(node)!r}, which this "
+                f"version does not know how to ask ({', '.join(sorted(HUMAN_KINDS))})."
             )
         elif kind == "output" and node_kind(node) not in OUTPUT_KINDS:
             problems.append(

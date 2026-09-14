@@ -51,6 +51,7 @@ import {
 import { edgeTypes, nodeTypes } from "../nodes";
 import {
   AgentGlyph,
+  HumanGlyph,
   InputGlyph,
   MergeGlyph,
   OutputGlyph,
@@ -77,7 +78,7 @@ const DND_TYPE = "application/factoria-node";
 /**
  * What you can drag onto the line.
  *
- * Six entries over three node types: the extra three are *kinds*, which the
+ * Seven entries over four node types: the extras are *kinds*, which the
  * palette flattens on purpose. An operator choosing between "commit" and
  * "commit & merge" is making the most consequential decision on this screen,
  * and burying it in a dropdown on a node they have already placed is how it
@@ -93,6 +94,7 @@ const PALETTE: {
   { type: "input", kind: "request", label: "Request", hint: "the task, submitted once", Glyph: InputGlyph },
   { type: "input", kind: "prd", label: "PRD", hint: "a PRD.md, handed over whole", Glyph: PrdGlyph },
   { type: "agent", kind: "", label: "Agent", hint: "operates on a codebase", Glyph: AgentGlyph },
+  { type: "human", kind: "approval", label: "Sign-off", hint: "stops the line for a person", Glyph: HumanGlyph },
   { type: "output", kind: "commit", label: "Commit", hint: "a branch you can diff", Glyph: OutputGlyph },
   { type: "output", kind: "commit-push", label: "Commit & push", hint: "branch, then up to the remote", Glyph: PushGlyph },
   { type: "output", kind: "commit-merge", label: "Commit & merge", hint: "fast-forwards the base branch", Glyph: MergeGlyph },
@@ -514,11 +516,13 @@ function RunBox({
   run: RunState & {
     live: boolean;
     awaiting: NodeRun[];
+    parked: { nodeRun: NodeRun; prompt: string; incoming: string }[];
     start: () => Promise<unknown>;
     submit: (
       text: string,
       options?: { nodeId?: string; filename?: string },
     ) => Promise<void>;
+    decide: (nodeId: string, approved: boolean, note?: string) => Promise<void>;
     cancel: () => Promise<void>;
     clear: () => void;
   };
@@ -619,6 +623,23 @@ function RunBox({
           busy={run.busy}
           remaining={run.awaiting.length}
           onSubmit={(text, options) => void run.submit(text, options)}
+        />
+      ))}
+
+      {/* And one per human node the walk is parked on. Same place, same
+          reason: the canvas never goes away while you answer. Driven by the
+          *stream* rather than by the run record, which is a snapshot from
+          before the walk and cannot see a node that parks mid-graph. */}
+      {run.parked.map((gate) => (
+        <DecisionForm
+          key={gate.nodeRun.node_id}
+          nodeRun={gate.nodeRun}
+          prompt={gate.prompt}
+          incoming={gate.incoming}
+          busy={run.busy}
+          onDecide={(approved, note) =>
+            void run.decide(gate.nodeRun.node_id, approved, note)
+          }
         />
       ))}
 
@@ -815,6 +836,77 @@ function InputForm({
       <button className="primary" type="submit" disabled={!text.trim() || busy || reading}>
         {isPrd ? "Submit the PRD" : "Submit the request"}
       </button>
+    </form>
+  );
+}
+
+/**
+ * The form a human node parks the run on: what arrived, and two ways out.
+ *
+ * Sibling of `InputForm`, and deliberately the same shape — it appears in the
+ * run panel beside the canvas rather than in a modal, so the graph the operator
+ * is being asked about never goes away while they answer.
+ *
+ * **Both buttons are always live, and neither is the default.** A sign-off whose
+ * reject button is a second click behind a confirmation is a sign-off that gets
+ * approved, and this is the one control on the screen whose entire purpose is
+ * that somebody read something first. The note is optional on approve and the
+ * thing that makes a rejection useful: it replaces what the node passes on, so
+ * the fail belt carries a reason rather than a copy of what was rejected.
+ */
+function DecisionForm({
+  nodeRun,
+  prompt,
+  incoming,
+  busy,
+  onDecide,
+}: {
+  nodeRun: NodeRun;
+  prompt: string;
+  incoming: string;
+  busy: boolean;
+  onDecide: (approved: boolean, note: string) => void;
+}) {
+  const [note, setNote] = useState("");
+  const name = nodeRun.label || nodeRun.node_id;
+
+  return (
+    <form className="request decision" onSubmit={(event) => event.preventDefault()}>
+      <label htmlFor={`run-note-${nodeRun.node_id}`}>
+        {prompt || `${name} — approve or reject`}
+      </label>
+
+      {incoming && (
+        <pre className="stream nowheel decision-incoming">{incoming}</pre>
+      )}
+
+      <textarea
+        id={`run-note-${nodeRun.node_id}`}
+        className="nodrag nowheel"
+        rows={2}
+        value={note}
+        placeholder="Optional on approve. On reject, this is what goes back down the line."
+        onChange={(event) => setNote(event.target.value)}
+      />
+
+      <div className="decision-actions">
+        <button
+          className="primary"
+          type="button"
+          disabled={busy}
+          onClick={() => onDecide(true, note)}
+        >
+          Approve
+        </button>
+        <button
+          className="destructive"
+          type="button"
+          disabled={busy}
+          onClick={() => onDecide(false, note)}
+        >
+          Reject
+        </button>
+      </div>
     </form>
   );
 }

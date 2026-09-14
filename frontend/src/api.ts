@@ -137,6 +137,19 @@ export const api = {
         filename: options.filename ?? null,
       }),
     }),
+  /** One human node's verdict, which resumes the walk down the matching belt.
+   * `nodeId` is required, unlike on a submission: a verdict is not re-postable,
+   * so a stale form has to fail loudly rather than answer the wrong question. */
+  submitRunDecision: (
+    runId: string,
+    nodeId: string,
+    approved: boolean,
+    note = "",
+  ) =>
+    request<Run>(`/api/runs/${runId}/decision`, {
+      method: "POST",
+      body: JSON.stringify({ node_id: nodeId, approved, note }),
+    }),
   /** Explicit cancel — closing the tab is not a decision to stop work. */
   cancelRun: (runId: string) =>
     request<Run>(`/api/runs/${runId}/cancel`, { method: "POST" }),

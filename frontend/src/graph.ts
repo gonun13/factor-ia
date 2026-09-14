@@ -24,6 +24,8 @@
 
 import type { Edge, Node } from "@xyflow/react";
 import {
+  DEFAULT_EDGE_OUTCOME,
+  DEFAULT_HUMAN_KIND,
   DEFAULT_INPUT_KIND,
   DEFAULT_OUTPUT_KIND,
   type Factory,
@@ -62,7 +64,10 @@ export function toFlowEdge(edge: GraphEdge): FlowEdge {
     sourceHandle: edge.source_handle,
     targetHandle: edge.target_handle,
     type: BELT_EDGE,
-    data: { kind: edge.payload.kind },
+    // The port is on `sourceHandle`; it is copied into `data` as well so the
+    // belt can draw itself differently without every edge component having to
+    // know that `null` means success.
+    data: { kind: edge.payload.kind, outcome: edge.source_handle ?? DEFAULT_EDGE_OUTCOME },
   };
 }
 
@@ -119,6 +124,7 @@ export function nodeKind(definition: NodeDefinition): string {
   if (named) return named;
   if (definition.type === "input") return DEFAULT_INPUT_KIND;
   if (definition.type === "output") return DEFAULT_OUTPUT_KIND;
+  if (definition.type === "human") return DEFAULT_HUMAN_KIND;
   return "";
 }
 
@@ -127,6 +133,7 @@ export const DEFAULT_LABELS: Record<string, string> = {
   request: "Request",
   prd: "PRD",
   agent: "Agent",
+  approval: "Sign-off",
   commit: "Commit",
   "commit-push": "Commit & push",
   "commit-merge": "Commit & merge",
@@ -142,7 +149,14 @@ export function newNode(
   // sentence a reviewer reading `main.json` in a pull request wants, and
   // inferring it from a missing key is how that review goes wrong.
   const resolved =
-    kind ?? (type === "input" ? DEFAULT_INPUT_KIND : type === "output" ? DEFAULT_OUTPUT_KIND : "");
+    kind ??
+    (type === "input"
+      ? DEFAULT_INPUT_KIND
+      : type === "output"
+        ? DEFAULT_OUTPUT_KIND
+        : type === "human"
+          ? DEFAULT_HUMAN_KIND
+          : "");
   return {
     id: localId("n"),
     type,

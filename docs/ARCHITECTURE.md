@@ -101,9 +101,21 @@ models that wrote it) and a `summary.md`.
 
 ## Node kinds, and the shape of a factory
 
-`NodeType` is three things that execute — `input`, `agent`, `output` — plus
-`human` and `factory-ref`, which are in the union with no UI and no execution so
-that nesting is a later UI change rather than a file-format change.
+`NodeType` is four things that execute — `input`, `agent`, `output`, `human` —
+plus `factory-ref`, which is in the union with no UI and no execution so that
+nesting is a later UI change rather than a file-format change. `human` was in
+the union on the same terms until stage 8 gave it both.
+
+**An `agent` and a `human` node leave by one of two ports**, `success` or
+`fail` (`models.EdgeOutcome`), carried on the belt's `source_handle` — a field
+React Flow already set and the factory file already round-tripped, so outcome
+routing arrived without moving `schema_version`. `null` means success, which is
+what every belt drawn before ports existed says. The orchestrator's walk follows
+those ports rather than a precomputed topological order, so a failure with a
+belt drawn for it is an outcome the graph handles and the run can still succeed;
+a failure with nothing on that port ends the run, as it always did. Cycles are
+still refused: loops need an iteration cap, which is the piece that is not
+built.
 
 **The two ends of the line carry a `kind`, and a kind is not a type.** It lives
 in the node's freeform `definition.config["kind"]`, read by `models.node_kind`

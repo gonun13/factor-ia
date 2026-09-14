@@ -13,10 +13,11 @@
 import { useEffect, useRef, type ReactNode } from "react";
 import { Handle, Position } from "@xyflow/react";
 import { nodeKind, type NodeData } from "../graph";
-import type { NodeRuntime } from "../types";
+import { OUTCOME_NODE_TYPES, type NodeRuntime, type NodeType } from "../types";
 import { useCanvas } from "../canvasContext";
 import {
   AgentGlyph,
+  HumanGlyph,
   InputGlyph,
   MergeGlyph,
   OutputGlyph,
@@ -27,6 +28,7 @@ import {
 const GLYPHS = {
   input: InputGlyph,
   agent: AgentGlyph,
+  human: HumanGlyph,
   output: OutputGlyph,
 } as const;
 
@@ -48,12 +50,14 @@ const KIND_GLYPHS: Record<string, () => ReactNode> = {
 const TYPE_NAME = {
   input: "input",
   agent: "agent",
+  human: "human",
   output: "output",
 } as const;
 
 const KIND_NAME: Record<string, string> = {
   request: "request",
   prd: "PRD",
+  approval: "sign-off",
   commit: "commit",
   "commit-push": "commit & push",
   "commit-merge": "commit & merge",
@@ -110,7 +114,32 @@ export function NodeShell({
         {children}
         {runtime && <Runtime runtime={runtime} />}
       </div>
-      {kind !== "output" && <Handle type="source" position={Position.Right} />}
+      {/* **The ports.** An agent and a human node leave by one of two named
+          handles, and the name is what lands in the belt's `source_handle` and
+          decides where a failure goes (`types.EdgeOutcome`). Everything else
+          keeps the single unnamed handle it has always had — which is also what
+          keeps `source_handle: null` on every belt already on disk, and what
+          makes that null go on meaning success. */}
+      {OUTCOME_NODE_TYPES.includes(kind as NodeType) ? (
+        <>
+          <Handle
+            id="success"
+            type="source"
+            position={Position.Right}
+            className="handle-success"
+            title="success"
+          />
+          <Handle
+            id="fail"
+            type="source"
+            position={Position.Right}
+            className="handle-fail"
+            title="fail"
+          />
+        </>
+      ) : (
+        kind !== "output" && <Handle type="source" position={Position.Right} />
+      )}
     </div>
   );
 }

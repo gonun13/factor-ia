@@ -376,3 +376,92 @@ def test_the_event_log_is_scrubbed_at_its_only_write_path(runnable: TestClient) 
 
     raw = (run_dir(run["id"]) / "events.jsonl").read_text()
     assert secret not in raw and "[redacted:github-token]" in raw
+
+
+# ---- the human node's verdict ----------------------------------------------
+
+GATED = {
+    "nodes": [
+        *GRAPH["nodes"][:2],
+        {
+            "id": "n-gate",
+            "definition": {
+                "type": "human",
+                "label": "Sign-off",
+                "position": {"x": 360, "y": 0},
+                "config": {"prompt": "Ship it?"},
+            },
+        },
+        GRAPH["nodes"][2],
+    ],
+    "edges": [
+        {"id": "e-1", "source": "n-in", "target": "n-agent"},
+        {"id": "e-2", "source": "n-agent", "target": "n-gate", "source_handle": "success"},
+        {"id": "e-3", "source": "n-gate", "target": "n-out", "source_handle": "success"},
+    ],
+}
+
+
+def _parked(client: TestClient, run_id: str, node_id: str) -> dict:
+    """Poll until the walk reaches the human node. The POST that started the
+    walk returns before it gets there — by design; the endpoint must not block
+    on the rest of the graph."""
+    for _ in range(1500):  # generous: the walk cuts a real worktree on the way
+        run = client.get(f"/api/runs/{run_id}").json()
+        for node_run in run["node_runs"]:
+            if node_run["node_id"] == node_id and node_run["status"] == "waiting_input":
+                return run
+        time.sleep(0.01)
+    raise AssertionError(f"the walk never parked at {node_id}")
+
+
+def test_a_run_parks_on_a_human_node_and_a_verdict_resumes_it(
+    runnable: TestClient,
+) -> None:
+    assert runnable.put("/api/projects/demo/factories/main", json=GATED).status_code == 200
+    run = start(runnable)
+    runnable.post(f"/api/runs/{run['id']}/input", json={"text": "tidy the readme"})
+
+    parked = _parked(runnable, run["id"], "n-gate")
+    assert parked["status"] == "waiting_input"
+
+    answered = runnable.post(
+        f"/api/runs/{run['id']}/decision",
+        json={"node_id": "n-gate", "approved": True, "note": "looks right"},
+    )
+    assert answered.status_code == 200, answered.text
+
+    events = read_stream(runnable, f"/api/runs/{run['id']}/events")
+    assert events[-1]["type"] == "run.status" and events[-1]["status"] == "succeeded"
+    assert [event["type"] for event in events].count("run.decision.request") == 1
+
+
+def test_a_verdict_for_a_node_that_is_not_waiting_is_409(runnable: TestClient) -> None:
+    assert runnable.put("/api/projects/demo/factories/main", json=GATED).status_code == 200
+    run = start(runnable)
+    runnable.post(f"/api/runs/{run['id']}/input", json={"text": "x"})
+    _parked(runnable, run["id"], "n-gate")
+
+    wrong = runnable.post(
+        f"/api/runs/{run['id']}/decision", json={"node_id": "n-agent", "approved": True}
+    )
+    assert wrong.status_code == 409
+
+    runnable.post(
+        f"/api/runs/{run['id']}/decision", json={"node_id": "n-gate", "approved": True}
+    )
+    again = runnable.post(
+        f"/api/runs/{run['id']}/decision", json={"node_id": "n-gate", "approved": True}
+    )
+    assert again.status_code == 409
+
+
+def test_a_verdict_on_a_finished_run_is_409(runnable: TestClient) -> None:
+    run = start(runnable)
+    runnable.post(f"/api/runs/{run['id']}/input", json={"text": "x"})
+    read_stream(runnable, f"/api/runs/{run['id']}/events")
+
+    refused = runnable.post(
+        f"/api/runs/{run['id']}/decision", json={"node_id": "n-gate", "approved": True}
+    )
+    assert refused.status_code == 409

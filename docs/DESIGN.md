@@ -141,8 +141,14 @@ Roughly in the order the design anticipates them:
 - **Nested factories** — a factory as a node inside another factory. The data
   model accommodates this from day one (see below) even though the UI won't.
 - **Multiple codebases per project.**
-- **Human-in-the-middle nodes** — approval gates, edits, redirection mid-run.
-- **Loops and conditional edges** — iterate until tests pass.
+- ~~**Human-in-the-middle nodes**~~ — *done (stage 8).* A `human` node stops the
+  line and routes on approve/reject. Edits and redirection mid-run are still
+  later; what it takes today is a verdict and a note.
+- **Loops** — iterate until tests pass. Conditional edges arrived with the
+  human node: every `agent` and `human` node has a `success` and a `fail` port,
+  and the walk follows them. What loops still need is a back-edge the cycle
+  check accepts and an iteration cap, without which a mis-drawn graph runs
+  forever.
 - **Shell/test execution nodes**, which is when the **dind sidecar** arrives.
 - **GitHub / GitLab integration** — open the PR, don't just leave the branch.
 - **Parallel fan-out** across agent nodes.
@@ -372,8 +378,9 @@ Project ──< Codebase        (v1: exactly one; model allows many)
   ([docs](https://reactflow.dev/learn/layouting/sub-flows)), so the UI cost later
   is moderate rather than a rewrite.
 - **Node** — typed, positioned, configured. Types: `input`, `agent`, `output`,
-  `human` (later), `factory-ref` (later).
-- **Edge** — a connection carrying a typed payload between node ports.
+  `human`, `factory-ref` (later).
+- **Edge** — a connection carrying a typed payload between node ports. An
+  `agent` or `human` node has two: `success` and `fail`.
 - **Run** — one execution of a factory, with its input and final status.
 - **NodeRun** — one node's execution within a run: status, timings, artifacts.
 - **Event** — an append-only record of everything that happened, in the adapter's
@@ -576,10 +583,17 @@ argument. Deliberately left open.
    node is a **request submission**, not a chat — you state the task, submit it,
    and watch the factory run. That framing is the point, not a simplification:
    a factory is a pipeline you built in advance, so clarification belongs in the
-   graph (a human node, later) rather than in a side conversation with one agent.
+   graph (a human node) rather than in a side conversation with one agent.
    It also keeps run state one-way, which is what lets SSE stand. Conversational
    input would make it bidirectional and reopen the transport choice — it is the
    one deferred feature that argues for Overseer's `/ws`.
+
+   *Stage 8 settled the half of this that was in doubt.* The human node was the
+   deferred feature most likely to force a back-channel, and it did not: it
+   parks the walk, emits `run.decision.request`, and takes one verdict back over
+   a normal POST. SSE stands. What would still reopen the question is a human
+   node that negotiates — several turns with an agent mid-run — which is a
+   different feature from a gate.
 
 3. **Does the codebase attachment belong on the node, or on the factory?**
    Per-node is more flexible and matches "the agent can't run without one".
