@@ -7,7 +7,7 @@
  * rather than from a failed save.
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
 import type { Codebase, Health, Project } from "../types";
 
@@ -15,9 +15,11 @@ export function ProjectList({ onOpen }: { onOpen: (projectId: string) => void })
   const [projects, setProjects] = useState<Project[] | null>(null);
   const [codebases, setCodebases] = useState<Codebase[]>([]);
   const [health, setHealth] = useState<Health | null>(null);
+  const [creating, setCreating] = useState(false);
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const nameInput = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     let live = true;
@@ -34,6 +36,16 @@ export function ProjectList({ onOpen }: { onOpen: (projectId: string) => void })
     };
   }, []);
 
+  useEffect(() => {
+    if (creating) nameInput.current?.focus();
+  }, [creating]);
+
+  function cancelCreate() {
+    setCreating(false);
+    setName("");
+    setError(null);
+  }
+
   async function create(event: React.FormEvent) {
     event.preventDefault();
     const trimmed = name.trim();
@@ -43,6 +55,7 @@ export function ProjectList({ onOpen }: { onOpen: (projectId: string) => void })
     try {
       const project = await api.createProject(trimmed);
       setName("");
+      setCreating(false);
       onOpen(project.id);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
@@ -80,27 +93,45 @@ export function ProjectList({ onOpen }: { onOpen: (projectId: string) => void })
 
           {error && <div className="error">{error}</div>}
 
-          <form className="create-row" onSubmit={create}>
-            <input
-              value={name}
-              onChange={(event) => setName(event.target.value)}
-              placeholder="New project name"
-              aria-label="New project name"
-              maxLength={80}
-            />
-            <button className="primary" type="submit" disabled={!name.trim() || busy}>
-              {busy ? "Creating…" : "Create project"}
-            </button>
-          </form>
-
           {projects === null ? (
             <p className="lede">Loading…</p>
-          ) : projects.length === 0 ? (
-            <div className="empty-state">
-              No projects yet. Name one above and it opens on an empty factory.
-            </div>
           ) : (
             <div className="project-grid">
+              {creating ? (
+                <form className="project-card project-card-new is-editing" onSubmit={create}>
+                  <input
+                    ref={nameInput}
+                    value={name}
+                    onChange={(event) => setName(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Escape") cancelCreate();
+                    }}
+                    onBlur={() => {
+                      if (!name.trim() && !busy) cancelCreate();
+                    }}
+                    placeholder="Project name"
+                    aria-label="New project name"
+                    maxLength={80}
+                  />
+                  <span className="new-project-actions">
+                    <button className="primary" type="submit" disabled={!name.trim() || busy}>
+                      {busy ? "Creating…" : "Create"}
+                    </button>
+                    <button type="button" className="link-button" onClick={cancelCreate}>
+                      Cancel
+                    </button>
+                  </span>
+                </form>
+              ) : (
+                <button
+                  className="project-card project-card-new"
+                  onClick={() => setCreating(true)}
+                >
+                  <span className="new-project-icon">+</span>
+                  <span className="name">New project</span>
+                </button>
+              )}
+
               {projects.map((project) => (
                 <button
                   key={project.id}

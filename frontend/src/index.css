@@ -227,12 +227,39 @@ button:focus-visible {
   font-size: 0.8rem;
 }
 
-.empty-state {
-  border: 1px dashed var(--edge-strong);
-  border-radius: var(--radius);
-  padding: 2rem;
+.project-card-new {
+  align-items: center;
+  justify-items: center;
   text-align: center;
+  border-style: dashed;
   color: var(--ink-dim);
+}
+
+.project-card-new:hover {
+  color: var(--ink);
+}
+
+.project-card-new .new-project-icon {
+  font-size: 1.4rem;
+  line-height: 1;
+  color: var(--ink-faint);
+}
+
+.project-card-new.is-editing {
+  cursor: default;
+  align-items: stretch;
+  border-style: solid;
+  border-color: var(--agent);
+  background: linear-gradient(180deg, #1f2836, var(--panel));
+}
+
+.project-card-new.is-editing input {
+  width: 100%;
+}
+
+.new-project-actions {
+  display: flex;
+  gap: 0.5rem;
 }
 
 .error {
