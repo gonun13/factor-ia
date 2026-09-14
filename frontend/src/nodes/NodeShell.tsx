@@ -12,10 +12,17 @@
 
 import { useEffect, useRef, type ReactNode } from "react";
 import { Handle, Position } from "@xyflow/react";
-import type { NodeData } from "../graph";
+import { nodeKind, type NodeData } from "../graph";
 import type { NodeRuntime } from "../types";
 import { useCanvas } from "../canvasContext";
-import { AgentGlyph, InputGlyph, OutputGlyph } from "./Glyphs";
+import {
+  AgentGlyph,
+  InputGlyph,
+  MergeGlyph,
+  OutputGlyph,
+  PrdGlyph,
+  PushGlyph,
+} from "./Glyphs";
 
 const GLYPHS = {
   input: InputGlyph,
@@ -23,11 +30,34 @@ const GLYPHS = {
   output: OutputGlyph,
 } as const;
 
+/**
+ * The glyph and the eyebrow follow the node's **kind**, falling back to its
+ * type.
+ *
+ * Worth the second lookup: two output nodes side by side, one of which pushes
+ * to a shared remote and one of which does not, must not be the same drawing.
+ * The type decides the chassis — handles, colour, where it may sit on the line
+ * — and the kind decides what it says it does.
+ */
+const KIND_GLYPHS: Record<string, () => ReactNode> = {
+  prd: PrdGlyph,
+  "commit-push": PushGlyph,
+  "commit-merge": MergeGlyph,
+};
+
 const TYPE_NAME = {
-  input: "request",
+  input: "input",
   agent: "agent",
-  output: "commit",
+  output: "output",
 } as const;
+
+const KIND_NAME: Record<string, string> = {
+  request: "request",
+  prd: "PRD",
+  commit: "commit",
+  "commit-push": "commit & push",
+  "commit-merge": "commit & merge",
+};
 
 export type ShellKind = keyof typeof GLYPHS;
 
@@ -43,14 +73,18 @@ export function NodeShell({
   children?: ReactNode;
 }) {
   const { patch, invalid } = useCanvas();
-  const Glyph = GLYPHS[kind];
+  const variant = nodeKind(data.definition);
+  const Glyph = KIND_GLYPHS[variant] ?? GLYPHS[kind];
+  const name = KIND_NAME[variant] ?? TYPE_NAME[kind];
   const runtime = data.runtime;
   const status = runtime?.status ?? "idle";
   const live = runtime !== null;
 
   return (
     <div
-      className={`node type-${kind}${invalid.has(id) ? " invalid" : ""}${live ? " live" : ""}`}
+      className={`node type-${kind}${variant ? ` kind-${variant}` : ""}${
+        invalid.has(id) ? " invalid" : ""
+      }${live ? " live" : ""}`}
       data-status={status}
     >
       {kind !== "input" && <Handle type="target" position={Position.Left} />}
@@ -58,7 +92,7 @@ export function NodeShell({
         <span className="glyph">
           <Glyph />
         </span>
-        <span className="eyebrow">{TYPE_NAME[kind]}</span>
+        <span className="eyebrow">{name}</span>
         {live && <span className="status-word">{status.replace("_", " ")}</span>}
         <span className="pip" data-status={status} title={`status: ${status}`} />
       </div>
@@ -67,7 +101,7 @@ export function NodeShell({
           className="node-title nodrag"
           value={data.definition.label}
           spellCheck={false}
-          aria-label={`${TYPE_NAME[kind]} name`}
+          aria-label={`${name} name`}
           // Editable while live on purpose: the graph stays editable-shaped
           // during a run. A run reads the saved file, so a rename mid-run
           // changes the next run, not this one.

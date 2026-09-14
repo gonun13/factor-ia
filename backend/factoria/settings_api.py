@@ -27,7 +27,7 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field
 
-from . import sshkeys
+from . import config, sshkeys
 from .agent import cli, login
 from .scrub import scrub_text
 
@@ -47,6 +47,11 @@ class AgentStatus(BaseModel):
 
     account: cli.AccountStatus
     handshake: cli.Handshake
+    #: What a run uses when neither the node nor the project names a provider —
+    #: `FACTOR_IA_ADAPTER`, normalized. An environment fact the browser has no
+    #: other way to learn, and the settings panel names it rather than saying
+    #: "the container default" and leaving the operator to guess which.
+    default_provider: str
 
 
 def _scrubbed(account: cli.AccountStatus) -> cli.AccountStatus:
@@ -63,7 +68,14 @@ async def agent_status() -> AgentStatus:
     """
     account = _scrubbed(await cli.auth_status())
     handshake = await cli.handshake()
-    return AgentStatus(account=account, handshake=handshake)
+    # Coerced the same way `orchestrator.adapter_name_for` coerces it, so the
+    # panel cannot show a third value that no run would ever resolve to.
+    name = config.adapter_name()
+    return AgentStatus(
+        account=account,
+        handshake=handshake,
+        default_provider="fake" if name == "fake" else "claude",
+    )
 
 
 @router.get("/agent/login", response_model=login.LoginState)

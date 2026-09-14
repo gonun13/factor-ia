@@ -96,3 +96,17 @@ def test_a_token_shaped_detail_is_scrubbed_before_it_is_returned(
     detail = client.get("/api/agent/status").json()["account"]["detail"]
     assert "sk-ant-" not in detail
     assert "[redacted:anthropic-key]" in detail
+
+
+def test_status_names_the_container_s_default_provider(client, monkeypatch) -> None:
+    """The browser cannot read `FACTOR_IA_ADAPTER`, so the API says it.
+
+    Without this the settings panel can only offer "the container default" as an
+    unnamed option, which tells an operator nothing about whether a run they did
+    not configure will spend money.
+    """
+    monkeypatch.setenv("FACTOR_IA_ADAPTER", "fake")
+    assert client.get("/api/agent/status").json()["default_provider"] == "fake"
+
+    monkeypatch.delenv("FACTOR_IA_ADAPTER", raising=False)
+    assert client.get("/api/agent/status").json()["default_provider"] == "claude"

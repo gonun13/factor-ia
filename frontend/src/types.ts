@@ -10,6 +10,25 @@
 
 export type NodeType = "input" | "agent" | "output" | "human" | "factory-ref";
 
+/**
+ * What an input node asks for, and what an output node does with the branch.
+ *
+ * **Kinds, not node types.** Both live in `definition.config.kind`, which is
+ * what keeps "a factory starts with an input and ends with an output" a rule
+ * about `NodeType` — one check, rather than a list of type names that grows
+ * every time there is a new way to ask for work or to ship it. Mirrors
+ * `models.InputKind` / `models.OutputKind`.
+ */
+export type InputKind = "request" | "prd";
+export type OutputKind = "commit" | "commit-push" | "commit-merge";
+export type NodeKind = InputKind | OutputKind;
+
+export const DEFAULT_INPUT_KIND: InputKind = "request";
+export const DEFAULT_OUTPUT_KIND: OutputKind = "commit";
+
+/** `commit-push` and `commit-merge` put a ref on a remote; `commit` does not. */
+export const PUSHING_OUTPUT_KINDS: OutputKind[] = ["commit-push", "commit-merge"];
+
 /** A node's state machine. No `cancelled`: a cancelled node is `failed` with a
  * detail saying who stopped it (backend `models.NodeStatus`). */
 export type RunStatus =
@@ -91,13 +110,16 @@ export type NodeRuntime = {
   todos?: TodoItem[];
   /** The worktree this node is writing in, and the commit it produced. */
   artifact?: RunArtifact | null;
+  /** The model the provider says it chose, off `session.init`. Not what we
+   * asked for — the two differ whenever we asked for nothing. */
+  model?: string;
 };
 
 /** Something durable that now exists outside `/data` — a branch in the
  * operator's own repository. Still true after the run ends, which is why it is
  * its own event and not a line of streamed text. */
 export type RunArtifact = {
-  kind: "worktree" | "commit";
+  kind: "worktree" | "commit" | "push" | "merge";
   codebaseId: string;
   branch: string;
   path: string;
@@ -106,6 +128,9 @@ export type RunArtifact = {
   commitSha: string | null;
   fileCount: number;
   detail: string;
+  /** Set on `push` / `merge`: the remote, and the branch it fast-forwarded. */
+  remote?: string;
+  mergedInto?: string | null;
 };
 
 export type ToolActivity = {
@@ -150,10 +175,20 @@ export type Factory = {
   updated_at: string;
 };
 
+/** Project-wide execution defaults an agent node inherits unless it overrides
+ * them. `null` means *ask nobody*: the provider falls through to the
+ * container's, and the model to the CLI's own — which is the only place a model
+ * id ever comes from. */
+export type ProjectSettings = {
+  default_provider: "claude" | "fake" | null;
+  default_model: string | null;
+};
+
 export type Project = {
   id: string;
   name: string;
   codebase_ids: string[];
+  settings: ProjectSettings;
   created_at: string;
   updated_at: string;
 };
@@ -201,7 +236,14 @@ export type Handshake = {
   detail: string;
 };
 
-export type AgentStatus = { account: AccountStatus; handshake: Handshake };
+export type AgentStatus = {
+  account: AccountStatus;
+  handshake: Handshake;
+  /** What a run uses when neither the node nor the project names a provider.
+   * An environment fact on the container (`FACTOR_IA_ADAPTER`), which the
+   * browser has no other way to learn. */
+  default_provider: "claude" | "fake";
+};
 
 export type LoginPhase =
   | "starting"
@@ -234,13 +276,26 @@ export type SshKeyStatus = {
 export type NodeRun = {
   node_id: string;
   type: NodeType;
+  /** The node's kind, frozen when the run was created — the factory file is
+   * editable while a run is in flight, so a run record describes the run that
+   * happened rather than the graph as it is now. */
+  kind: string;
+  /** Likewise frozen. It is what the run surface calls this node when it asks
+   * a human for something, and a second tab has no canvas to read it off. */
+  label: string;
   status: RunStatus;
   detail: string | null;
   started_at: string | null;
   ended_at: string | null;
   cost_usd: number;
   session_id: string | null;
+  /** What this node actually ran on, reported by the provider itself. `""`
+   * until the first `session.init`, and on every node that is not an agent. */
+  model: string;
   output_text: string;
+  /** The document a `prd` input node was given. The contents are `output_text`;
+   * this is only ever the label. */
+  filename: string | null;
 };
 
 /** One codebase's isolated checkout for one run. `kept` is the cleanup policy:
@@ -258,6 +313,11 @@ export type RunWorktree = {
   files: string[];
   stat: string;
   kept: boolean;
+  /** What left the machine. `merged_into` is a branch on the *remote*. */
+  remote: string;
+  pushed_branch: string | null;
+  merged_into: string | null;
+  push_detail: string;
 };
 
 export type Run = {
@@ -306,12 +366,18 @@ export type AgentEvent = { session_id: string; timestamp: string } & (
 export type RunEvent = { seq: number; run_id: string; timestamp: string } & (
   | { type: "run.status"; status: OverallRunStatus; detail: string | null }
   | { type: "node.status"; node_id: string; status: RunStatus; detail: string | null }
-  | { type: "run.input"; node_id: string; text: string }
+  | {
+      type: "run.input";
+      node_id: string;
+      text: string;
+      kind: string;
+      filename: string | null;
+    }
   | { type: "agent"; node_id: string; event: AgentEvent }
   | {
       type: "run.artifact";
       node_id: string;
-      kind: "worktree" | "commit";
+      kind: "worktree" | "commit" | "push" | "merge";
       codebase_id: string;
       branch: string;
       path: string;
@@ -320,6 +386,8 @@ export type RunEvent = { seq: number; run_id: string; timestamp: string } & (
       commit_sha: string | null;
       file_count: number;
       detail: string;
+      remote: string;
+      merged_into: string | null;
     }
   | { type: "run.cost"; node_id: string; delta_usd: number; total_usd: number }
 );

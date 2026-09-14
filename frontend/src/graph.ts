@@ -23,13 +23,15 @@
  */
 
 import type { Edge, Node } from "@xyflow/react";
-import type {
-  Factory,
-  GraphEdge,
-  GraphNode,
-  NodeDefinition,
-  NodeRuntime,
-  NodeType,
+import {
+  DEFAULT_INPUT_KIND,
+  DEFAULT_OUTPUT_KIND,
+  type Factory,
+  type GraphEdge,
+  type GraphNode,
+  type NodeDefinition,
+  type NodeRuntime,
+  type NodeType,
 } from "./types";
 
 export type NodeData = {
@@ -103,13 +105,44 @@ function localId(prefix: string): string {
   return `${prefix}-${random}${counter.toString(36)}`;
 }
 
+/**
+ * A node's kind, read out of its freeform `config` and defaulted by type.
+ *
+ * The one reader, used by the node components, the palette and the validator
+ * alike — mirrors the server's `models.node_kind`. A node whose config says
+ * nothing is the kind that node type has always been, which is what lets a
+ * factory file written before kinds existed load unchanged.
+ */
+export function nodeKind(definition: NodeDefinition): string {
+  const raw = definition.config?.kind;
+  const named = typeof raw === "string" ? raw.trim() : "";
+  if (named) return named;
+  if (definition.type === "input") return DEFAULT_INPUT_KIND;
+  if (definition.type === "output") return DEFAULT_OUTPUT_KIND;
+  return "";
+}
+
+/** The default label for each thing the palette can drop, keyed by kind. */
 export const DEFAULT_LABELS: Record<string, string> = {
-  input: "Request",
+  request: "Request",
+  prd: "PRD",
   agent: "Agent",
-  output: "Commit",
+  commit: "Commit",
+  "commit-push": "Commit & push",
+  "commit-merge": "Commit & merge",
 };
 
-export function newNode(type: NodeType, position: { x: number; y: number }): FlowNode {
+export function newNode(
+  type: NodeType,
+  position: { x: number; y: number },
+  kind?: string,
+): FlowNode {
+  // Written into `config` even when it is the default, so a factory file says
+  // out loud what its output node does. "This one only commits" is exactly the
+  // sentence a reviewer reading `main.json` in a pull request wants, and
+  // inferring it from a missing key is how that review goes wrong.
+  const resolved =
+    kind ?? (type === "input" ? DEFAULT_INPUT_KIND : type === "output" ? DEFAULT_OUTPUT_KIND : "");
   return {
     id: localId("n"),
     type,
@@ -118,10 +151,10 @@ export function newNode(type: NodeType, position: { x: number; y: number }): Flo
     data: {
       definition: {
         type,
-        label: DEFAULT_LABELS[type] ?? type,
+        label: DEFAULT_LABELS[resolved] ?? DEFAULT_LABELS[type] ?? type,
         position,
         codebase_id: null,
-        config: {},
+        config: resolved ? { kind: resolved } : {},
         factory_ref: null,
       },
       runtime: null,

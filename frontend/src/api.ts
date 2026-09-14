@@ -69,6 +69,19 @@ export const api = {
       that is the server's call, and the confirmation says so. */
   deleteProject: (id: string) =>
     request<void>(`/api/projects/${id}`, { method: "DELETE" }),
+  /** Sparse: an omitted key means *unchanged*. `settings` is the exception and
+      is replaced whole, because the panel that sends it always knows both
+      halves. Writes to `/data/projects.json`, which is machine-local and not
+      the git-tracked factory file — so this saves immediately rather than
+      joining the canvas's explicit-save policy. */
+  updateProject: (
+    id: string,
+    body: Partial<Pick<Project, "name" | "codebase_ids" | "settings">>,
+  ) =>
+    request<Project>(`/api/projects/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    }),
 
   factory: (projectId: string, factoryId = "main") =>
     request<Factory>(`/api/projects/${projectId}/factories/${factoryId}`),
@@ -102,11 +115,26 @@ export const api = {
     request<Run>(`/api/projects/${projectId}/factories/${factoryId}/runs`, {
       method: "POST",
     }),
-  /** The request, submitted once (open question 2). This starts the walk. */
-  submitRunInput: (runId: string, text: string) =>
+  /**
+   * One input node's submission. The last one starts the walk.
+   *
+   * `nodeId` addresses a single node, which is what a factory with a request
+   * *and* a PRD needs. Omitting it keeps the original meaning — every input
+   * node still waiting takes this text — so the single-request factory posts
+   * exactly what it always did.
+   */
+  submitRunInput: (
+    runId: string,
+    text: string,
+    options: { nodeId?: string; filename?: string } = {},
+  ) =>
     request<Run>(`/api/runs/${runId}/input`, {
       method: "POST",
-      body: JSON.stringify({ text }),
+      body: JSON.stringify({
+        text,
+        node_id: options.nodeId ?? null,
+        filename: options.filename ?? null,
+      }),
     }),
   /** Explicit cancel — closing the tab is not a decision to stop work. */
   cancelRun: (runId: string) =>

@@ -105,11 +105,37 @@ async def get_run(run_id: str) -> Run:
 
 @router.post("/runs/{run_id}/input", response_model=Run)
 async def submit_run_input(run_id: str, body: RunInput) -> Run:
-    """The request, submitted once. This is what starts the walk."""
+    """One input node's submission. The last one starts the walk.
+
+    `node_id` is optional, and omitting it still means what it always meant:
+    every input node still waiting takes this text. A factory with a `request`
+    node *and* a `prd` node addresses them one at a time.
+    """
     try:
-        return await orchestrator().submit_input(run_id, body.text)
+        return await orchestrator().submit_input(
+            run_id,
+            body.text,
+            node_id=body.node_id,
+            filename=_label(body.filename),
+        )
     except RunConflict as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+
+
+def _label(filename: str | None) -> str | None:
+    """A submitted filename, reduced to something safe to display and to write
+    into a commit trailer.
+
+    Nothing opens this — the file's *contents* arrived in the body and the name
+    is only ever shown — but it is written into a commit message and rendered in
+    a browser, so it gets the same treatment a path segment would: the basename,
+    no separators, no control characters, and a length cap.
+    """
+    if filename is None:
+        return None
+    base = filename.replace("\\", "/").rsplit("/", 1)[-1].strip()
+    cleaned = "".join(char for char in base if char.isprintable()).strip()
+    return cleaned[:120] or None
 
 
 @router.post("/runs/{run_id}/cancel", response_model=Run)

@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 
 from factoria import config
-from factoria.models import Edge, Factory, Node, NodeDefinition
+from factoria.models import Edge, Factory, Node, NodeDefinition, ProjectSettings
 from factoria.orchestrator import Orchestrator, RunBusy, RunConflict
 from factoria.runcheck import NotRunnable, run_problems, topological_order
 from factoria.runlog import RunLog, RunStore, run_dir
@@ -365,3 +365,75 @@ def test_no_secret_shaped_string_survives_into_the_event_log(
     # Still valid JSONL, and still the same events — scrubbing preserves shape.
     assert all(json.loads(line) for line in raw.splitlines() if line.strip())
     assert RunLog(run_id).replay()
+
+
+# ---- project settings reach the run ----------------------------------------
+
+
+def _set_settings(test_store: Store, **kwargs) -> None:
+    project = test_store.get_project("demo")
+    project.settings = ProjectSettings(**kwargs)
+    test_store.update_project(project)
+
+
+def test_the_requested_model_is_frozen_onto_the_node_run_at_start(
+    orch: Orchestrator, factory: Factory, test_store: Store
+) -> None:
+    """A run record says what it asked for from the moment it exists.
+
+    Before the first byte there is no `session.init` to tell us what the CLI
+    chose, and a blank field until then would make an interrupted run
+    unreadable.
+    """
+    _set_settings(test_store, default_model="test-model-x")
+    run = asyncio.run(orch.start("demo", "main"))
+    assert run.node_run("n-agent").model == "test-model-x"
+    # Only the agent. Nothing else runs on a model.
+    assert run.node_run("n-in").model == ""
+
+
+def test_editing_the_project_mid_run_does_not_rewrite_the_record(
+    orch: Orchestrator, factory: Factory, test_store: Store
+) -> None:
+    """Frozen at `start()`, exactly as `kind` and `label` are.
+
+    The registry is a file the operator can edit while a run is in flight; a run
+    record that re-read it would describe a run that never happened.
+    """
+
+    async def go():
+        _set_settings(test_store, default_model="test-model-x")
+        run = await orch.start("demo", "main")
+        _set_settings(test_store, default_model="test-model-changed")
+        await orch.submit_input(run.id, "tidy the readme")
+        await asyncio.wait_for(orch._active[run.id].task, 10)
+        return orch.get(run.id)
+
+    run = asyncio.run(go())
+    # The fake reports its own id from `session.init`, which is the honest
+    # answer to "what did it run on" and the one that wins. What matters here
+    # is that the *edited* value never appears.
+    assert run.node_run("n-agent").model == "fake-model-1"
+
+
+def test_a_run_whose_project_was_unregistered_still_starts(
+    orch: Orchestrator, factory: Factory, test_store: Store
+) -> None:
+    """`delete_project` keeps the factory file on purpose (see `store.py`).
+
+    Running one of those is not the moment to start failing — it simply has no
+    project defaults to inherit.
+    """
+    test_store.delete_project("demo")
+    run = asyncio.run(orch.start("demo", "main"))
+    assert run.status == "waiting_input"
+    assert run.node_run("n-agent").model == ""
+
+
+def test_a_project_default_provider_reaches_the_run_record(
+    orch: Orchestrator, factory: Factory, test_store: Store, monkeypatch
+) -> None:
+    monkeypatch.delenv("FACTOR_IA_ADAPTER", raising=False)
+    _set_settings(test_store, default_provider="fake")
+    run = asyncio.run(orch.start("demo", "main"))
+    assert run.adapter == "fake"

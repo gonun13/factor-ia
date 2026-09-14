@@ -29,7 +29,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 # Bumped when the on-disk shape changes incompatibly. Present from the first
 # file written, because adding a version field to files that lack one is the
@@ -43,6 +43,50 @@ union with no UI and no execution support — see module docstring."""
 PayloadKind = Literal["text"]
 """Open question 4: freeform text for v1. A typed artifact (diff / file set /
 structured result) joins this union when nested factories need composing."""
+
+InputKind = Literal["request", "prd"]
+"""What an `input` node asks a human for.
+
+**A kind, not a node type.** Both are `NodeType == "input"`, and the difference
+lives in `definition.config["kind"]`. That is what keeps *"a factory starts with
+an input and ends with an output"* a rule about the type union — one check, not
+a list of type names that has to be extended every time a new way of asking for
+work is added. It also keeps the file format at `schema_version: 1`: a node
+whose `config` gained a key still loads in a reader that has never heard of it,
+and falls back to `request`, which is what it used to be.
+"""
+
+OutputKind = Literal["commit", "commit-push", "commit-merge"]
+"""What an `output` node does with the branch the run produced.
+
+Strictly increasing reach, and each step is one the operator drew on purpose:
+
+- `commit` — the branch is left in the operator's own repository. Nothing
+  leaves the machine.
+- `commit-push` — the run's branch is also pushed to the remote, still on its
+  own ref. A reviewer elsewhere can see it; nothing they depend on moved.
+- `commit-merge` — the run's branch is pushed *and* the base branch is
+  fast-forwarded to it **on the remote** (`git push origin <branch>:<base>`).
+
+`commit-merge` is the one that breaks a straight reading of `DESIGN.md`'s
+*"no writes to the default branch"*, and it does so deliberately: an operator
+who drew that node asked for exactly this. What it does **not** do is relax the
+guarantee that matters more — the merge happens on the remote as a
+fast-forward, so nothing rewrites history and the operator's own working tree is
+still never the cwd of anything. See `gitwork._check`.
+"""
+
+DEFAULT_INPUT_KIND: InputKind = "request"
+DEFAULT_OUTPUT_KIND: OutputKind = "commit"
+
+INPUT_KINDS: frozenset[str] = frozenset({"request", "prd"})
+OUTPUT_KINDS: frozenset[str] = frozenset({"commit", "commit-push", "commit-merge"})
+
+#: `commit-push` and `commit-merge` need a remote to push to; `commit` does not.
+PUSHING_OUTPUT_KINDS: frozenset[str] = frozenset({"commit-push", "commit-merge"})
+
+#: The remote a pushing output node uses when its config names none.
+DEFAULT_REMOTE = "origin"
 
 Slug = Annotated[str, Field(pattern=r"^[a-z0-9][a-z0-9-]{0,63}$")]
 
@@ -115,6 +159,41 @@ class NodeDefinition(Base):
     # Set on `factory-ref` nodes: the factory this node stands for. Unused by
     # the MVP, present so nesting is a UI change rather than a format change.
     factory_ref: str | None = None
+
+
+def node_kind(node_or_definition: "Node | NodeDefinition") -> str:
+    """The `kind` out of a node's freeform config, defaulted by node type.
+
+    One function rather than two so every caller — validation, the run check,
+    the orchestrator's dispatch, the summary — reads the kind the same way. An
+    unrecognised value is returned **as written**: this is a reader, and saying
+    `"commit"` about a node whose file says `"commit-deploy"` would turn a
+    validation error into a silently different action.
+    """
+    definition = (
+        node_or_definition.definition
+        if isinstance(node_or_definition, Node)
+        else node_or_definition
+    )
+    raw = definition.config.get("kind")
+    if raw is None or not str(raw).strip():
+        if definition.type == "input":
+            return DEFAULT_INPUT_KIND
+        if definition.type == "output":
+            return DEFAULT_OUTPUT_KIND
+        return ""
+    return str(raw).strip()
+
+
+def node_remote(node_or_definition: "Node | NodeDefinition") -> str:
+    """The remote a pushing output node targets. `origin` unless it says so."""
+    definition = (
+        node_or_definition.definition
+        if isinstance(node_or_definition, Node)
+        else node_or_definition
+    )
+    raw = definition.config.get("remote")
+    return str(raw).strip() if raw and str(raw).strip() else DEFAULT_REMOTE
 
 
 NodeStatus = Literal["pending", "waiting_input", "running", "succeeded", "failed"]
@@ -214,6 +293,33 @@ class FactorySummary(Base):
     updated_at: datetime
 
 
+class ProjectSettings(Base):
+    """Project-wide defaults an agent node inherits unless it overrides them.
+
+    Both fields are `None`, and `None` means *ask nobody*: the provider falls
+    through to the container's own, and the model to the CLI's — the only place
+    a model id is ever allowed to come from (`DESIGN.md`, Assumptions). That is
+    why neither default is a string here, and why nothing in this package ever
+    names one.
+    """
+
+    #: The adapter every agent in this project uses unless it names its own.
+    #: `None` defers to `FACTOR_IA_ADAPTER`, which defaults to the real one.
+    default_provider: Literal["claude", "fake"] | None = None
+    #: A model id as the CLI's own handshake spells it. Deliberately **not**
+    #: validated against that list: the list is a subprocess away and the CLI is
+    #: the authority, so a stale id is stored, sent, and refused by the CLI in
+    #: its own words rather than by a guess of ours.
+    default_model: str | None = Field(default=None, max_length=120)
+
+    @field_validator("default_model", mode="before")
+    @classmethod
+    def _blank_is_unset(cls, value: object) -> object:
+        # A `<select>` reset to "— CLI default —" posts `""`, and an empty
+        # string as a model id would reach the CLI as `--model ""`.
+        return None if isinstance(value, str) and not value.strip() else value
+
+
 class Project(Base):
     """A named workspace owning codebases and factories."""
 
@@ -221,6 +327,10 @@ class Project(Base):
     name: str
     # v1 attaches exactly one; the model allows many (`DESIGN.md`, Data model).
     codebase_ids: list[str] = Field(default_factory=list)
+    # Last, so an existing registry gains a key rather than changing shape — a
+    # file written before this field existed loads with the default and needs
+    # no migration and no `schema_version` bump.
+    settings: ProjectSettings = Field(default_factory=ProjectSettings)
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)
 
@@ -245,6 +355,11 @@ class ProjectCreate(Base):
 class ProjectUpdate(Base):
     name: str | None = Field(default=None, min_length=1, max_length=80)
     codebase_ids: list[str] | None = None
+    #: Replaced whole, not merged. The panel that sends this has one Save button
+    #: and always knows both fields; a per-field update model could not express
+    #: "clear this one" without inventing a sentinel. Omitting the key leaves
+    #: the project's settings exactly as they were.
+    settings: ProjectSettings | None = None
 
 
 class FactoryCreate(Base):
@@ -299,6 +414,15 @@ class NodeRun(Base):
 
     node_id: str
     type: NodeType
+    #: The node's `config["kind"]` at the moment the run was created — `request`
+    #: or `prd` on an input, `commit`/`commit-push`/`commit-merge` on an output.
+    #: Copied rather than re-read, because the factory file is editable while a
+    #: run is in flight and a run record has to describe the run that happened.
+    kind: str = ""
+    #: The node's label, likewise frozen. It is what the run surface calls this
+    #: node when it asks a human for something, and a run that is being watched
+    #: from a second tab has no canvas to read it off.
+    label: str = ""
     status: NodeStatus = "pending"
     #: Why it is in that state, in words a human reads on the canvas.
     detail: str | None = None
@@ -309,8 +433,19 @@ class NodeRun(Base):
     cost_usd: float = 0.0
     #: The provider session this node ran as, for correlation with the log.
     session_id: str | None = None
+    #: The model this node ran on. Set when the run is created to what the graph
+    #: and the project *asked for* (`""` when both defer to the CLI), then
+    #: overwritten by `session.init`, which reports what the CLI actually chose.
+    #: One field rather than a requested/actual pair: the two differ only
+    #: between the spawn and that first event, and a run that dies in that
+    #: window keeps the request — which is the whole debugging value a second
+    #: field would have carried.
+    model: str = ""
     #: What travels down the outgoing belts. Freeform text (open question 4).
     output_text: str = ""
+    #: The name of the file a `prd` input node was given, for the log and the
+    #: commit trailer. The *contents* are `output_text`; this is the label.
+    filename: str | None = None
 
 
 class RunWorktree(Base):
@@ -339,6 +474,15 @@ class RunWorktree(Base):
     files: list[str] = Field(default_factory=list)
     stat: str = ""
     kept: bool = False
+    #: Set by a `commit-push` / `commit-merge` output node. `pushed_branch` is
+    #: the run's own ref on the remote; `merged_into` is the base branch the
+    #: remote fast-forwarded, and is `None` for every kind but `commit-merge`.
+    #: Recorded on the run because a push is the one thing a run does that
+    #: outlives the machine it ran on, and `git` is not going to remember it.
+    remote: str = ""
+    pushed_branch: str | None = None
+    merged_into: str | None = None
+    push_detail: str = ""
 
 
 class Run(Base):
@@ -383,6 +527,24 @@ class Run(Base):
 
 
 class RunInput(Base):
-    """The request submission. Not a chat message — open question 2."""
+    """One input node's submission. Not a chat message — open question 2.
 
-    text: str = Field(min_length=1, max_length=20000)
+    `node_id` is how a factory with more than one input node — a request *and*
+    a PRD — is fed: each node is submitted once, and the walk starts when the
+    last one is in. It is optional so the single-request factory, which is
+    almost every factory, still posts `{"text": ...}` and means the obvious
+    thing; omitting it addresses every input node that is still waiting, which
+    is exactly what the endpoint did before there was more than one kind.
+
+    `max_length` is a document's, not a sentence's: a PRD is the whole point of
+    the `prd` kind and 20 kB was a limit chosen for a one-line request. It is
+    still a limit — an unbounded body is a way to fill `/data` — just one sized
+    for what now travels through here.
+    """
+
+    node_id: str | None = None
+    text: str = Field(min_length=1, max_length=400_000)
+    #: Set when the text came from a file. Displayed, and written into the
+    #: commit trailer; never used to open anything, so it is a label and not a
+    #: path — `paths.safe_name` is applied before it is stored.
+    filename: str | None = Field(default=None, max_length=255)

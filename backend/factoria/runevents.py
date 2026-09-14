@@ -69,6 +69,12 @@ class RunInputEvent(RunEventBase):
     type: Literal["run.input"] = "run.input"
     node_id: str
     text: str
+    #: The kind of input this node asked for — `request` or `prd`. On the wire
+    #: so a canvas that joined late can render the submission the way the node
+    #: would have, without reloading the factory file.
+    kind: str = "request"
+    #: The document's name, when the text came from one. Never a path.
+    filename: str | None = None
 
 
 class AgentStreamEvent(RunEventBase):
@@ -92,7 +98,12 @@ class RunArtifactEvent(RunEventBase):
 
     type: Literal["run.artifact"] = "run.artifact"
     node_id: str
-    kind: Literal["worktree", "commit"]
+    #: `push` and `merge` join the union for the same reason `commit` is in it:
+    #: a ref on a remote is durable, outlives the run, and is the thing the
+    #: operator actually wanted. A `merge` artifact is emitted *in addition to*
+    #: the `push` one, because the branch really did go up as its own ref and a
+    #: refused merge must not erase that from the log.
+    kind: Literal["worktree", "commit", "push", "merge"]
     codebase_id: str
     branch: str
     path: str = ""
@@ -103,6 +114,10 @@ class RunArtifactEvent(RunEventBase):
     commit_sha: str | None = None
     file_count: int = 0
     detail: str = ""
+    #: Set on `push` / `merge`: the remote name, and — for a merge — the branch
+    #: on it that was fast-forwarded.
+    remote: str = ""
+    merged_into: str | None = None
 
 
 class RunCostEvent(RunEventBase):

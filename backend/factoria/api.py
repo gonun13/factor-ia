@@ -236,6 +236,14 @@ def update_project(
                 UNPROCESSABLE, f"unknown codebases: {unknown}"
             )
         project.codebase_ids = body.codebase_ids
+    if body.settings is not None:
+        # Replaced whole. No hand-rolled checking: the provider is a `Literal`,
+        # so pydantic refuses an unknown one with a 422 before this runs, and
+        # the model id is deliberately not validated against the CLI's list —
+        # that list is two subprocesses away, and a settings save that fails
+        # because the CLI is momentarily unreachable would be worse than a
+        # stale id the CLI itself refuses at spawn time.
+        project.settings = body.settings
     project.updated_at = utcnow()
     try:
         return store.update_project(project)

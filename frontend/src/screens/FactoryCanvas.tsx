@@ -49,24 +49,53 @@ import {
   type FlowNode,
 } from "../graph";
 import { edgeTypes, nodeTypes } from "../nodes";
-import { AgentGlyph, InputGlyph, OutputGlyph } from "../nodes/Glyphs";
+import {
+  AgentGlyph,
+  InputGlyph,
+  MergeGlyph,
+  OutputGlyph,
+  PrdGlyph,
+  PushGlyph,
+  SettingsGlyph,
+} from "../nodes/Glyphs";
+import { ProjectSettingsPanel } from "./ProjectSettingsPanel";
 import { useRun, type RunState } from "../run";
-import { runProblems } from "../validation";
+import { blockers, runProblems, type Problem } from "../validation";
 import type {
+  AgentStatus,
   Codebase,
   CodebaseGit,
   Factory,
   NodeDefinition,
+  NodeRun,
   NodeType,
   Project,
 } from "../types";
 
 const DND_TYPE = "application/factoria-node";
 
-const PALETTE: { type: NodeType; label: string; hint: string; Glyph: () => ReactElement }[] = [
-  { type: "input", label: "Request", hint: "the task, submitted once", Glyph: InputGlyph },
-  { type: "agent", label: "Agent", hint: "operates on a codebase", Glyph: AgentGlyph },
-  { type: "output", label: "Commit", hint: "a branch you can diff", Glyph: OutputGlyph },
+/**
+ * What you can drag onto the line.
+ *
+ * Six entries over three node types: the extra three are *kinds*, which the
+ * palette flattens on purpose. An operator choosing between "commit" and
+ * "commit & merge" is making the most consequential decision on this screen,
+ * and burying it in a dropdown on a node they have already placed is how it
+ * gets made by accident. The drag payload therefore carries both halves.
+ */
+const PALETTE: {
+  type: NodeType;
+  kind: string;
+  label: string;
+  hint: string;
+  Glyph: () => ReactElement;
+}[] = [
+  { type: "input", kind: "request", label: "Request", hint: "the task, submitted once", Glyph: InputGlyph },
+  { type: "input", kind: "prd", label: "PRD", hint: "a PRD.md, handed over whole", Glyph: PrdGlyph },
+  { type: "agent", kind: "", label: "Agent", hint: "operates on a codebase", Glyph: AgentGlyph },
+  { type: "output", kind: "commit", label: "Commit", hint: "a branch you can diff", Glyph: OutputGlyph },
+  { type: "output", kind: "commit-push", label: "Commit & push", hint: "branch, then up to the remote", Glyph: PushGlyph },
+  { type: "output", kind: "commit-merge", label: "Commit & merge", hint: "fast-forwards the base branch", Glyph: MergeGlyph },
 ];
 
 export function FactoryCanvas({ projectId, onBack }: { projectId: string; onBack: () => void }) {
@@ -84,11 +113,15 @@ function CanvasInner({ projectId, onBack }: { projectId: string; onBack: () => v
   const [factory, setFactory] = useState<Factory | null>(null);
   const [codebases, setCodebases] = useState<Codebase[]>([]);
   const [gitStates, setGitStates] = useState<Record<string, CodebaseGit>>({});
+  const [agent, setAgent] = useState<AgentStatus | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [savedAt, setSavedAt] = useState<string | null>(null);
   /** The last thing the server acknowledged, as the exact bytes a save sends. */
   const baseline = useRef<string>("");
+  /** So closing the settings panel puts focus back where it came from. */
+  const cogRef = useRef<HTMLButtonElement>(null);
   const { screenToFlowPosition, fitView } = useReactFlow<FlowNode, FlowEdge>();
 
   useEffect(() => {
@@ -109,6 +142,30 @@ function CanvasInner({ projectId, onBack }: { projectId: string; onBack: () => v
       live = false;
     };
   }, [projectId, setNodes, setEdges]);
+
+  /**
+   * What the CLI says it offers, fetched once and handed to every node through
+   * the canvas context.
+   *
+   * Deliberately **not** in the load above. That `Promise.all` is what the
+   * canvas waits on before it renders a graph, and this call shells out twice
+   * (`settings_api.agent_status`) and answers slowly — or not at all, on a
+   * machine where the CLI is missing. Neither may delay the canvas or turn a
+   * perfectly good factory into an error screen, so a failure here is swallowed
+   * and the model pickers simply say they have no list.
+   */
+  useEffect(() => {
+    let live = true;
+    api
+      .agentStatus()
+      .then((status) => live && setAgent(status))
+      .catch(() => {
+        /* the pickers fall back to "the CLI's own default" */
+      });
+    return () => {
+      live = false;
+    };
+  }, []);
 
   /**
    * Re-read every discovered codebase's git state.
@@ -216,13 +273,13 @@ function CanvasInner({ projectId, onBack }: { projectId: string; onBack: () => v
   );
 
   const addNode = useCallback(
-    (type: NodeType, clientX: number, clientY: number) => {
+    (type: NodeType, kind: string, clientX: number, clientY: number) => {
       const position = screenToFlowPosition({ x: clientX, y: clientY });
       // Drop point is the cursor; nudge so the cursor lands on the chassis
       // rather than on its top-left corner.
       setNodes((existing) => [
         ...existing.map((node) => ({ ...node, selected: false })),
-        newNode(type, { x: position.x - 120, y: position.y - 40 }),
+        newNode(type, { x: position.x - 120, y: position.y - 40 }, kind || undefined),
       ]);
     },
     [screenToFlowPosition, setNodes],
@@ -239,7 +296,9 @@ function CanvasInner({ projectId, onBack }: { projectId: string; onBack: () => v
     [nodes, edges, codebases, dirty, gitStates],
   );
   const invalid = useMemo(
-    () => new Set(problems.flatMap((problem) => problem.nodeIds)),
+    // Blockers only: a notice ("this one pushes") is something to read, not a
+    // node to outline in red.
+    () => new Set(blockers(problems).flatMap((problem) => problem.nodeIds)),
     [problems],
   );
 
@@ -256,8 +315,20 @@ function CanvasInner({ projectId, onBack }: { projectId: string; onBack: () => v
   );
 
   const context = useMemo(
-    () => ({ codebases, gitStates, invalid, patch }),
-    [codebases, gitStates, invalid, patch],
+    () => ({
+      codebases,
+      gitStates,
+      invalid,
+      patch,
+      models: agent?.handshake.models ?? [],
+      cliDefaultModel: agent?.handshake.default_model ?? null,
+      containerProvider: agent?.default_provider ?? "claude",
+      projectSettings: project?.settings ?? {
+        default_provider: null,
+        default_model: null,
+      },
+    }),
+    [codebases, gitStates, invalid, patch, agent, project],
   );
 
   return (
@@ -272,6 +343,16 @@ function CanvasInner({ projectId, onBack }: { projectId: string; onBack: () => v
           <small>· {factory?.name ?? "main"} factory</small>
         </span>
         <span className="spacer" />
+        <button
+          ref={cogRef}
+          className="icon-button"
+          aria-label="Project settings"
+          aria-expanded={settingsOpen}
+          title="Project settings"
+          onClick={() => setSettingsOpen(true)}
+        >
+          <SettingsGlyph />
+        </button>
         <div className="savebar">
           {dirty ? (
             <span className="pill dirty">unsaved changes</span>
@@ -298,8 +379,11 @@ function CanvasInner({ projectId, onBack }: { projectId: string; onBack: () => v
         }}
         onDrop={(event) => {
           event.preventDefault();
-          const type = event.dataTransfer.getData(DND_TYPE) as NodeType;
-          if (type) addNode(type, event.clientX, event.clientY);
+          // `<type>:<kind>` in one entry, because `dataTransfer` exposes only
+          // the *types* of its entries during dragover — a second key would be
+          // readable on drop and invisible while deciding whether to accept.
+          const [type, kind = ""] = event.dataTransfer.getData(DND_TYPE).split(":");
+          if (type) addNode(type as NodeType, kind, event.clientX, event.clientY);
         }}
       >
         {factory === null ? (
@@ -343,13 +427,13 @@ function CanvasInner({ projectId, onBack }: { projectId: string; onBack: () => v
             <Panel position="top-left">
               <div className="panel palette">
                 <span className="eyebrow">Machines</span>
-                {PALETTE.map(({ type, label, hint, Glyph }) => (
+                {PALETTE.map(({ type, kind, label, hint, Glyph }) => (
                   <button
-                    key={type}
-                    className={`palette-item type-${type}`}
+                    key={`${type}:${kind}`}
+                    className={`palette-item type-${type}${kind ? ` kind-${kind}` : ""}`}
                     draggable
                     onDragStart={(event) => {
-                      event.dataTransfer.setData(DND_TYPE, type);
+                      event.dataTransfer.setData(DND_TYPE, `${type}:${kind}`);
                       event.dataTransfer.effectAllowed = "copy";
                     }}
                     onClick={(event) => {
@@ -358,6 +442,7 @@ function CanvasInner({ projectId, onBack }: { projectId: string; onBack: () => v
                         ?.getBoundingClientRect();
                       addNode(
                         type,
+                        kind,
                         (box?.left ?? 0) + (box?.width ?? 800) / 2,
                         (box?.top ?? 0) + (box?.height ?? 600) / 2,
                       );
@@ -375,9 +460,10 @@ function CanvasInner({ projectId, onBack }: { projectId: string; onBack: () => v
                   </button>
                 ))}
                 <p className="palette-note">
-                  Drag onto the line, or click to drop one in the middle. Belts
-                  carry work between machines; a codebase is a property of an
-                  agent, not a belt. Select and press ⌫ to remove.
+                  Drag onto the line, or click to drop one in the middle. A
+                  factory starts with an input and ends with an output; belts
+                  carry work between machines, and a codebase is a property of
+                  an agent, not a belt. Select and press ⌫ to remove.
                 </p>
               </div>
             </Panel>
@@ -389,6 +475,25 @@ function CanvasInner({ projectId, onBack }: { projectId: string; onBack: () => v
         </CanvasContext.Provider>
         )}
       </div>
+
+      {/* A sibling of the canvas, never a child: inside React Flow's subtree the
+          viewport transform would scale it, and every control in it would need
+          `nodrag`/`nowheel`. `onSaved` is what makes each node's "— project
+          default —" label update the instant this saves, since `project` feeds
+          the context memo above. */}
+      {settingsOpen && project && (
+        <ProjectSettingsPanel
+          project={project}
+          models={agent?.handshake.models ?? []}
+          cliDefaultModel={agent?.handshake.default_model ?? null}
+          containerProvider={agent?.default_provider ?? "claude"}
+          onSaved={setProject}
+          onClose={() => {
+            setSettingsOpen(false);
+            cogRef.current?.focus();
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -404,19 +509,23 @@ function RunBox({
   onFocus,
   run,
 }: {
-  problems: { message: string; nodeIds: string[] }[];
+  problems: Problem[];
   onFocus: (ids: string[]) => void;
   run: RunState & {
     live: boolean;
+    awaiting: NodeRun[];
     start: () => Promise<unknown>;
-    submit: (text: string) => Promise<void>;
+    submit: (
+      text: string,
+      options?: { nodeId?: string; filename?: string },
+    ) => Promise<void>;
     cancel: () => Promise<void>;
     clear: () => void;
   };
 }) {
-  const [request, setRequest] = useState("");
-  const runnable = problems.length === 0;
-  const awaiting = run.status === "waiting_input";
+  const stopping = blockers(problems);
+  const runnable = stopping.length === 0;
+  const notices = problems.filter((problem) => problem.severity === "notice");
 
   return (
     <div className="panel runbox" data-run-status={run.status ?? "idle"}>
@@ -429,14 +538,14 @@ function RunBox({
           <button
             className="run"
             disabled={!runnable || run.busy}
-            onClick={() => {
-              setRequest("");
-              void run.start();
-            }}
+            onClick={() => void run.start()}
             title={
               runnable
-                ? "Run this factory"
-                : problems.map((problem) => problem.message).join("\n")
+                ? [
+                    "Run this factory",
+                    ...notices.map((notice) => notice.message),
+                  ].join("\n")
+                : stopping.map((problem) => problem.message).join("\n")
             }
           >
             ▶ Run
@@ -447,7 +556,7 @@ function RunBox({
             ? `run ${run.status.replace("_", " ")}`
             : runnable
               ? "This factory is runnable."
-              : `${problems.length} ${problems.length === 1 ? "thing blocks" : "things block"} a run`}
+              : `${stopping.length} ${stopping.length === 1 ? "thing blocks" : "things block"} a run`}
         </span>
       </div>
 
@@ -462,52 +571,56 @@ function RunBox({
               ⚠ permissions bypassed
             </span>
           )}
-          {run.artifacts.map((artifact) =>
-            artifact.kind === "commit" ? (
-              <span key={artifact.commitSha} className="commit">
-                ✓ {artifact.commitSha?.slice(0, 8)} · {artifact.fileCount} file
-                {artifact.fileCount === 1 ? "" : "s"}
-              </span>
-            ) : (
-              <span key={artifact.path} className="worktree" title={artifact.path}>
+          {run.artifacts.map((artifact) => {
+            const key = `${artifact.kind}-${artifact.commitSha ?? artifact.path}`;
+            if (artifact.kind === "commit") {
+              return (
+                <span key={key} className="commit">
+                  ✓ {artifact.commitSha?.slice(0, 8)} · {artifact.fileCount} file
+                  {artifact.fileCount === 1 ? "" : "s"}
+                </span>
+              );
+            }
+            if (artifact.kind === "push") {
+              return (
+                <span key={key} className="commit" title={artifact.detail}>
+                  ↥ pushed to {artifact.remote}
+                </span>
+              );
+            }
+            if (artifact.kind === "merge") {
+              // The one artifact worth its own emphasis: a branch other people
+              // pull from has moved.
+              return (
+                <span key={key} className="danger" title={artifact.detail}>
+                  ⇢ {artifact.remote}/{artifact.mergedInto} fast-forwarded
+                </span>
+              );
+            }
+            return (
+              <span key={key} className="worktree" title={artifact.path}>
                 isolated worktree{artifact.baseBranch ? ` from ${artifact.baseBranch}` : ""}
               </span>
-            ),
-          )}
+            );
+          })}
         </p>
       )}
 
-      {/* The request: submitted once, not a chat (DESIGN.md, open question 2).
-          It appears where the run is, not in a modal, so the canvas never goes
-          away while you answer it. */}
-      {awaiting && (
-        <form
-          className="request"
-          onSubmit={(event) => {
-            event.preventDefault();
-            if (request.trim()) void run.submit(request.trim());
-          }}
-        >
-          <label htmlFor="run-request">What should this factory do?</label>
-          <textarea
-            id="run-request"
-            className="nodrag nowheel"
-            autoFocus
-            rows={3}
-            value={request}
-            placeholder="Tidy the README and fix the broken link."
-            onChange={(event) => setRequest(event.target.value)}
-            onKeyDown={(event) => {
-              if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
-                event.currentTarget.form?.requestSubmit();
-              }
-            }}
-          />
-          <button className="primary" type="submit" disabled={!request.trim() || run.busy}>
-            Submit the request
-          </button>
-        </form>
-      )}
+      {/* One form per input node still waiting — submitted once each, and not
+          a chat (DESIGN.md, open question 2). They appear where the run is
+          rather than in a modal, so the canvas never goes away while you
+          answer. The *run record* decides which are shown: the walk starts on
+          the last submission, so a form that vanished because the server said
+          so cannot disagree with the server. */}
+      {run.awaiting.map((node_run) => (
+        <InputForm
+          key={node_run.node_id}
+          nodeRun={node_run}
+          busy={run.busy}
+          remaining={run.awaiting.length}
+          onSubmit={(text, options) => void run.submit(text, options)}
+        />
+      ))}
 
       {run.status && !run.live && (
         <p className="ready">
@@ -543,10 +656,15 @@ function RunBox({
         </ul>
       )}
 
-      {!run.status && !runnable && (
+      {/* Blockers and notices in one list, because they belong in one place on
+          the page. Only the blockers disable Run. */}
+      {!run.status && problems.length > 0 && (
         <ul className="problems">
           {problems.map((problem) => (
-            <li key={problem.message}>
+            <li
+              key={problem.message}
+              className={problem.severity === "notice" ? "notice" : undefined}
+            >
               <button
                 onClick={() => onFocus(problem.nodeIds)}
                 disabled={problem.nodeIds.length === 0}
@@ -559,15 +677,144 @@ function RunBox({
         </ul>
       )}
 
-      {!run.status && runnable && (
+      {!run.status && runnable && notices.length === 0 && (
         <p className="ready">Every machine is on the line and every agent has a codebase.</p>
       )}
 
       <p className="stage-note">
         One run at a time. The agent works in its own git worktree on{" "}
         <code>factor-ia/&lt;factory&gt;/&lt;run&gt;</code> — your working tree is
-        never touched, and the branch is what it leaves behind.
+        never touched, and the branch is what it leaves behind. A pushing output
+        sends that branch to the remote; nothing is ever forced, and your local
+        branches only move when you pull.
       </p>
     </div>
+  );
+}
+
+/**
+ * What one input node asks a human for.
+ *
+ * A `request` wants a sentence and a `prd` wants a document, which is the whole
+ * reason input submission became per-node: broadcasting one string to every
+ * input node stopped being a simplification the moment the two kinds existed.
+ *
+ * The PRD arrives as a **file read in the browser** and posted as text. No
+ * upload endpoint, no file on disk to clean up, and — the reason that decided
+ * it — no second path into the container that takes a filename. The name is
+ * carried alongside purely as a label: it is shown, and written into the
+ * commit's `Factor-ia-Source` trailer, and nothing ever opens it.
+ */
+function InputForm({
+  nodeRun,
+  busy,
+  remaining,
+  onSubmit,
+}: {
+  nodeRun: NodeRun;
+  busy: boolean;
+  remaining: number;
+  onSubmit: (text: string, options: { nodeId: string; filename?: string }) => void;
+}) {
+  const [text, setText] = useState("");
+  const [filename, setFilename] = useState<string | null>(null);
+  const [reading, setReading] = useState(false);
+  const [problem, setProblem] = useState<string | null>(null);
+  const isPrd = nodeRun.kind === "prd";
+  const name = nodeRun.label || nodeRun.node_id;
+
+  const take = async (file: File | undefined) => {
+    if (!file) return;
+    setProblem(null);
+    setReading(true);
+    try {
+      const contents = await file.text();
+      if (!contents.trim()) {
+        setProblem(`${file.name} is empty.`);
+        return;
+      }
+      setText(contents);
+      setFilename(file.name);
+    } catch (cause) {
+      setProblem(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setReading(false);
+    }
+  };
+
+  return (
+    <form
+      className="request"
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (!text.trim()) return;
+        onSubmit(isPrd ? text : text.trim(), {
+          nodeId: nodeRun.node_id,
+          filename: filename ?? undefined,
+        });
+      }}
+    >
+      <label htmlFor={`run-input-${nodeRun.node_id}`}>
+        {isPrd ? `${name} — hand over a PRD` : "What should this factory do?"}
+        {remaining > 1 && <span className="hint"> · {remaining} inputs waiting</span>}
+      </label>
+
+      {isPrd ? (
+        <div
+          className={`prd-drop${filename ? " has-file" : ""}`}
+          onDragOver={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            event.dataTransfer.dropEffect = "copy";
+          }}
+          onDrop={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            void take(event.dataTransfer.files[0]);
+          }}
+        >
+          <input
+            id={`run-input-${nodeRun.node_id}`}
+            className="nodrag"
+            type="file"
+            accept=".md,.markdown,.txt,text/markdown,text/plain"
+            onChange={(event) => void take(event.target.files?.[0])}
+          />
+          {filename ? (
+            <span className="prd-chosen">
+              <span className="mono">{filename}</span>
+              <span className="hint">
+                {" "}
+                · {text.split(/\r?\n/).length} lines, {Math.ceil(text.length / 1024)} kB
+              </span>
+            </span>
+          ) : (
+            <span className="hint">
+              {reading ? "Reading…" : "Drop a PRD.md here, or choose one."}
+            </span>
+          )}
+        </div>
+      ) : (
+        <textarea
+          id={`run-input-${nodeRun.node_id}`}
+          className="nodrag nowheel"
+          autoFocus
+          rows={3}
+          value={text}
+          placeholder="Tidy the README and fix the broken link."
+          onChange={(event) => setText(event.target.value)}
+          onKeyDown={(event) => {
+            if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+              event.currentTarget.form?.requestSubmit();
+            }
+          }}
+        />
+      )}
+
+      {problem && <p className="problems-note">{problem}</p>}
+      <button className="primary" type="submit" disabled={!text.trim() || busy || reading}>
+        {isPrd ? "Submit the PRD" : "Submit the request"}
+      </button>
+    </form>
   );
 }

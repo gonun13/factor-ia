@@ -49,7 +49,18 @@ from . import config, gitwork
 from .agent.claude import PermissionDenied, resolve_permission_mode
 from .api import validate_graph
 from .discovery import discover_codebases
-from .models import Codebase, Edge, Factory, Node
+from . import sshkeys
+from .models import (
+    INPUT_KINDS,
+    OUTPUT_KINDS,
+    PUSHING_OUTPUT_KINDS,
+    Codebase,
+    Edge,
+    Factory,
+    Node,
+    node_kind,
+    node_remote,
+)
 
 
 class NotRunnable(Exception):
@@ -92,11 +103,18 @@ def run_problems(
         by_type.setdefault(node.definition.type, []).append(node)
 
     if not by_type.get("input"):
-        problems.append("No request node — a run has nothing to submit.")
+        problems.append(
+            "No input node — a factory starts with one, and a run has nothing "
+            "to submit without it."
+        )
     if not by_type.get("agent"):
         problems.append("No agent node — nothing would do any work.")
     if not by_type.get("output"):
-        problems.append("No commit node — the run would produce nothing.")
+        problems.append(
+            "No output node — a factory ends with one, and the run would "
+            "produce nothing without it."
+        )
+    problems += _kind_problems(nodes, label)
 
     for node in by_type.get("agent", []):
         attached = node.definition.codebase_id
@@ -111,6 +129,18 @@ def run_problems(
                 "longer discovered under /workspace."
             )
 
+    # "A factory starts with an input and ends with an output" — as two rules
+    # about the *ends of the line*, which is the only way to state it that a
+    # graph can be checked against:
+    #
+    #   every node with no incoming belt is an input;
+    #   every node with no outgoing belt is an output;
+    #
+    # and their mirror image, that an input is never fed and an output never
+    # feeds. The canvas enforces the mirror image by drawing no target handle on
+    # an input and no source handle on an output, so it is unreachable by
+    # dragging — but `main.json` is a file a human edits in a pull request, and
+    # a rule the UI happens to make awkward is not a rule.
     incoming = {edge.target for edge in edges}
     outgoing = {edge.source for edge in edges}
     for node in nodes:
@@ -124,6 +154,28 @@ def run_problems(
         if off_line:
             problems.append(f"“{label(node)}” is not on the line — connect it with a belt.")
 
+        if kind == "input" and node.id in incoming:
+            problems.append(
+                f"“{label(node)}” is an input, so nothing may feed it — a factory "
+                "starts with its inputs."
+            )
+        elif kind == "output" and node.id in outgoing:
+            problems.append(
+                f"“{label(node)}” is an output, so it may not feed anything — a "
+                "factory ends with its outputs."
+            )
+        elif kind not in ("input", "output"):
+            if node.id not in incoming:
+                problems.append(
+                    f"“{label(node)}” starts a line but is not an input — a factory "
+                    "starts with an input node."
+                )
+            if node.id not in outgoing:
+                problems.append(
+                    f"“{label(node)}” ends a line but is not an output — a factory "
+                    "ends with an output node."
+                )
+
     # Cycle detection is the one blocker the client does not check, because the
     # client never has to walk the graph. The orchestrator does, and a cycle is
     # how a topological walk becomes an infinite one. Loops are a named later
@@ -133,6 +185,9 @@ def run_problems(
         problems.append("The belts form a loop — a run walks the graph once, top to bottom.")
 
     problems += _git_problems(by_type.get("agent", []), known_codebases, tree_state)
+    problems += _remote_problems(
+        by_type.get("output", []), by_type.get("agent", []), known_codebases, tree_state
+    )
     problems += _permission_problems(by_type.get("agent", []), label)
 
     for node in nodes:
@@ -142,6 +197,112 @@ def run_problems(
                 "executes yet."
             )
     return problems
+
+
+def _kind_problems(nodes: list[Node], label: Callable[[Node], str]) -> list[str]:
+    """An input or output node whose `config["kind"]` is not one this server
+    executes.
+
+    Checked at run time rather than at save time on purpose, and it is the same
+    reasoning that keeps a half-drawn canvas saveable: `config` is freeform, a
+    factory file may have been written by a newer Factor-ia than this one, and
+    refusing to *load* it would strand the operator with a file they cannot open
+    to fix. Refusing to *run* it names the node and the word it does not know.
+    """
+    problems: list[str] = []
+    for node in nodes:
+        kind = node.definition.type
+        if kind == "input" and node_kind(node) not in INPUT_KINDS:
+            problems.append(
+                f"Input “{label(node)}” is of kind {node_kind(node)!r}, which this "
+                f"version does not know how to ask for ({', '.join(sorted(INPUT_KINDS))})."
+            )
+        elif kind == "output" and node_kind(node) not in OUTPUT_KINDS:
+            problems.append(
+                f"Output “{label(node)}” is of kind {node_kind(node)!r}, which this "
+                f"version does not know how to produce ({', '.join(sorted(OUTPUT_KINDS))})."
+            )
+    return problems
+
+
+def _remote_problems(
+    outputs: list[Node],
+    agents: list[Node],
+    known: dict[str, Codebase],
+    tree_state: Callable[[str], gitwork.TreeState],
+) -> list[str]:
+    """Everything a `commit-push` / `commit-merge` node needs that a plain
+    `commit` node does not — asked **before** an agent has been paid for.
+
+    This is the most expensive check in the module: `remote_reachable` opens a
+    connection to the forge. It earns it. A push that fails is a run whose whole
+    cost has already been spent, whose work is sitting on a local branch the
+    operator did not ask for, and whose failure — a missing deploy key — takes a
+    minute to fix and would have been free to discover.
+
+    The `commit-merge` extras are about the *base* branch, because that is what
+    it fast-forwards: a detached HEAD has no base branch to name, and a base
+    branch is the operator's own checked-out branch (`RunWorktree.base_branch`),
+    not a remote default looked up over the wire.
+    """
+    pushing = [node for node in outputs if node_kind(node) in PUSHING_OUTPUT_KINDS]
+    if not pushing:
+        return []
+
+    merging = any(node_kind(node) == "commit-merge" for node in pushing)
+    problems: list[str] = []
+    # The *public* half, because `run_problems` is synchronous (it runs in a
+    # thread) and `sshkeys.status()` is not — and because this module has no
+    # business touching the private key even to stat it (`sshkeys`, module
+    # docstring). A generated pair always has both halves; a missing public half
+    # means no pair was generated.
+    has_key = sshkeys.public_key_path().exists()
+    checked: set[tuple[str, str]] = set()
+
+    for node in pushing:
+        remote = node_remote(node)
+        for agent in agents:
+            codebase = known.get(agent.definition.codebase_id or "")
+            if codebase is None or (codebase.id, remote) in checked:
+                continue
+            checked.add((codebase.id, remote))
+
+            state = tree_state(codebase.path)
+            if not state.is_repo:
+                continue  # already reported by `_git_problems`
+            if merging and (state.detached or not state.branch):
+                problems.append(
+                    f"“{codebase.name}” is on a detached HEAD, so a commit & merge "
+                    "output has no base branch to fast-forward. Check out a branch "
+                    "first."
+                )
+
+            url = gitwork.remote_url(codebase.path, remote)
+            if url is None:
+                problems.append(
+                    f"“{codebase.name}” has no remote named {remote!r}, so its branch "
+                    "cannot be pushed. Add one, or use a plain commit output."
+                )
+                continue
+            if _is_ssh(url) and not has_key:
+                problems.append(
+                    f"“{codebase.name}” pushes over ssh ({url}) and this container has "
+                    "no key. Generate one in Settings and add the public half to your "
+                    "forge."
+                )
+                continue
+            reachable, said = gitwork.remote_reachable(codebase.path, remote)
+            if not reachable:
+                problems.append(
+                    f"“{codebase.name}”: {remote} ({url}) could not be reached — {said}"
+                )
+    return problems
+
+
+def _is_ssh(url: str) -> bool:
+    """`git@host:path` and `ssh://…` push over ssh and need the container's key;
+    `https://…` and a local path do not."""
+    return url.startswith("ssh://") or ("@" in url.split("/", 1)[0] and ":" in url)
 
 
 def _git_problems(

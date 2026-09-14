@@ -25,6 +25,32 @@ The agent node carries both its knowledge base and its operating target,
 because those are the two things an operator needs to see without clicking
 anything.
 
+### Provider and model are set once, overridden where it matters
+
+The cog in the topbar opens **Project settings**: the provider every agent in
+this project runs on, and the model. Both start as *inherit* — the provider
+falls through to the container's own, the model to whatever the CLI reports as
+its default. Neither is ever a model id Factor-ia picked.
+
+Every agent node then carries a second plate, under the codebase: **model**. It
+reads *— project default (…) —*, which names what the default currently resolves
+to, so you can see what a machine will run on without opening anything. Pick a
+specific model there when one machine on the line needs something different;
+that is a property of the agent, so it lives on the agent and saves with the
+factory file.
+
+The settings panel saves on its own button, immediately. It writes to the
+machine-local project registry, not to the git-tracked factory — so it never
+touches the dirty pill, and ⌘S never writes it.
+
+A model the CLI has stopped offering is shown as such and kept, never silently
+swapped for one nobody chose. It is refused at run time by the CLI, in the CLI's
+own words.
+
+While a node runs, it says what it **actually** ran on — read off the provider's
+own first event, not off what was requested. Those differ every time both rungs
+deferred and the CLI decided.
+
 ### Saving is explicit, not autosave
 
 **Save**, or ⌘/Ctrl-S. The server has no optimistic concurrency, so two tabs on

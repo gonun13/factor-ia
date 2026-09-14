@@ -183,6 +183,46 @@ class RunWorkspaces:
         made.stat = result.stat
         return made
 
+    def push(
+        self,
+        made: RunWorktree,
+        *,
+        remote: str,
+        merge_into: str | None = None,
+    ) -> RunWorktree:
+        """Put the run's branch on `remote`, and optionally fast-forward a base
+        branch to it — the `commit-push` and `commit-merge` output kinds.
+
+        **Two pushes, in this order, and the order is the safety property.** The
+        branch goes up first and the base branch second, so a `commit-merge`
+        that is refused as a non-fast-forward still leaves the work on the
+        remote under its own ref: the operator opens a pull request instead of
+        losing the push entirely. Doing it the other way round would mean a
+        failed merge and nothing to show for the run.
+
+        There is no local merge and no local ref update anywhere in this method.
+        `merge_into` is a branch name on the *remote*, fast-forwarded by the
+        remote because we never pass `--force` (`gitwork.push_ref`).
+        """
+        if made.commit_sha is None:
+            # Never reached from `_run_output`, which fails the node on an empty
+            # commit first. Stated anyway, because "push whatever is on the
+            # branch" is the wrong answer to being called out of order.
+            raise gitwork.GitError(
+                ["push"], -1, "nothing was committed, so there is nothing to push"
+            )
+        made.remote = remote
+        branch = gitwork.push_ref(made.path, made.branch, made.branch, remote=remote)
+        made.pushed_branch = made.branch
+        details = [branch.detail]
+
+        if merge_into:
+            merged = gitwork.push_ref(made.path, made.branch, merge_into, remote=remote)
+            made.merged_into = merge_into
+            details.append(merged.detail)
+        made.push_detail = " · ".join(part for part in details if part)
+        return made
+
     def cleanup(self, status: RunStatus | str) -> list[RunWorktree]:
         """Apply the policy in the module docstring. Returns what was kept.
 
@@ -220,12 +260,18 @@ def commit_message(
     factory_name: str,
     run_id: str,
     agent_summary: str = "",
+    sources: list[str] | None = None,
 ) -> str:
     """What the commit says. Subject from the request, trailers for the run.
 
     The request is the only thing a human wrote, so it is the subject. The
     trailers are how a commit found six months later leads back to the run log
     that produced it — `/data/runs/<run-id>/` is a directory name, not a guess.
+
+    `sources` names the documents the run was fed — a `prd` input node's
+    filename. It is a trailer rather than body text because it is a reference,
+    and because a reader scanning `git log` for "which PRD produced this?"
+    wants one greppable line.
     """
     first = " ".join(request.strip().split())
     subject = (first[:68] + "…") if len(first) > 69 else first
@@ -238,4 +284,5 @@ def commit_message(
         f"Factory: {factory_name}",
         f"Factor-ia-Run: {run_id}",
     ]
+    body += [f"Factor-ia-Source: {source}" for source in (sources or [])]
     return "\n".join(body) + "\n"

@@ -104,7 +104,13 @@ export function reduceRunEvent(state: RunState, event: RunEvent): RunState {
     case "run.input":
       return {
         ...state,
-        runtimes: withNode(state.runtimes, event.node_id, { text: event.text }),
+        runtimes: withNode(state.runtimes, event.node_id, {
+          // A PRD is a document, and a node is not a document viewer. The
+          // shell's `<pre>` scrolls, so the whole thing is there to read — but
+          // what the node is *for* is saying which document produced this run,
+          // so the filename leads.
+          text: event.filename ? `${event.filename}\n\n${event.text}` : event.text,
+        }),
       };
     case "run.cost":
       return {
@@ -125,6 +131,8 @@ export function reduceRunEvent(state: RunState, event: RunEvent): RunState {
         commitSha: event.commit_sha,
         fileCount: event.file_count,
         detail: event.detail,
+        remote: event.remote,
+        mergedInto: event.merged_into,
       };
       return {
         ...state,
@@ -171,10 +179,16 @@ function reduceAgent(runtimes: Runtimes, nodeId: string, event: AgentEvent): Run
       return withNode(runtimes, nodeId, {
         detail: `asked to use ${event.tool_name} — denied by policy (no human is watching an unattended run)`,
       });
+    case "session.init":
+      // The one thing worth taking off this event: the model the provider
+      // actually chose. Which is not necessarily the one anything asked for —
+      // a node and a project may both defer, and then the CLI decides. The
+      // node reports what happened rather than what was requested.
+      return event.model ? withNode(runtimes, nodeId, { model: event.model }) : runtimes;
     default:
-      // `thinking.delta`, `tool.delta`, `session.init`, `turn.end`, `exit`:
-      // logged and replayable, but the node's surface says nothing about them.
-      // An event this reducer ignores is still in `events.jsonl`.
+      // `thinking.delta`, `tool.delta`, `turn.end`, `exit`: logged and
+      // replayable, but the node's surface says nothing about them. An event
+      // this reducer ignores is still in `events.jsonl`.
       return runtimes;
   }
 }
@@ -287,18 +301,30 @@ export function useRun(projectId: string, factoryId: string) {
   }, [projectId, factoryId, watch]);
 
   const submit = useCallback(
-    async (text: string) => {
+    async (text: string, options: { nodeId?: string; filename?: string } = {}) => {
       const runId = state.run?.id;
       if (!runId) return;
       setState((previous) => ({ ...previous, busy: true, error: null }));
       try {
-        const run = await api.submitRunInput(runId, text);
-        setState((previous) => ({ ...previous, run, busy: false }));
+        const run = await api.submitRunInput(runId, text, options);
+        // The run record is the authority on which inputs are still waiting —
+        // the walk starts on the *last* submission, so a form that disappeared
+        // because the server said so cannot disagree with the server.
+        setState((previous) => ({ ...previous, run, status: run.status, busy: false }));
       } catch (cause) {
         setState((previous) => ({ ...previous, busy: false, error: message(cause) }));
       }
     },
     [state.run?.id],
+  );
+
+  /** The input nodes that still need a human, in factory order. */
+  const awaiting = useMemo(
+    () =>
+      (state.run?.node_runs ?? []).filter(
+        (node_run) => node_run.type === "input" && node_run.status === "waiting_input",
+      ),
+    [state.run],
   );
 
   const cancel = useCallback(async () => {
@@ -323,5 +349,5 @@ export function useRun(projectId: string, factoryId: string) {
     [state.status],
   );
 
-  return { ...state, live, start, submit, cancel, watch, clear };
+  return { ...state, live, awaiting, start, submit, cancel, watch, clear };
 }
