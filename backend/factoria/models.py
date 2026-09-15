@@ -29,7 +29,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 # Bumped when the on-disk shape changes incompatibly. Present from the first
 # file written, because adding a version field to files that lack one is the
@@ -43,6 +43,100 @@ union with no UI and no execution support — see module docstring."""
 PayloadKind = Literal["text"]
 """Open question 4: freeform text for v1. A typed artifact (diff / file set /
 structured result) joins this union when nested factories need composing."""
+
+InputKind = Literal["request", "prd"]
+"""What an `input` node asks a human for.
+
+**A kind, not a node type.** Both are `NodeType == "input"`, and the difference
+lives in `definition.config["kind"]`. That is what keeps *"a factory starts with
+an input and ends with an output"* a rule about the type union — one check, not
+a list of type names that has to be extended every time a new way of asking for
+work is added. It also keeps the file format at `schema_version: 1`: a node
+whose `config` gained a key still loads in a reader that has never heard of it,
+and falls back to `request`, which is what it used to be.
+"""
+
+OutputKind = Literal["commit", "commit-push", "commit-merge"]
+"""What an `output` node does with the branch the run produced.
+
+Strictly increasing reach, and each step is one the operator drew on purpose:
+
+- `commit` — the branch is left in the operator's own repository. Nothing
+  leaves the machine.
+- `commit-push` — the run's branch is also pushed to the remote, still on its
+  own ref. A reviewer elsewhere can see it; nothing they depend on moved.
+- `commit-merge` — the run's branch is pushed *and* the base branch is
+  fast-forwarded to it **on the remote** (`git push origin <branch>:<base>`).
+
+`commit-merge` is the one that breaks a straight reading of `DESIGN.md`'s
+*"no writes to the default branch"*, and it does so deliberately: an operator
+who drew that node asked for exactly this. What it does **not** do is relax the
+guarantee that matters more — the merge happens on the remote as a
+fast-forward, so nothing rewrites history and the operator's own working tree is
+still never the cwd of anything. See `gitwork._check`.
+"""
+
+HumanKind = Literal["approval"]
+"""What a `human` node asks a person for.
+
+One member so far, and a kind rather than a node type for the same reason
+`InputKind` is one: *"a factory starts with an input and ends with an output"*
+stays a rule about the type union, and a human node that later learns to ask
+for an edit or a redirection is a new word in `config["kind"]` rather than a
+sixth member of `NodeType`.
+"""
+
+AgentKind = Literal["worker", "reviewer"]
+"""What an `agent` node is for.
+
+The third kind vocabulary, and the one that finally gives an agent a *job* as
+well as a codebase:
+
+- `worker` — does the thing it is asked to do. One way out, like an input node:
+  it produced its output, and there is nothing for it to have an opinion about.
+- `reviewer` — judges what it is given and says so in a verdict
+  (`verdict.py`). Two ways out, and its `fail` belt is the one belt in the
+  whole graph allowed to close a loop.
+
+**A kind, not a node type**, for the reason `InputKind` gives: a reviewer is
+still an agent — same adapter, same worktree, same skill — and making it a
+sixth `NodeType` would put the difference in the one place that is a file
+format change rather than a config key.
+
+`worker` is the default, and that is a statement about files already on disk:
+an agent node written before this existed has no `kind`, and what it has always
+done is work.
+"""
+
+DEFAULT_INPUT_KIND: InputKind = "request"
+DEFAULT_OUTPUT_KIND: OutputKind = "commit"
+DEFAULT_HUMAN_KIND: HumanKind = "approval"
+DEFAULT_AGENT_KIND: AgentKind = "worker"
+
+INPUT_KINDS: frozenset[str] = frozenset({"request", "prd"})
+OUTPUT_KINDS: frozenset[str] = frozenset({"commit", "commit-push", "commit-merge"})
+HUMAN_KINDS: frozenset[str] = frozenset({"approval"})
+AGENT_KINDS: frozenset[str] = frozenset({"worker", "reviewer"})
+
+#: `commit-push` and `commit-merge` need a remote to push to; `commit` does not.
+PUSHING_OUTPUT_KINDS: frozenset[str] = frozenset({"commit-push", "commit-merge"})
+
+#: The remote a pushing output node uses when its config names none.
+DEFAULT_REMOTE = "origin"
+
+EdgeOutcome = Literal["success", "fail"]
+"""Which of a node's two outcomes a belt carries away.
+
+**The port, not a new field.** It rides on `Edge.source_handle`, which React
+Flow has always set and which has always round-tripped through the factory file
+— so a graph that says what happens when a machine fails is not a file format
+change, and `schema_version` stays at 1. `None` means `success`, which is what
+makes every belt already on disk, and every belt out of an input node, mean
+exactly what it meant before this existed.
+"""
+
+DEFAULT_EDGE_OUTCOME: EdgeOutcome = "success"
+EDGE_OUTCOMES: frozenset[str] = frozenset({"success", "fail"})
 
 Slug = Annotated[str, Field(pattern=r"^[a-z0-9][a-z0-9-]{0,63}$")]
 
@@ -73,6 +167,35 @@ class Codebase(Base):
     name: str
     path: str
     branch: str | None = None
+
+
+class SkillSummary(Base):
+    """A standing-instructions document under /workspace/_skills, as metadata.
+
+    Like `Codebase`, this is *discovered* rather than owned: the file is the
+    record, git is the history, and this server only reads the directory. The
+    filename is the name — see `skills.py` for why that is stricter than a
+    path segment needs to be.
+    """
+
+    name: str
+    #: The frontmatter's `description`. Required, because it is the only thing
+    #: an agent node's picker can show about a skill it has not opened.
+    description: str
+    bytes: int = 0
+    #: The file's mtime, not a field we wrote: a skill edited by hand in the
+    #: workspace and committed is the normal way one changes.
+    updated_at: datetime
+
+
+class Skill(SkillSummary):
+    """A skill and its body — everything after the frontmatter, verbatim.
+
+    The body is what gets appended to an agent's system prompt, so it is
+    round-tripped byte for byte rather than re-rendered.
+    """
+
+    body: str
 
 
 class CodebaseGit(Base):
@@ -115,6 +238,100 @@ class NodeDefinition(Base):
     # Set on `factory-ref` nodes: the factory this node stands for. Unused by
     # the MVP, present so nesting is a UI change rather than a format change.
     factory_ref: str | None = None
+
+
+def node_kind(node_or_definition: "Node | NodeDefinition") -> str:
+    """The `kind` out of a node's freeform config, defaulted by node type.
+
+    One function rather than two so every caller — validation, the run check,
+    the orchestrator's dispatch, the summary — reads the kind the same way. An
+    unrecognised value is returned **as written**: this is a reader, and saying
+    `"commit"` about a node whose file says `"commit-deploy"` would turn a
+    validation error into a silently different action.
+    """
+    definition = (
+        node_or_definition.definition
+        if isinstance(node_or_definition, Node)
+        else node_or_definition
+    )
+    raw = definition.config.get("kind")
+    if raw is None or not str(raw).strip():
+        if definition.type == "input":
+            return DEFAULT_INPUT_KIND
+        if definition.type == "output":
+            return DEFAULT_OUTPUT_KIND
+        if definition.type == "human":
+            return DEFAULT_HUMAN_KIND
+        if definition.type == "agent":
+            return DEFAULT_AGENT_KIND
+        return ""
+    return str(raw).strip()
+
+
+def has_outcome_ports(node_or_definition: "Node | NodeDefinition") -> bool:
+    """Whether this node splits its outcome across `success` and `fail` ports.
+
+    **A function of the node, not of its type.** This was a frozenset of type
+    names until agents grew kinds, and it could not stay one: a worker and a
+    reviewer are both `type == "agent"` and answer this differently. Everything
+    else keeps the answer it always had — an input has nothing to fail at, an
+    output that fails has nowhere left to route, and a human node is asked a
+    yes-or-no question and so has always had two ways out.
+
+    A worker's single way out is the whole of what "worker" means. The cost,
+    stated because it is real: a worker that crashes has no belt to route down
+    and ends the run, exactly as an output node that fails does.
+    """
+    definition = (
+        node_or_definition.definition
+        if isinstance(node_or_definition, Node)
+        else node_or_definition
+    )
+    if definition.type == "human":
+        return True
+    if definition.type == "agent":
+        return node_kind(definition) == "reviewer"
+    return False
+
+
+def node_remote(node_or_definition: "Node | NodeDefinition") -> str:
+    """The remote a pushing output node targets. `origin` unless it says so."""
+    definition = (
+        node_or_definition.definition
+        if isinstance(node_or_definition, Node)
+        else node_or_definition
+    )
+    raw = definition.config.get("remote")
+    return str(raw).strip() if raw and str(raw).strip() else DEFAULT_REMOTE
+
+
+def node_prompt(node_or_definition: "Node | NodeDefinition") -> str:
+    """The question a `human` node puts to the operator. Empty unless it says."""
+    definition = (
+        node_or_definition.definition
+        if isinstance(node_or_definition, Node)
+        else node_or_definition
+    )
+    raw = definition.config.get("prompt")
+    return str(raw).strip() if raw else ""
+
+
+def edge_outcome(edge: "Edge") -> str:
+    """Which outcome this belt carries away from its source.
+
+    The same contract as `node_kind`, and for the same reason: a handle this
+    version has never heard of is returned **as written** rather than defaulted,
+    so it is refused at run time by name (`runcheck._outcome_problems`) instead
+    of silently behaving like a success belt. Saying `"success"` about a belt
+    whose file says `"timeout"` would route a run down a path nobody drew.
+
+    `None` is not an unknown value — it is what every belt on disk says, and it
+    has always meant the node's one and only way out.
+    """
+    raw = edge.source_handle
+    if raw is None or not str(raw).strip():
+        return DEFAULT_EDGE_OUTCOME
+    return str(raw).strip()
 
 
 NodeStatus = Literal["pending", "waiting_input", "running", "succeeded", "failed"]
@@ -214,6 +431,33 @@ class FactorySummary(Base):
     updated_at: datetime
 
 
+class ProjectSettings(Base):
+    """Project-wide defaults an agent node inherits unless it overrides them.
+
+    Both fields are `None`, and `None` means *ask nobody*: the provider falls
+    through to the container's own, and the model to the CLI's — the only place
+    a model id is ever allowed to come from (`DESIGN.md`, Assumptions). That is
+    why neither default is a string here, and why nothing in this package ever
+    names one.
+    """
+
+    #: The adapter every agent in this project uses unless it names its own.
+    #: `None` defers to `FACTOR_IA_ADAPTER`, which defaults to the real one.
+    default_provider: Literal["claude", "fake"] | None = None
+    #: A model id as the CLI's own handshake spells it. Deliberately **not**
+    #: validated against that list: the list is a subprocess away and the CLI is
+    #: the authority, so a stale id is stored, sent, and refused by the CLI in
+    #: its own words rather than by a guess of ours.
+    default_model: str | None = Field(default=None, max_length=120)
+
+    @field_validator("default_model", mode="before")
+    @classmethod
+    def _blank_is_unset(cls, value: object) -> object:
+        # A `<select>` reset to "— CLI default —" posts `""`, and an empty
+        # string as a model id would reach the CLI as `--model ""`.
+        return None if isinstance(value, str) and not value.strip() else value
+
+
 class Project(Base):
     """A named workspace owning codebases and factories."""
 
@@ -221,6 +465,10 @@ class Project(Base):
     name: str
     # v1 attaches exactly one; the model allows many (`DESIGN.md`, Data model).
     codebase_ids: list[str] = Field(default_factory=list)
+    # Last, so an existing registry gains a key rather than changing shape — a
+    # file written before this field existed loads with the default and needs
+    # no migration and no `schema_version` bump.
+    settings: ProjectSettings = Field(default_factory=ProjectSettings)
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)
 
@@ -245,6 +493,11 @@ class ProjectCreate(Base):
 class ProjectUpdate(Base):
     name: str | None = Field(default=None, min_length=1, max_length=80)
     codebase_ids: list[str] | None = None
+    #: Replaced whole, not merged. The panel that sends this has one Save button
+    #: and always knows both fields; a per-field update model could not express
+    #: "clear this one" without inventing a sentinel. Omitting the key leaves
+    #: the project's settings exactly as they were.
+    settings: ProjectSettings | None = None
 
 
 class FactoryCreate(Base):
@@ -299,6 +552,19 @@ class NodeRun(Base):
 
     node_id: str
     type: NodeType
+    #: The node's `config["kind"]` at the moment the run was created — `request`
+    #: or `prd` on an input, `commit`/`commit-push`/`commit-merge` on an output.
+    #: Copied rather than re-read, because the factory file is editable while a
+    #: run is in flight and a run record has to describe the run that happened.
+    kind: str = ""
+    #: The node's label, likewise frozen. It is what the run surface calls this
+    #: node when it asks a human for something, and a run that is being watched
+    #: from a second tab has no canvas to read it off.
+    label: str = ""
+    #: A `human` node's question, frozen the same way and for the same reason:
+    #: it is what the operator is asked, and the tab doing the asking may not
+    #: be the one that drew it.
+    prompt: str = ""
     status: NodeStatus = "pending"
     #: Why it is in that state, in words a human reads on the canvas.
     detail: str | None = None
@@ -307,10 +573,38 @@ class NodeRun(Base):
     #: Per-node cost, accumulated from **deltas** of the adapter's cumulative
     #: `turn.end.total_cost_usd` — see `orchestrator.py`.
     cost_usd: float = 0.0
+    #: The skill in force on this node, frozen like `kind` and `label`. `""`
+    #: when it wore none. What an agent was told to be is part of the record of
+    #: what it did.
+    skill: str = ""
     #: The provider session this node ran as, for correlation with the log.
     session_id: str | None = None
+    #: The model this node ran on. Set when the run is created to what the graph
+    #: and the project *asked for* (`""` when both defer to the CLI), then
+    #: overwritten by `session.init`, which reports what the CLI actually chose.
+    #: One field rather than a requested/actual pair: the two differ only
+    #: between the spawn and that first event, and a run that dies in that
+    #: window keeps the request — which is the whole debugging value a second
+    #: field would have carried.
+    model: str = ""
     #: What travels down the outgoing belts. Freeform text (open question 4).
     output_text: str = ""
+    #: The name of the file a `prd` input node was given, for the log and the
+    #: commit trailer. The *contents* are `output_text`; this is the label.
+    filename: str | None = None
+    #: How many times this node has run. Above 1 only inside a loop — a
+    #: reviewer's fail belt sent the work back and the body ran again.
+    #:
+    #: **A counter, not a history.** The fields above are the *newest* lap's
+    #: (`output_text`, `detail`, `session_id`) except `cost_usd`, which is every
+    #: lap's. Nothing is lost by that: `events.jsonl` is append-only and never
+    #: rewritten (`runlog.py`), so each lap's full transcript is already durable
+    #: and addressable by `seq`. This field is what `run.json` needs to say
+    #: which lap the text above came from.
+    #:
+    #: Never reset, including when an outer loop un-settles this node — which is
+    #: what makes `_walk`'s termination argument a bound rather than a hope.
+    lap: int = 0
 
 
 class RunWorktree(Base):
@@ -331,14 +625,37 @@ class RunWorktree(Base):
     branch: str
     #: What the branch was cut from, so a diff has a left-hand side.
     base_commit: str = ""
-    #: The operator's branch at the moment the worktree was made. Context for a
-    #: reviewer, and the residual risk `DESIGN.md` accepts made visible.
+    #: The branch this run is a branch *of* — resolved by `worktree.base_ref`,
+    #: which prefers the remote's copy over whatever the clone had checked out.
+    #: Also the branch a `commit-merge` fast-forwards, so it is load-bearing and
+    #: not merely context.
     base_branch: str | None = None
+    #: How `base_commit` was chosen: `remote` (a freshly fetched
+    #: remote-tracking ref — the ordinary case), `local`, or `head`. Recorded
+    #: because a run that started from a stale base is invisible otherwise, and
+    #: was invisible once for ten commits.
+    base_source: str = ""
+    #: The base as it reads to a human: `origin/main`, `main`, `HEAD`.
+    base_label: str = ""
+    #: True when a fetch ran and succeeded before the branch was cut.
+    base_fetched: bool = False
+    #: Anything unusual about the choice — a run branch skipped, a detached
+    #: HEAD, an unreachable remote. Empty when nothing was.
+    base_detail: str = ""
     commit_sha: str | None = None
     subject: str = ""
     files: list[str] = Field(default_factory=list)
     stat: str = ""
     kept: bool = False
+    #: Set by a `commit-push` / `commit-merge` output node. `pushed_branch` is
+    #: the run's own ref on the remote; `merged_into` is the base branch the
+    #: remote fast-forwarded, and is `None` for every kind but `commit-merge`.
+    #: Recorded on the run because a push is the one thing a run does that
+    #: outlives the machine it ran on, and `git` is not going to remember it.
+    remote: str = ""
+    pushed_branch: str | None = None
+    merged_into: str | None = None
+    push_detail: str = ""
 
 
 class Run(Base):
@@ -383,6 +700,47 @@ class Run(Base):
 
 
 class RunInput(Base):
-    """The request submission. Not a chat message — open question 2."""
+    """One input node's submission. Not a chat message — open question 2.
 
-    text: str = Field(min_length=1, max_length=20000)
+    `node_id` is how a factory with more than one input node — a request *and*
+    a PRD — is fed: each node is submitted once, and the walk starts when the
+    last one is in. It is optional so the single-request factory, which is
+    almost every factory, still posts `{"text": ...}` and means the obvious
+    thing; omitting it addresses every input node that is still waiting, which
+    is exactly what the endpoint did before there was more than one kind.
+
+    `max_length` is a document's, not a sentence's: a PRD is the whole point of
+    the `prd` kind and 20 kB was a limit chosen for a one-line request. It is
+    still a limit — an unbounded body is a way to fill `/data` — just one sized
+    for what now travels through here.
+    """
+
+    node_id: str | None = None
+    text: str = Field(min_length=1, max_length=400_000)
+    #: Set when the text came from a file. Displayed, and written into the
+    #: commit trailer; never used to open anything, so it is a label and not a
+    #: path — `paths.safe_name` is applied before it is stored.
+    filename: str | None = Field(default=None, max_length=255)
+
+
+class RunDecision(Base):
+    """One human node's verdict: which of its two belts the run leaves by.
+
+    A separate shape from `RunInput`, and a separate endpoint, because it is a
+    separate act. `RunInput` is a one-shot submission that *starts* a run and
+    carries the work; this answers a question the run stopped to ask, and the
+    field that matters is a boolean. Folding the two together would have made
+    both docstrings untrue.
+
+    `node_id` is required here, unlike on `RunInput`: a run may be parked at
+    exactly one human node, but "whichever one is waiting" is a guess, and a
+    verdict posted at the wrong machine is not recoverable by re-posting.
+
+    The note is a sentence, not a document — it is why the operator said no,
+    and it becomes what the fail belt carries. `RunInput`'s 400 kB is sized for
+    a PRD; this is sized for a reason.
+    """
+
+    node_id: str
+    approved: bool
+    note: str = Field(default="", max_length=20_000)

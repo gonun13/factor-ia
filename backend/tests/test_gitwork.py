@@ -9,6 +9,7 @@ fails the day someone adds `push` to the allowlist.
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -24,9 +25,6 @@ from .conftest import git, make_git_repo
 @pytest.mark.parametrize(
     "args",
     [
-        ["push", "origin", "main"],
-        ["push", "--force", "origin", "HEAD"],
-        ["remote", "add", "evil", "git@example.com:x.git"],
         ["fetch", "--all"],
         ["reset", "--hard", "HEAD~5"],
         ["clean", "-fdx"],
@@ -34,11 +32,123 @@ from .conftest import git, make_git_repo
         ["switch", "main"],
         ["update-ref", "refs/heads/main", "HEAD"],
         ["rebase", "main"],
+        # There is no local merge and there is not going to be: it would mean
+        # writing to a branch the operator has checked out. `commit-merge`
+        # merges on the remote, with a plain non-forced push.
+        ["merge", "factor-ia/main/run-1"],
     ],
 )
 def test_the_dangerous_subcommands_do_not_exist_in_this_process(args) -> None:
     with pytest.raises(gitwork.GitDenied):
         gitwork._git(args, cwd="/tmp")
+
+
+# ---- push: the one write that leaves the machine ---------------------------
+#
+# `push` was on the list above until the `commit-push` / `commit-merge` output
+# kinds needed it. What replaced "the capability does not exist" is a shape
+# check, so these are the tests that hold the line: every way a push can be
+# turned into something else has to stay a `GitDenied`.
+
+
+@pytest.mark.parametrize(
+    "args, why",
+    [
+        (["push"], "a bare push obeys push.default, which we did not write"),
+        (["push", "origin"], "so does a push that names only a remote"),
+        (["push", "--force", "origin", "a:b"], "force"),
+        (["push", "--force-with-lease", "origin", "a:b"], "force, politely"),
+        (["push", "origin", "+a:b"], "a leading + is a force push"),
+        (["push", "--mirror", "origin", "a:b"], "mirror rewrites the whole remote"),
+        (["push", "--all", "origin", "a:b"], "every branch, not the one asked for"),
+        (["push", "--tags", "origin", "a:b"], "not a ref this process creates"),
+        (["push", "origin", "--delete", "b"], "we never delete a ref, anywhere"),
+        (["push", "origin", "a"], "one-sided refspec follows the remote's config"),
+        (["push", "origin", ":b"], "an empty source deletes the destination"),
+        (
+            ["push", "git@example.com:exfiltrate.git", "a:b"],
+            "a URL would push the operator's repo anywhere, with their own key",
+        ),
+        (["push", "../../elsewhere", "a:b"], "so would a path"),
+        (["push", "origin", "a:b", "c:d"], "one refspec, so the shape stays checkable"),
+    ],
+)
+def test_a_push_may_only_be_one_remote_name_and_one_plain_refspec(args, why) -> None:
+    with pytest.raises(gitwork.GitDenied):
+        gitwork._git(args, cwd="/tmp")
+
+
+def test_the_one_push_shape_that_is_allowed() -> None:
+    gitwork._check(["push", "origin", "factor-ia/main/run-1:factor-ia/main/run-1"])
+    gitwork._check(["push", "upstream", "factor-ia/main/run-1:main"])
+
+
+def test_remote_may_be_read_but_never_reconfigured() -> None:
+    gitwork._check(["remote", "get-url", "origin"])
+    for args in (
+        ["remote", "add", "evil", "git@example.com:x.git"],
+        ["remote", "set-url", "origin", "git@example.com:x.git"],
+        ["remote", "remove", "origin"],
+    ):
+        with pytest.raises(gitwork.GitDenied):
+            gitwork._git(args, cwd="/tmp")
+
+
+def test_a_push_reaches_a_real_remote_and_a_stale_base_is_refused(tmp_path: Path) -> None:
+    """The whole `commit-merge` safety story, against real git.
+
+    A fast-forward succeeds; the same push against a base branch that has moved
+    since the run branched is **refused by the remote**, because nothing here
+    ever passes `--force`. That refusal is the feature — it is what makes
+    "merge" mean "fast-forward or fail" rather than "this process decides how to
+    reconcile two histories".
+    """
+    bare = tmp_path / "remote.git"
+    subprocess.run(["git", "init", "-q", "--bare", "-b", "main", str(bare)], check=True)
+    repo = make_git_repo(tmp_path / "work")
+    git(repo, "remote", "add", "origin", str(bare))
+    git(repo, "push", "-q", "origin", "main")
+
+    git(repo, "branch", "factor-ia/main/run-1")
+    git(repo, "checkout", "-q", "factor-ia/main/run-1")
+    (repo / "new.txt").write_text("work\n", encoding="utf-8")
+    git(repo, "add", "new.txt")
+    git(repo, "-c", "user.name=T", "-c", "user.email=t@e.com", "commit", "-q", "-m", "work")
+
+    assert gitwork.remote_url(repo, "origin") == str(bare)
+    assert gitwork.remote_reachable(repo, "origin")[0] is True
+
+    # The branch goes up under its own name — `commit-push` stops here.
+    pushed = gitwork.push_ref(repo, "factor-ia/main/run-1", "factor-ia/main/run-1")
+    assert pushed.destination == "factor-ia/main/run-1"
+    assert "factor-ia/main/run-1" in git(bare, "branch", "--list", "factor-ia/main/run-1")
+
+    # …and `commit-merge` fast-forwards the base branch on the remote.
+    merged = gitwork.push_ref(repo, "factor-ia/main/run-1", "main")
+    assert merged.destination == "main"
+    assert git(bare, "rev-parse", "main") == git(repo, "rev-parse", "HEAD")
+
+    # Now somebody else moves main on the remote, and the same push is refused.
+    other = make_git_repo(tmp_path / "other", branch="main")
+    git(other, "remote", "add", "origin", str(bare))
+    git(other, "fetch", "-q", "origin")
+    git(other, "reset", "-q", "--hard", "origin/main")
+    (other / "theirs.txt").write_text("theirs\n", encoding="utf-8")
+    git(other, "add", "theirs.txt")
+    git(other, "-c", "user.name=T", "-c", "user.email=t@e.com", "commit", "-q", "-m", "theirs")
+    git(other, "push", "-q", "origin", "main")
+
+    (repo / "more.txt").write_text("more\n", encoding="utf-8")
+    git(repo, "add", "more.txt")
+    git(repo, "-c", "user.name=T", "-c", "user.email=t@e.com", "commit", "-q", "-m", "more")
+    with pytest.raises(gitwork.GitError) as refused:
+        gitwork.push_ref(repo, "factor-ia/main/run-1", "main")
+    assert "fast" in str(refused.value).lower() or "reject" in str(refused.value).lower()
+
+
+def test_a_missing_remote_is_a_none_rather_than_an_exception(tmp_path: Path) -> None:
+    repo = make_git_repo(tmp_path / "lonely")
+    assert gitwork.remote_url(repo, "origin") is None
 
 
 def test_a_branch_is_never_deleted_not_even_ours() -> None:

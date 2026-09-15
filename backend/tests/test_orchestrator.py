@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 
 from factoria import config
-from factoria.models import Edge, Factory, Node, NodeDefinition
+from factoria.models import Edge, Factory, Node, NodeDefinition, ProjectSettings
 from factoria.orchestrator import Orchestrator, RunBusy, RunConflict
 from factoria.runcheck import NotRunnable, run_problems, topological_order
 from factoria.runlog import RunLog, RunStore, run_dir
@@ -85,7 +85,15 @@ def test_a_whole_run_ends_succeeded_and_visits_every_node(
     assert run.node_run("n-agent").session_id
 
 
-def test_the_events_replay_the_same_story(orch: Orchestrator, factory: Factory) -> None:
+def test_the_events_replay_the_same_story(
+    test_store: Store, orch: Orchestrator, factory: Factory
+) -> None:
+    # Priced on purpose: `run.cost` is only emitted for a non-zero delta, and
+    # the fake bills nothing unless asked (see `agent/fake.py`). The story this
+    # log has to tell includes the money, so this run has to spend some.
+    factory.nodes[1].definition.config["fake_cost"] = 0.0123
+    test_store.save_factory(factory)
+
     async def go():
         run = await orch.start("demo", "main")
         await orch.submit_input(run.id, "tidy the readme")
@@ -144,9 +152,14 @@ def test_a_failing_agent_fails_the_run_and_leaves_the_rest_pending(
 
 
 def test_cost_is_summed_from_deltas_not_from_the_cumulative_number(
-    orch: Orchestrator, factory: Factory
+    test_store: Store, orch: Orchestrator, factory: Factory
 ) -> None:
     """Stage 4's note: `turn.end.total_cost_usd` accumulates for the process."""
+    # The fake bills nothing by default, so that a dry run never puts money it
+    # did not spend into the project's readout. This test is the one place that
+    # needs a turn with a price on it, and says so on the node.
+    factory.nodes[1].definition.config["fake_cost"] = 0.0123
+    test_store.save_factory(factory)
 
     async def go():
         run = await orch.start("demo", "main")
@@ -195,8 +208,16 @@ def test_cancel_stops_the_run_and_interrupts_the_adapter(
     async def go():
         run = await orch.start("demo", "main")
         await orch.submit_input(run.id, "a long job")
-        await asyncio.sleep(0.12)
+        # Waited for rather than slept past: what has to be true is that the
+        # agent is mid-stream when the cancel lands, and a fixed sleep asserts
+        # that only as long as everything before the agent — making a worktree,
+        # which shells out to git several times — stays as fast as it was the
+        # day the number was picked.
         state = orch._active[run.id]
+        for _ in range(200):
+            if state.agent_run is not None:
+                break
+            await asyncio.sleep(0.01)
         assert state.agent_run is not None, "the agent should still be streaming"
         await orch.cancel(run.id)
         return orch.get(run.id)
@@ -365,3 +386,78 @@ def test_no_secret_shaped_string_survives_into_the_event_log(
     # Still valid JSONL, and still the same events — scrubbing preserves shape.
     assert all(json.loads(line) for line in raw.splitlines() if line.strip())
     assert RunLog(run_id).replay()
+
+
+# ---- project settings reach the run ----------------------------------------
+
+
+def _set_settings(test_store: Store, **kwargs) -> None:
+    project = test_store.get_project("demo")
+    project.settings = ProjectSettings(**kwargs)
+    test_store.update_project(project)
+
+
+def test_the_requested_model_is_frozen_onto_the_node_run_at_start(
+    orch: Orchestrator, factory: Factory, test_store: Store
+) -> None:
+    """A run record says what it asked for from the moment it exists.
+
+    Before the first byte there is no `session.init` to tell us what the CLI
+    chose, and a blank field until then would make an interrupted run
+    unreadable.
+    """
+    _set_settings(test_store, default_model="test-model-x")
+    run = asyncio.run(orch.start("demo", "main"))
+    assert run.node_run("n-agent").model == "test-model-x"
+    # Only the agent. Nothing else runs on a model.
+    assert run.node_run("n-in").model == ""
+
+
+def test_editing_the_project_mid_run_does_not_rewrite_the_record(
+    orch: Orchestrator, factory: Factory, test_store: Store
+) -> None:
+    """Frozen at `start()`, exactly as `kind` and `label` are.
+
+    The registry is a file the operator can edit while a run is in flight; a run
+    record that re-read it would describe a run that never happened.
+    """
+
+    async def go():
+        _set_settings(test_store, default_model="test-model-x")
+        run = await orch.start("demo", "main")
+        _set_settings(test_store, default_model="test-model-changed")
+        await orch.submit_input(run.id, "tidy the readme")
+        await asyncio.wait_for(orch._active[run.id].task, 10)
+        return orch.get(run.id)
+
+    run = asyncio.run(go())
+    # The fake reports its own id from `session.init`, which is the honest
+    # answer to "what did it run on" and the one that wins. What matters here
+    # is that the *edited* value never appears.
+    assert run.node_run("n-agent").model == "fake-model-1"
+
+
+def test_a_run_whose_project_was_unregistered_still_starts(
+    orch: Orchestrator, factory: Factory, test_store: Store
+) -> None:
+    """A factory file can outlive its registry entry — a nested factory shared
+    from a project someone deleted, or a registry restored from a backup.
+
+    Running one of those is not the moment to start failing — it simply has no
+    project defaults to inherit.
+    """
+    # Unregister without touching the factory file, which `delete_project`
+    # would take with it.
+    test_store.registry_path.write_text('{"projects": []}', encoding="utf-8")
+    run = asyncio.run(orch.start("demo", "main"))
+    assert run.status == "waiting_input"
+    assert run.node_run("n-agent").model == ""
+
+
+def test_a_project_default_provider_reaches_the_run_record(
+    orch: Orchestrator, factory: Factory, test_store: Store, monkeypatch
+) -> None:
+    monkeypatch.delenv("FACTOR_IA_ADAPTER", raising=False)
+    _set_settings(test_store, default_provider="fake")
+    run = asyncio.run(orch.start("demo", "main"))
+    assert run.adapter == "fake"

@@ -70,13 +70,39 @@ def render(run: Run) -> str:
         lines.append(f"### {made.codebase_name or made.codebase_id}")
         lines.append("")
         lines.append(f"- Repository `{made.repo_path}`")
-        lines.append(
-            f"- Branch `{made.branch}`, cut from `{made.base_commit[:12]}`"
-            + (f" on `{made.base_branch}`" if made.base_branch else "")
-        )
+        # Where the branch was cut from, spelled out rather than implied. A
+        # conflicted pull request is almost always a stale base, and the first
+        # thing that question needs is whether the base was the remote's copy
+        # or something the clone had lying around.
+        base = f"- Branch `{made.branch}`, cut from `{made.base_commit[:12]}`"
+        if made.base_label or made.base_branch:
+            base += f" on `{made.base_label or made.base_branch}`"
+        if made.base_source == "remote" and made.base_fetched:
+            base += " (fetched)"
+        elif made.base_source in ("local", "head"):
+            base += " (local copy — not fetched)"
+        lines.append(base)
+        if made.base_detail:
+            lines.append(f"  - Base chosen this way because {made.base_detail}")
         if made.commit_sha:
             lines.append(f"- Commit `{made.commit_sha[:12]}` — {made.subject}")
             lines.append(f"- {len(made.files)} file(s) changed")
+            # A push is the one thing a run does that outlives the machine it
+            # ran on, so it belongs in the post-mortem more than anything else
+            # on this list. Stated even when the merge that followed it failed:
+            # the branch really did go up, and a reader looking for their work
+            # should be told where it is.
+            if made.pushed_branch:
+                lines.append(
+                    f"- Pushed `{made.pushed_branch}` to `{made.remote}`"
+                    + (f" — {made.push_detail}" if made.push_detail else "")
+                )
+            if made.merged_into:
+                lines.append(
+                    f"- Fast-forwarded `{made.remote}/{made.merged_into}` to this "
+                    "commit. Your local branch learns about it on the next "
+                    "`git pull`."
+                )
             if made.stat:
                 lines += ["", "```", made.stat, "```"]
             lines += [
@@ -124,9 +150,31 @@ def render(run: Run) -> str:
     lines += ["## The line", "", "| machine | kind | status | detail |", "|---|---|---|---|"]
     for node_run in run.node_runs:
         detail = (node_run.detail or "").replace("|", "\\|").replace("\n", " ")
+        # A run is over by the time this is written, so `pending` no longer
+        # means "about to start" — it means the walk never came this way, either
+        # because a branch above it was not taken or because the run ended
+        # first. Saying so is a rendering, not a sixth node state
+        # (`models.NodeStatus`).
+        status = "not reached" if node_run.status == "pending" else node_run.status
         lines.append(
-            f"| `{node_run.node_id}` | {node_run.type} | {node_run.status} | {detail} |"
+            f"| `{node_run.node_id}` | {node_run.type} | {status} | {detail} |"
         )
+
+    # Named separately rather than as a sixth table column, which would widen
+    # the line for every run to carry a fact most runs do not have. What an
+    # agent was told to *be* is not visible anywhere else in this file, and a
+    # summary that cannot say it cannot account for the output below.
+    worn = [
+        (node_run.node_id, node_run.skill)
+        for node_run in run.node_runs
+        if node_run.skill
+    ]
+    if worn:
+        lines += ["", "## Standing instructions", ""]
+        lines += [
+            f"- `{node_id}` wore the skill **{skill}** (`_skills/{skill}.md`)."
+            for node_id, skill in worn
+        ]
 
     agent_text = "\n\n".join(
         node_run.output_text.strip()

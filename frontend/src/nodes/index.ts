@@ -1,5 +1,6 @@
 import type { EdgeTypes, NodeTypes } from "@xyflow/react";
 import { AgentNode } from "./AgentNode";
+import { HumanNode } from "./HumanNode";
 import { BeltEdge } from "./BeltEdge";
 import { InputNode } from "./InputNode";
 import { OutputNode } from "./OutputNode";
@@ -9,9 +10,17 @@ import { BELT_EDGE } from "../graph";
 export const nodeTypes: NodeTypes = {
   input: InputNode,
   agent: AgentNode,
+  human: HumanNode,
   output: OutputNode,
 };
 
 export const edgeTypes: EdgeTypes = { [BELT_EDGE]: BeltEdge };
 
-export { AgentGlyph, InputGlyph, OutputGlyph, CodebaseGlyph } from "./Glyphs";
+export {
+  AgentGlyph,
+  InputGlyph,
+  OutputGlyph,
+  CodebaseGlyph,
+  HumanGlyph,
+  ReviewerGlyph,
+} from "./Glyphs";

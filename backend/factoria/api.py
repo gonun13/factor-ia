@@ -236,6 +236,14 @@ def update_project(
                 UNPROCESSABLE, f"unknown codebases: {unknown}"
             )
         project.codebase_ids = body.codebase_ids
+    if body.settings is not None:
+        # Replaced whole. No hand-rolled checking: the provider is a `Literal`,
+        # so pydantic refuses an unknown one with a 422 before this runs, and
+        # the model id is deliberately not validated against the CLI's list —
+        # that list is two subprocesses away, and a settings save that fails
+        # because the CLI is momentarily unreachable would be worse than a
+        # stale id the CLI itself refuses at spawn time.
+        project.settings = body.settings
     project.updated_at = utcnow()
     try:
         return store.update_project(project)
@@ -245,8 +253,10 @@ def update_project(
 
 @router.delete("/projects/{project_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_project(project_id: str, store: Store = StoreDep) -> Response:
-    """Unregisters the project. Its factory files under `_factories/` stay put —
-    that directory is a team-owned git repo, not ours to prune."""
+    """Unregisters the project and deletes its `_factories/<project>/` directory
+    — main factory and memory both belong to the project. A nested factory
+    (stage 6) can be shared with other projects, so if one is in there, it and
+    the directory stay and only the main factory goes."""
     try:
         store.delete_project(project_id)
     except Exception as exc:

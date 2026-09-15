@@ -10,15 +10,77 @@
  * orchestrator will enforce the same set server-side before it starts a run.
  */
 
-import type { FlowEdge, FlowNode } from "./graph";
-import type { Codebase, CodebaseGit } from "./types";
+import { hasOutcomePorts, nodeKind, type FlowEdge, type FlowNode } from "./graph";
+import {
+  DEFAULT_EDGE_OUTCOME,
+  DEFAULT_MAX_LAPS,
+  EDGE_OUTCOMES,
+  MAX_LAPS_LIMIT,
+  PUSHING_OUTPUT_KINDS,
+  type Codebase,
+  type CodebaseGit,
+} from "./types";
+
+/**
+ * The nodes a back-edge sends round again: everything on a path from `target`
+ * back to `source`, inclusive.
+ *
+ * A second implementation of `runcheck.back_edges`, which is a cost worth
+ * naming. It is here because the canvas has to answer "is this node inside a
+ * loop" while the belt is still being drawn, and shipping the graph to the
+ * server on every edit to ask would be worse. Both are small, both are tested,
+ * and only the server's decides whether a run starts.
+ */
+function loopBody(
+  nodes: FlowNode[],
+  edges: FlowEdge[],
+  source: string,
+  target: string,
+): Set<string> {
+  const forward = new Map<string, string[]>();
+  const backward = new Map<string, string[]>();
+  for (const node of nodes) {
+    forward.set(node.id, []);
+    backward.set(node.id, []);
+  }
+  for (const edge of edges) {
+    forward.get(edge.source)?.push(edge.target);
+    backward.get(edge.target)?.push(edge.source);
+  }
+  const reach = (start: string, graph: Map<string, string[]>) => {
+    const seen = new Set<string>();
+    const stack = [start];
+    while (stack.length) {
+      const current = stack.pop()!;
+      if (seen.has(current)) continue;
+      seen.add(current);
+      stack.push(...(graph.get(current) ?? []));
+    }
+    return seen;
+  };
+  const down = reach(target, forward);
+  const up = reach(source, backward);
+  return new Set([...down].filter((id) => up.has(id)));
+}
 
 export type Problem = {
   /** Shown in the Run tooltip and next to the button. */
   message: string;
   /** Nodes to highlight; clicking the problem selects them. */
   nodeIds: string[];
+  /**
+   * `blocker` (the default) makes the factory unrunnable. `notice` does not —
+   * it is something the operator should read before pressing Run, not a reason
+   * they cannot. The two are one list because they belong in one place on
+   * screen; `blockers()` is what the Run button asks.
+   */
+  severity?: "blocker" | "notice";
 };
+
+/** The subset that actually stops a run. */
+export function blockers(problems: Problem[]): Problem[] {
+  return problems.filter((problem) => problem.severity !== "notice");
+}
 
 export function runProblems(
   nodes: FlowNode[],
@@ -31,20 +93,30 @@ export function runProblems(
   const label = (node: FlowNode) => node.data.definition.label || node.id;
 
   if (nodes.length === 0) {
-    return [{ message: "The factory is empty — drag in a request, an agent and a commit.", nodeIds: [] }];
+    return [{
+        message:
+          "The factory is empty — drag in an input, an agent and an output.",
+        nodeIds: [],
+      }];
   }
 
   const byType = (type: string) => nodes.filter((n) => n.data.definition.type === type);
   const agents = byType("agent");
 
   if (byType("input").length === 0) {
-    problems.push({ message: "No request node — a run has nothing to submit.", nodeIds: [] });
+    problems.push({
+      message: "No input node — a factory starts with one, and a run has nothing to submit.",
+      nodeIds: [],
+    });
   }
   if (agents.length === 0) {
     problems.push({ message: "No agent node — nothing would do any work.", nodeIds: [] });
   }
   if (byType("output").length === 0) {
-    problems.push({ message: "No commit node — the run would produce nothing.", nodeIds: [] });
+    problems.push({
+      message: "No output node — a factory ends with one, and the run would produce nothing.",
+      nodeIds: [],
+    });
   }
 
   const known = new Set(codebases.map((c) => c.id));
@@ -120,6 +192,177 @@ export function runProblems(
           : `${orphans.length} nodes are not on the line — connect them with belts.`,
       nodeIds: orphans.map((n) => n.id),
     });
+  }
+
+  // "A factory starts with an input and ends with an output", as two rules
+  // about the *ends of the line*: nothing feeds an input, and an output feeds
+  // nothing. Dragging cannot produce either — an input node draws no target
+  // handle and an output node no source handle — but `main.json` is a file
+  // people edit in a pull request, and a rule the UI makes awkward is not a
+  // rule. The server checks the same two (`runcheck.run_problems`).
+  const fedInputs = nodes.filter(
+    (n) => n.data.definition.type === "input" && hasIncoming.has(n.id),
+  );
+  if (fedInputs.length > 0) {
+    problems.push({
+      message:
+        fedInputs.length === 1
+          ? `“${label(fedInputs[0])}” is an input, so nothing may feed it — a factory starts with its inputs.`
+          : `${fedInputs.length} input nodes are being fed — a factory starts with its inputs.`,
+      nodeIds: fedInputs.map((n) => n.id),
+    });
+  }
+  const feedingOutputs = nodes.filter(
+    (n) => n.data.definition.type === "output" && hasOutgoing.has(n.id),
+  );
+  if (feedingOutputs.length > 0) {
+    problems.push({
+      message:
+        feedingOutputs.length === 1
+          ? `“${label(feedingOutputs[0])}” is an output, so it may not feed anything — a factory ends with its outputs.`
+          : `${feedingOutputs.length} output nodes feed something — a factory ends with its outputs.`,
+      nodeIds: feedingOutputs.map((n) => n.id),
+    });
+  }
+
+  // A pushing output node needs a remote to push to, and the canvas cannot
+  // know whether one is configured — `git remote get-url` is a subprocess, and
+  // the server runs it as a run precondition. What the canvas *can* do is say
+  // out loud what is about to happen, next to the Run button, because an output
+  // node is the only thing here that can change a repository other people pull
+  // from. Not a `Problem` that blocks a run: a warning shaped like one.
+  const pushing = byType("output").filter((n) =>
+    (PUSHING_OUTPUT_KINDS as string[]).includes(nodeKind(n.data.definition)),
+  );
+  const merging = pushing.filter(
+    (n) => nodeKind(n.data.definition) === "commit-merge",
+  );
+  if (merging.length > 0) {
+    problems.push({
+      message: `“${label(merging[0])}” fast-forwards the base branch on the remote when the run succeeds.`,
+      nodeIds: merging.map((n) => n.id),
+      severity: "notice",
+    });
+  } else if (pushing.length > 0) {
+    problems.push({
+      message: `“${label(pushing[0])}” pushes the run’s branch to the remote when the run succeeds.`,
+      nodeIds: pushing.map((n) => n.id),
+      severity: "notice",
+    });
+  }
+
+  // A belt leaving by a port its source node does not have. The server refuses
+  // the same two (`runcheck._outcome_problems`) and its refusal is the one that
+  // counts; this is the canvas saying so while the belt is still being drawn.
+  // Dragging cannot produce either — the handles are the only things you can
+  // drag from — but `main.json` is a file people edit in a pull request.
+  const byId = new Map(nodes.map((n) => [n.id, n]));
+  for (const edge of edges) {
+    const source = byId.get(edge.source);
+    if (!source || !edge.sourceHandle) continue;
+    const type = source.data.definition.type;
+    if (!(EDGE_OUTCOMES as string[]).includes(edge.sourceHandle)) {
+      problems.push({
+        message: `The belt out of “${label(source)}” leaves by “${edge.sourceHandle}”, which is not a port this version knows.`,
+        nodeIds: [source.id],
+      });
+    } else if (!hasOutcomePorts(source.data.definition)) {
+      // A worker's `success` belt is not a problem: every agent had two ports
+      // until agents had kinds, so a factory drawn back then wrote `success`
+      // onto belts that are now a worker's single way out — and that belt still
+      // means what it meant and still has nowhere else to go. `fail` is the one
+      // that genuinely has nothing to route to.
+      if (type === "agent" && edge.sourceHandle === DEFAULT_EDGE_OUTCOME) continue;
+      problems.push({
+        message:
+          type === "agent"
+            ? `“${label(source)}” is a worker agent, which has one way out — its belt cannot leave by “${edge.sourceHandle}”. A machine that judges what it is given is a Reviewer: drop one from the palette in its place, or remove the belt.`
+            : `“${label(source)}” is a ${type} node, which has one way out — its belt cannot leave by “${edge.sourceHandle}”.`,
+        nodeIds: [source.id],
+      });
+    }
+  }
+
+  // Two belts between the same machines carrying the same outcome. Both are
+  // taken, so the node below is handed its predecessor's output twice — the
+  // agent's report, verbatim, repeated. Easy to draw by accident once an agent
+  // has kinds: a belt off an agent's old `success` handle and one off the same
+  // node's single unnamed handle, after it became a worker, are different
+  // handle names saying the same word, so React Flow's own duplicate check does
+  // not catch them. Keyed on the outcome, so a reviewer wiring both its ports
+  // to one machine — and ordinary fan-in from two different sources — are left
+  // alone.
+  const belts = new Map<string, string>();
+  for (const edge of edges) {
+    const source = byId.get(edge.source);
+    const target = byId.get(edge.target);
+    if (!source || !target) continue;
+    const key = `${edge.source}\u0000${edge.target}\u0000${edge.sourceHandle ?? DEFAULT_EDGE_OUTCOME}`;
+    if (belts.has(key)) {
+      problems.push({
+        message: `Two belts run from “${label(source)}” to “${label(target)}” carrying the same outcome, so “${label(target)}” would be handed the same thing twice. Remove one of them.`,
+        nodeIds: [source.id, target.id],
+      });
+    } else {
+      belts.set(key, edge.id);
+    }
+  }
+
+  // ---- loops ---------------------------------------------------------------
+  //
+  // **A change of stance, and only half of one.** The client still does not
+  // detect cycles in order to *forbid* them: the reason `runcheck.py` gives —
+  // the client never has to walk the graph — is as true as it ever was, and the
+  // server is still the thing that refuses a cycle nothing may close.
+  //
+  // What the canvas can now usefully answer is a different question: which
+  // nodes are *inside* a loop. That is worth the same reachability pass,
+  // because the two things it tells you are both things to know before you
+  // press Run rather than after.
+  for (const edge of edges) {
+    const source = byId.get(edge.source);
+    if (!source || edge.sourceHandle !== "fail") continue;
+    if (!hasOutcomePorts(source.data.definition)) continue;
+    if (source.data.definition.type !== "agent") continue;
+    const body = loopBody(nodes, edges, edge.source, edge.target);
+    if (!body.has(edge.source)) continue; // runs forward; closes nothing
+
+    for (const node of nodes) {
+      if (!body.has(node.id)) continue;
+      if (node.data.definition.type === "output") {
+        problems.push({
+          message: `“${label(node)}” is inside the loop that “${label(source)}” closes, so it would commit on every lap. Move it onto the reviewer’s success belt, below the loop.`,
+          nodeIds: [node.id],
+        });
+      } else if (node.data.definition.type === "human") {
+        problems.push({
+          message: `“${label(node)}” is inside a loop — it is asked again on every lap.`,
+          nodeIds: [node.id],
+          severity: "notice",
+        });
+      }
+    }
+  }
+
+  // A cap this version will not run — the same bounds and the same sentence as
+  // `verdict.max_laps_problem`.
+  for (const node of nodes) {
+    const definition = node.data.definition;
+    if (definition.type !== "agent" || nodeKind(definition) !== "reviewer") continue;
+    const raw = definition.config?.max_laps;
+    if (raw === undefined || raw === null || raw === "") continue;
+    const value = typeof raw === "number" ? raw : parseInt(String(raw), 10);
+    if (!Number.isFinite(value)) {
+      problems.push({
+        message: `Reviewer “${label(node)}” asks for “${String(raw)}” laps, which is not a number — leave it blank for ${DEFAULT_MAX_LAPS}.`,
+        nodeIds: [node.id],
+      });
+    } else if (value < 1 || value > MAX_LAPS_LIMIT) {
+      problems.push({
+        message: `Reviewer “${label(node)}” asks for ${value} laps — a reviewer runs at least once and at most ${MAX_LAPS_LIMIT}. Leave it blank for ${DEFAULT_MAX_LAPS}.`,
+        nodeIds: [node.id],
+      });
+    }
   }
 
   if (dirty) {

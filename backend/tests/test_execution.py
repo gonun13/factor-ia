@@ -21,9 +21,15 @@ from pathlib import Path
 
 import pytest
 
-from factoria import gitwork, worktree
-from factoria.models import Edge, Factory, Node, NodeDefinition, Project
-from factoria.orchestrator import Orchestrator, adapter_for, adapter_name_for
+from factoria import gitwork, skills, worktree
+from factoria.models import Edge, Factory, Node, NodeDefinition, Project, ProjectSettings
+from factoria.orchestrator import (
+    Orchestrator,
+    adapter_for,
+    adapter_name_for,
+    model_for,
+)
+from factoria.agent.fake import FakeAdapter
 from factoria.runcheck import NotRunnable, run_problems
 from factoria.runlog import RunLog, run_dir
 from factoria.store import Store
@@ -100,6 +106,71 @@ def test_a_single_node_can_be_dry_run_on_an_otherwise_real_canvas(monkeypatch) -
         id="a", definition=NodeDefinition(type="agent", config={"adapter": "fake"})
     )
     assert adapter_for(node).id == "fake"
+
+
+# ---- the resolution ladder -------------------------------------------------
+#
+# Node, then project, then the container. Three rungs, asserted one at a time so
+# a regression names which rung moved.
+
+
+def test_a_project_default_provider_drives_an_agent_that_names_none(
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("FACTOR_IA_ADAPTER", raising=False)
+    node = Node(id="a", definition=NodeDefinition(type="agent"))
+    settings = ProjectSettings(default_provider="fake")
+    assert adapter_name_for(node, settings) == "fake"
+    assert adapter_for(node, settings).id == "fake"
+
+
+def test_a_node_provider_beats_the_project_default(monkeypatch) -> None:
+    monkeypatch.delenv("FACTOR_IA_ADAPTER", raising=False)
+    node = Node(
+        id="a", definition=NodeDefinition(type="agent", config={"adapter": "fake"})
+    )
+    assert adapter_name_for(node, ProjectSettings(default_provider="claude")) == "fake"
+
+
+def test_a_container_pinned_to_fake_cannot_be_overridden(monkeypatch) -> None:
+    """The pin is a pin, not a suggestion.
+
+    `FACTOR_IA_ADAPTER=fake` is how a machine with no credential — and this
+    suite — guarantees it spends nothing. A stored project setting that could
+    lift it would make every zero-token promise conditional on a JSON file
+    nobody reviews.
+    """
+    monkeypatch.setenv("FACTOR_IA_ADAPTER", "fake")
+    node = Node(
+        id="a", definition=NodeDefinition(type="agent", config={"adapter": "claude"})
+    )
+    assert adapter_name_for(node, ProjectSettings(default_provider="claude")) == "fake"
+
+
+def test_a_project_default_model_is_used_when_the_node_names_none() -> None:
+    node = Node(id="a", definition=NodeDefinition(type="agent"))
+    assert model_for(node, ProjectSettings(default_model="test-model-x")) == "test-model-x"
+
+
+def test_a_node_model_beats_the_project_default() -> None:
+    node = Node(
+        id="a",
+        definition=NodeDefinition(type="agent", config={"model": "test-model-node"}),
+    )
+    settings = ProjectSettings(default_model="test-model-x")
+    assert model_for(node, settings) == "test-model-node"
+
+
+def test_no_model_anywhere_resolves_to_nothing_at_all() -> None:
+    """The bottom rung is the CLI's own, and it is reached by saying nothing."""
+    node = Node(id="a", definition=NodeDefinition(type="agent"))
+    assert model_for(node, ProjectSettings()) == ""
+    assert model_for(node, None) == ""
+
+
+def test_only_agent_nodes_resolve_a_model() -> None:
+    node = Node(id="o", definition=NodeDefinition(type="output"))
+    assert model_for(node, ProjectSettings(default_model="test-model-x")) == ""
 
 
 # ---- the happy path --------------------------------------------------------
@@ -209,7 +280,9 @@ def test_a_run_that_changed_nothing_fails_rather_than_ticking_green(
     from factoria.agent.fake import FakeAdapter
 
     original = orch_module.adapter_for
-    orch_module.adapter_for = lambda node: FakeAdapter(script="success", delay_s=0, write_files=False)
+    orch_module.adapter_for = lambda node, settings=None, *, lap=1: FakeAdapter(
+        script="success", delay_s=0, write_files=False
+    )
     try:
         run = run_to_completion(orch)
     finally:
@@ -447,3 +520,207 @@ def test_the_run_is_refused_422_with_the_reason_on_the_wire(
     response = client.post("/api/projects/demo/factories/main/runs")
     assert response.status_code == 422
     assert any("uncommitted" in reason for reason in response.json()["detail"])
+
+
+# ---- skills ----------------------------------------------------------------
+#
+# A skill is unconditional once attached: whatever else a run does, the node
+# either ran with its standing instructions or did not run at all. These pin
+# both halves of that.
+
+SKILL = """---
+name: repo-recon
+description: Reads a repository and reports what it is.
+---
+
+# Repo recon
+
+Read before touching.
+"""
+
+
+def wear_skill(test_store: Store, factory: Factory, name: str) -> Factory:
+    loaded = test_store.get_factory("demo", "main")
+    loaded.nodes, loaded.edges = graph()
+    for node in loaded.nodes:
+        if node.definition.type == "agent":
+            node.definition.config = {"skill": name}
+    return test_store.save_factory(loaded)
+
+
+def test_the_skill_body_reaches_the_spawn(
+    orch: Orchestrator, test_store: Store, factory: Factory, workspace: Path, monkeypatch
+) -> None:
+    """The *body*, read from `_skills/` by the orchestrator, not the name."""
+    skills.create_skill(SKILL)
+    wear_skill(test_store, factory, "repo-recon")
+
+    seen: list[str | None] = []
+    original = FakeAdapter.create_run
+
+    def capture(self, prompt, cwd, config=None):
+        seen.append(config.append_system_prompt if config else None)
+        return original(self, prompt, cwd, config)
+
+    monkeypatch.setattr(FakeAdapter, "create_run", capture)
+    run = run_to_completion(orch)
+    assert run.status == "succeeded"
+    assert seen and seen[0] is not None
+    assert "Read before touching." in seen[0]
+    # The frontmatter is not instructions and does not travel with them.
+    assert "description:" not in seen[0]
+
+
+def test_a_node_wearing_no_skill_appends_nothing(
+    orch: Orchestrator, factory: Factory, monkeypatch
+) -> None:
+    seen: list[str | None] = []
+    original = FakeAdapter.create_run
+
+    def capture(self, prompt, cwd, config=None):
+        seen.append(config.append_system_prompt if config else None)
+        return original(self, prompt, cwd, config)
+
+    monkeypatch.setattr(FakeAdapter, "create_run", capture)
+    run_to_completion(orch)
+    assert seen == [None]
+
+
+def test_the_verdict_contract_reaches_a_reviewer_and_only_a_reviewer(
+    orch: Orchestrator, test_store: Store, factory: Factory, monkeypatch
+) -> None:
+    """Composed on this side of the seam, so no adapter learns what a reviewer
+    is — but it has to actually arrive, or the node is asked for a verdict it
+    was never told to write."""
+    seen: list[str | None] = []
+    original = FakeAdapter.create_run
+
+    def capture(self, prompt, cwd, config=None):
+        seen.append(config.append_system_prompt if config else None)
+        return original(self, prompt, cwd, config)
+
+    monkeypatch.setattr(FakeAdapter, "create_run", capture)
+
+    run_to_completion(orch)
+    assert seen == [None], "a worker's prompt gained something"
+
+    seen.clear()
+    loaded = test_store.get_factory("demo", "main")
+    for node in loaded.nodes:
+        if node.definition.type == "agent":
+            node.definition.config["kind"] = "reviewer"
+            node.definition.config["fake_script"] = "verdict-pass"
+    test_store.save_factory(loaded)
+
+    run_to_completion(orch)
+    assert seen and seen[0] is not None
+    assert "verdict" in seen[0]
+
+
+def test_a_reviewer_wearing_a_skill_gets_both_and_the_contract_last(
+    orch: Orchestrator, test_store: Store, factory: Factory, monkeypatch
+) -> None:
+    """A skill must not be able to read as overriding the contract, so the thing
+    the agent was told most recently is the thing it may not negotiate."""
+    skills.create_skill(SKILL)
+    wear_skill(test_store, factory, "repo-recon")
+    loaded = test_store.get_factory("demo", "main")
+    for node in loaded.nodes:
+        if node.definition.type == "agent":
+            node.definition.config["kind"] = "reviewer"
+            node.definition.config["fake_script"] = "verdict-pass"
+    test_store.save_factory(loaded)
+
+    seen: list[str | None] = []
+    original = FakeAdapter.create_run
+
+    def capture(self, prompt, cwd, config=None):
+        seen.append(config.append_system_prompt if config else None)
+        return original(self, prompt, cwd, config)
+
+    monkeypatch.setattr(FakeAdapter, "create_run", capture)
+    run_to_completion(orch)
+
+    assert seen and seen[0] is not None
+    assert "Read before touching." in seen[0]
+    assert seen[0].index("Read before touching.") < seen[0].index("Your verdict")
+
+
+def test_the_run_record_names_the_skill_that_applied(
+    orch: Orchestrator, test_store: Store, factory: Factory
+) -> None:
+    """Frozen at start, like `kind` and `label`. A log that cannot say which
+    standing instructions applied cannot account for the output it carries."""
+    skills.create_skill(SKILL)
+    wear_skill(test_store, factory, "repo-recon")
+    run = run_to_completion(orch)
+    agent_run = next(one for one in run.node_runs if one.type == "agent")
+    assert agent_run.skill == "repo-recon"
+    assert "repo-recon" in (run_dir(run.id) / "summary.md").read_text(encoding="utf-8")
+
+
+def test_a_skill_deleted_after_the_check_fails_the_node_before_the_spawn(
+    orch: Orchestrator, test_store: Store, factory: Factory, workspace: Path, monkeypatch
+) -> None:
+    """The window `_codebase` already acknowledges: the precondition ran
+    subprocesses ago. Failing is the point — a run that quietly dropped its
+    standing instructions would look right and be made under rules nobody
+    chose, which is the one failure nothing downstream can catch.
+    """
+    skills.create_skill(SKILL)
+    wear_skill(test_store, factory, "repo-recon")
+
+    spawned: list[str] = []
+    original = FakeAdapter.create_run
+
+    def capture(self, prompt, cwd, config=None):
+        spawned.append(prompt)
+        return original(self, prompt, cwd, config)
+
+    monkeypatch.setattr(FakeAdapter, "create_run", capture)
+
+    async def scenario():
+        run = await orch.start("demo", "main")
+        # After the precondition, before the node's turn.
+        skills.delete_skill("repo-recon")
+        await orch.submit_input(run.id, "tidy the readme")
+        await asyncio.wait_for(orch._active[run.id].task, 15)
+        return orch.get(run.id)
+
+    run = asyncio.run(scenario())
+    agent_run = next(one for one in run.node_runs if one.type == "agent")
+    assert agent_run.status == "failed"
+    assert "repo-recon" in (agent_run.detail or "")
+    # Not a token spent, and no worktree cut for a node that could not run.
+    assert spawned == []
+
+
+def test_a_missing_skill_is_refused_before_the_run_starts(
+    test_store: Store, factory: Factory, workspace: Path
+) -> None:
+    """The cheap place to learn it, beside the stale-codebase check it is the
+    exact analogue of (`runcheck`)."""
+    saved = wear_skill(test_store, factory, "repo-recon")
+    problems = [one for one in run_problems(saved) if "skill" in one]
+    assert len(problems) == 1
+    assert "repo-recon" in problems[0] and "_skills" in problems[0]
+
+
+def test_an_unparseable_skill_is_refused_with_the_rule_it_broke(
+    test_store: Store, factory: Factory, workspace: Path
+) -> None:
+    directory = workspace / "_skills"
+    directory.mkdir()
+    (directory / "repo-recon.md").write_text("no frontmatter at all\n", encoding="utf-8")
+    saved = wear_skill(test_store, factory, "repo-recon")
+    problems = [one for one in run_problems(saved) if "skill" in one]
+    assert len(problems) == 1
+    assert "frontmatter" in problems[0]
+
+
+def test_a_readable_skill_is_no_problem_at_all(
+    test_store: Store, factory: Factory, workspace: Path
+) -> None:
+    skills.create_skill(SKILL)
+    saved = wear_skill(test_store, factory, "repo-recon")
+    assert run_problems(saved) == []

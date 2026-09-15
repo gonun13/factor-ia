@@ -71,3 +71,12 @@ def test_find_codebase_refuses_a_path_shaped_id(workspace: Path) -> None:
     assert find_codebase("project-a", workspace) is not None
     assert find_codebase("../../etc", workspace) is None
     assert find_codebase("_factories", workspace) is None
+
+
+def test_the_skills_directory_is_never_a_codebase(workspace: Path) -> None:
+    """`_skills/` sits beside `_factories/` at the top of the workspace, and
+    the underscore rule is what keeps both out of the codebase picker — an
+    agent pointed at its own standing instructions is not a thing to allow."""
+    make_git_repo(workspace / "_skills")
+    make_git_repo(workspace / "project-a")
+    assert [one.id for one in discover_codebases(workspace)] == ["project-a"]

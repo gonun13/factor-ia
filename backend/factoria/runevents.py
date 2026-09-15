@@ -15,12 +15,18 @@ late joiner starts at 0 and gets the log from the beginning. There is no
 wall-clock ordering anywhere in the protocol, because two events in the same
 millisecond are common and a clock that steps backwards is not.
 
-Five envelope types, not one with optional fields:
+Seven envelope types, not one with optional fields:
 
 - `run.status` — the run as a whole moved.
 - `node.status` — one node's state machine moved. The canvas's pips.
 - `run.input`  — the one-shot request was submitted (open question 2). Logged
   because a run's transcript is unreadable without the thing that was asked.
+- `run.decision.request` — a human node stopped the run to ask something. The
+  canvas renders its form from this rather than from the run record, because
+  the run record a watching tab holds is a snapshot from before the walk.
+- `run.decision` — a person answered. The `run.input` of a human node: logged
+  because a transcript that shows a run taking the fail belt without showing
+  who sent it there is unreadable.
 - `agent`      — an adapter event, verbatim, on a node.
 - `run.artifact` — a worktree was created, or a commit was made. The one event
   that still means something after the process that wrote it is gone.
@@ -63,12 +69,55 @@ class NodeStatusEvent(RunEventBase):
     node_id: str
     status: NodeStatus
     detail: str | None = None
+    #: Which lap of a loop this node is on, 1 for everything that runs once. On
+    #: the wire rather than derived in the browser by counting transitions: the
+    #: counter already exists on `NodeRun`, and a second implementation of it
+    #: that only a reconnecting tab exercises is the kind that drifts. Replays
+    #: from the log for free, which is what a tab that joined late needs.
+    lap: int = 0
 
 
 class RunInputEvent(RunEventBase):
     type: Literal["run.input"] = "run.input"
     node_id: str
     text: str
+    #: The kind of input this node asked for — `request` or `prd`. On the wire
+    #: so a canvas that joined late can render the submission the way the node
+    #: would have, without reloading the factory file.
+    kind: str = "request"
+    #: The document's name, when the text came from one. Never a path.
+    filename: str | None = None
+
+
+class RunDecisionRequestEvent(RunEventBase):
+    """A human node is parked, waiting for a person.
+
+    Carries everything the form needs, so a canvas that joined late can render
+    it from the log alone — the same standard `run.artifact` is held to. In
+    particular it carries `incoming`: what the belts brought into this node is
+    the thing the operator is being asked to judge, and it lives in the run
+    record's `output_text`, which a watching tab has no reason to have refetched.
+    """
+
+    type: Literal["run.decision.request"] = "run.decision.request"
+    node_id: str
+    #: The question as the graph words it. Empty when the node asks none.
+    prompt: str = ""
+    #: What arrived on the incoming belts, and what the node passes on unchanged
+    #: if the operator approves without writing a note.
+    incoming: str = ""
+    #: `approval` today — see `models.HumanKind`.
+    kind: str = "approval"
+
+
+class RunDecisionEvent(RunEventBase):
+    """A person answered. `approved` decides which belt the run leaves by."""
+
+    type: Literal["run.decision"] = "run.decision"
+    node_id: str
+    approved: bool
+    #: What they wrote, if anything. Becomes the node's output when non-empty.
+    note: str = ""
 
 
 class AgentStreamEvent(RunEventBase):
@@ -92,17 +141,28 @@ class RunArtifactEvent(RunEventBase):
 
     type: Literal["run.artifact"] = "run.artifact"
     node_id: str
-    kind: Literal["worktree", "commit"]
+    #: `push` and `merge` join the union for the same reason `commit` is in it:
+    #: a ref on a remote is durable, outlives the run, and is the thing the
+    #: operator actually wanted. A `merge` artifact is emitted *in addition to*
+    #: the `push` one, because the branch really did go up as its own ref and a
+    #: refused merge must not erase that from the log.
+    kind: Literal["worktree", "commit", "push", "merge"]
     codebase_id: str
     branch: str
     path: str = ""
-    #: The codebase's own branch when the worktree was cut, so a reviewer can
-    #: see what this was branched from without leaving the canvas.
+    #: The branch the worktree was cut from — `worktree.base_ref`'s answer, so
+    #: usually the remote's copy of the base branch rather than whatever the
+    #: clone had checked out. Here so a reviewer can see what this was branched
+    #: from without leaving the canvas.
     base_branch: str | None = None
     base_commit: str = ""
     commit_sha: str | None = None
     file_count: int = 0
     detail: str = ""
+    #: Set on `push` / `merge`: the remote name, and — for a merge — the branch
+    #: on it that was fast-forwarded.
+    remote: str = ""
+    merged_into: str | None = None
 
 
 class RunCostEvent(RunEventBase):
@@ -119,6 +179,8 @@ RunEvent = Annotated[
         RunStatusEvent,
         NodeStatusEvent,
         RunInputEvent,
+        RunDecisionRequestEvent,
+        RunDecisionEvent,
         AgentStreamEvent,
         RunArtifactEvent,
         RunCostEvent,

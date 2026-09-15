@@ -115,8 +115,18 @@ in the container for good.
 
 - Project list; create a project. Codebases discovered by scanning `/workspace`.
 - One project = one main factory, one attached codebase.
-- Canvas with three node types: **input (request)**, **agent**, **output
-  (commit/branch)**.
+- Canvas with three node types — **input**, **agent**, **output** — and a
+  **kind** on each end of the line. Inputs come in `request` (a sentence, typed
+  when the run starts) and `prd` (a `PRD.md`, handed over whole); outputs in
+  `commit`, `commit-push` and `commit-merge`. The kind lives in the node's
+  freeform `config`, not in `NodeType`, so the structural rule below stays one
+  check rather than a list of type names.
+- **A factory starts with an input and ends with an output**, and needs at least
+  one of each. Stated as two rules about the ends of the line — every node with
+  no incoming belt is an input, every node with no outgoing belt is an output —
+  which is the only form a graph can be checked against. Both `runcheck` and the
+  canvas enforce it; the canvas additionally draws no target handle on an input
+  and no source handle on an output, so it is unreachable by dragging.
 - Codebase attachment to an agent node, with validation that blocks a run without
   one.
 - Provider sign-in from the UI, credential persisted in a container-owned volume.
@@ -131,8 +141,18 @@ Roughly in the order the design anticipates them:
 - **Nested factories** — a factory as a node inside another factory. The data
   model accommodates this from day one (see below) even though the UI won't.
 - **Multiple codebases per project.**
-- **Human-in-the-middle nodes** — approval gates, edits, redirection mid-run.
-- **Loops and conditional edges** — iterate until tests pass.
+- ~~**Human-in-the-middle nodes**~~ — *done (stage 8).* A `human` node stops the
+  line and routes on approve/reject. Edits and redirection mid-run are still
+  later; what it takes today is a verdict and a note.
+- ~~**Loops**~~ — *done (stage 9).* An `agent` node now has a **kind**: a
+  `worker` does the job and has one way out, a `reviewer` judges what it is
+  given and must end its reply with a fenced JSON verdict. A reviewer's `fail`
+  belt is the one belt the cycle check accepts as closing a loop, and the
+  iteration cap lives on the reviewer (`config["max_laps"]`, default 3). A
+  missing verdict is a broken contract rather than a rejection: it ends the run
+  instead of sending the work back, so a reviewer that cannot follow the format
+  surfaces as itself rather than as three wasted laps. Iterating against *tests*
+  still waits on execution nodes; iterating against a judgement does not.
 - **Shell/test execution nodes**, which is when the **dind sidecar** arrives.
 - **GitHub / GitLab integration** — open the PR, don't just leave the branch.
 - **Parallel fan-out** across agent nodes.
@@ -362,10 +382,16 @@ Project ──< Codebase        (v1: exactly one; model allows many)
   ([docs](https://reactflow.dev/learn/layouting/sub-flows)), so the UI cost later
   is moderate rather than a rewrite.
 - **Node** — typed, positioned, configured. Types: `input`, `agent`, `output`,
-  `human` (later), `factory-ref` (later).
-- **Edge** — a connection carrying a typed payload between node ports.
+  `human`, `factory-ref` (later).
+- **Edge** — a connection carrying a typed payload between node ports. An
+  `agent` or `human` node has two: `success` and `fail`.
 - **Run** — one execution of a factory, with its input and final status.
 - **NodeRun** — one node's execution within a run: status, timings, artifacts.
+- **Skill** — a named markdown document of standing instructions, owned by the
+  *workspace* rather than by any project: any agent in any factory can wear
+  one. An agent node names one, and its body is appended to that node's system
+  prompt on every spawn. Not a node and not an edge — a property of the
+  machine, like its model.
 - **Event** — an append-only record of everything that happened, in the adapter's
   normalized union. The live canvas and the history view read the same stream,
   which is why replay comes cheap later.
@@ -376,6 +402,7 @@ On disk:
 /workspace/_factories/<project>/main.json             # the main factory — shared via git
 /workspace/_factories/<project>/<name>.json           # nested factories (later)
 /workspace/_factories/<project>/memory/*.md           # long-term memory, git-tracked
+/workspace/_skills/<name>.md                          # standing instructions — shared via git
 /data/projects.json                                   # machine-local registry
 /data/runs/<run_id>/events.jsonl                      # append-only event log
 /data/runs/<run_id>/summary.md                        # human-readable outcome
@@ -459,7 +486,30 @@ generalizes: it already drives `claude`, `cursor`, `codex`, `copilot` and
     explicit server-side opt-in and render it as dangerous whenever active.
 - **Blast radius** (operator's explicit priority). Agents write only inside a git
   worktree on a dedicated branch. No force-push, no writes to the default branch,
-  no deletes outside the worktree. Every attached codebase must be a clean git
+  no deletes outside the worktree.
+
+  > **Amendment — the `commit-merge` output node.** "No writes to the default
+  > branch" now has one exception, and it is drawn rather than configured: an
+  > operator who puts a *commit & merge* node on the line has asked for the base
+  > branch to be fast-forwarded. Three things keep the clause meaningful rather
+  > than merely narrowed:
+  >
+  > - **It happens on the remote, never locally.** `git push origin <branch>:<base>`.
+  >   The operator has the base branch checked out in their own working tree, and
+  >   moving that ref underneath them is the promise this project is *for*. Their
+  >   local branch moves when they pull, in their own terminal.
+  > - **No force, so no third outcome.** The remote either fast-forwards or
+  >   refuses. Nothing here resolves a conflict, because nothing here ever has
+  >   one; a base branch that moved fails the node with git's own words.
+  > - **The branch goes up first.** A refused merge still leaves the run's own
+  >   ref on the remote, so the work is never lost to a race — it becomes a pull
+  >   request instead.
+  >
+  > `gitwork` grants the capability as a *shape*, not a subcommand: a push is
+  > exactly one remote **name** (never a URL — that would exfiltrate the
+  > operator's repository with the operator's own key) and one plain `src:dst`
+  > refspec, with a three-flag allowlist. `merge`, `fetch`, `reset` and
+  > `checkout` remain absent from the process entirely. Every attached codebase must be a clean git
   repo before a run starts. v1 runs no arbitrary shell — and when shell/test nodes
   land, they get a **dind sidecar**, never a bind of the host's
   `/var/run/docker.sock`, which is root-equivalent and would undo the whole
@@ -506,7 +556,12 @@ Defaults chosen where the operator didn't specify. Each is cheap to reverse.
   spending a single token.
 - **Agent model** defaults to whatever the provider CLI reports as its default,
   read from its own `initialize` handshake rather than hardcoded — Overseer's
-  §1.1.1 approach. Overridable per agent node.
+  §1.1.1 approach. Defaulted per project, overridable per agent node: the ladder
+  is node → project → CLI, and every rung above the last is a value the operator
+  chose from the handshake's own list. The **provider** is defaulted the same
+  way, with one clamp — a container pinned to `fake` stays fake, because that
+  pin is what makes a machine with no credential, and the whole test suite,
+  spend nothing.
 - The **`claude` CLI is installed in the image** and pinned to a known-good
   version; its stream-json output shape is a parsing dependency, so an unpinned
   upgrade is a breaking change.
@@ -538,10 +593,17 @@ argument. Deliberately left open.
    node is a **request submission**, not a chat — you state the task, submit it,
    and watch the factory run. That framing is the point, not a simplification:
    a factory is a pipeline you built in advance, so clarification belongs in the
-   graph (a human node, later) rather than in a side conversation with one agent.
+   graph (a human node) rather than in a side conversation with one agent.
    It also keeps run state one-way, which is what lets SSE stand. Conversational
    input would make it bidirectional and reopen the transport choice — it is the
    one deferred feature that argues for Overseer's `/ws`.
+
+   *Stage 8 settled the half of this that was in doubt.* The human node was the
+   deferred feature most likely to force a back-channel, and it did not: it
+   parks the walk, emits `run.decision.request`, and takes one verdict back over
+   a normal POST. SSE stands. What would still reopen the question is a human
+   node that negotiates — several turns with an agent mid-run — which is a
+   different feature from a gate.
 
 3. **Does the codebase attachment belong on the node, or on the factory?**
    Per-node is more flexible and matches "the agent can't run without one".

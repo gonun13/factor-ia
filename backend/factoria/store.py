@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import tempfile
 import threading
 from pathlib import Path
@@ -62,7 +63,13 @@ def _dump(model: BaseModel, **kwargs: Any) -> str:
     return json.dumps(payload, indent=2, ensure_ascii=False) + "\n"
 
 
-def _atomic_write(path: Path, text: str) -> None:
+def atomic_write(path: Path, text: str) -> None:
+    """Write `text` to `path` so a reader never sees a half-written file.
+
+    Public because `skills.py` needs the same discipline for a document this
+    module does not own: the reason (a torn file after a crash is worse than no
+    file at all) has nothing to do with the thing being written.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp_name = tempfile.mkstemp(
         dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp"
@@ -145,7 +152,7 @@ class Store:
             raise Corrupt(f"projects.json does not match the model: {exc}") from None
 
     def _save_registry(self, registry: ProjectRegistry) -> None:
-        _atomic_write(self.registry_path, _dump(registry))
+        atomic_write(self.registry_path, _dump(registry))
 
     def list_projects(self) -> list[Project]:
         return self.load_registry().projects
@@ -187,11 +194,20 @@ class Store:
         raise NotFound(f"no such project: {project.id}")
 
     def delete_project(self, project_id: str) -> None:
-        """Unregister the project. **The factory files are left in place.**
+        """Unregister the project and delete what belongs to it on disk.
 
-        `_factories/` is a team-owned git repo; removing a tracked file from it
-        because someone tidied their local project list is not this tool's call
-        to make. Re-creating the project picks the definition back up.
+        The main factory is the project's one-to-one — `create_project` makes
+        it, nothing else can reference it — and leaving it behind means the next
+        project of the same name silently inherits a stranger's graph. `memory/`
+        under the same directory is this project's long-term memory, and equally
+        no use to anyone once the project is gone. So the whole
+        `_factories/<project>/` directory goes.
+
+        The exception is a nested factory (stage 6): those are shared surfaces
+        that other projects can point at, so if any factory file other than
+        `main.json` is still in the directory, the directory stays and only the
+        main factory is removed. Deleting one project must never take a factory
+        another project runs.
         """
         with self._lock:
             registry = self.load_registry()
@@ -200,6 +216,37 @@ class Store:
                 raise NotFound(f"no such project: {project_id}")
             registry.projects = remaining
             self._save_registry(registry)
+            self._delete_project_files(project_id)
+
+    def _delete_project_files(self, project_id: str) -> None:
+        """Best-effort. The registry write above is what the caller asked for,
+        and a read-only `_factories/` — or a file someone has open — must not
+        turn a delete into a 500 with the project already unregistered.
+        """
+        try:
+            directory = self.factories_dir(project_id)
+            main = self.factory_path(project_id, MAIN_FACTORY_ID)
+        except PathEscape:
+            return
+        try:
+            main.unlink(missing_ok=True)
+        except OSError:
+            return
+        try:
+            shared = [
+                path
+                for path in directory.glob("*.json")
+                if not path.name.startswith(".")
+            ]
+        except OSError:
+            return
+        if shared:
+            # Nested factories live here too and outlive the project.
+            return
+        try:
+            shutil.rmtree(directory)
+        except (OSError, FileNotFoundError):
+            pass
 
     # ---- factories --------------------------------------------------------
 
@@ -262,7 +309,7 @@ class Store:
         # `runtime` is stage 5's, lives in memory, and must never reach a file
         # a human reviews in a pull request.
         text = _dump(factory, exclude={"nodes": {"__all__": {"runtime"}}})
-        _atomic_write(path, text)
+        atomic_write(path, text)
 
 
 _store: Store | None = None

@@ -27,6 +27,13 @@ tree does not, the output node has something to commit, the branch has a diff)
 would be provable only by spending tokens, and the zero-token path is what
 makes this project debuggable. `write_files=False` turns it off for the tests
 that care about the event union rather than the filesystem.
+
+**A scripted turn costs nothing.** `turn.end.total_cost_usd` is summed straight
+into `Run.total_cost_usd`, which has no way to tell a script from a session, so
+a fake that reported the real one's numbers put money the operator never spent
+into the project's readout. The cost is a knob rather than a constant zero
+because the orchestrator's own accounting — deltas, not the cumulative number —
+still has to be exercised by something, and that something is the fake.
 """
 
 from __future__ import annotations
@@ -41,11 +48,16 @@ from . import events as ev
 from .adapter import RunConfig
 from .events import AgentEvent
 
-Script = Literal["success", "failure", "streaming"]
+Script = Literal["success", "failure", "streaming", "verdict-pass", "verdict-fail"]
 
 #: What the fake reports as the model. Deliberately not a real model id — a
 #: reader of an event log should never have to wonder whether a run was real.
 FAKE_MODEL = "fake-model-1"
+
+#: What a scripted turn reports it cost: nothing, for the reason in the module
+#: docstring. Raise it per adapter (`FakeAdapter(cost_usd=…)`) or per node
+#: (`fake_cost` in an agent's config) when the cost path itself is under test.
+FAKE_COST_USD = 0.0
 
 
 def _init(session_id: str, cwd: str) -> ev.SessionInit:
@@ -60,7 +72,7 @@ def _init(session_id: str, cwd: str) -> ev.SessionInit:
     )
 
 
-def success_script(session_id: str, cwd: str, prompt: str) -> Iterable[AgentEvent]:
+def success_script(session_id: str, cwd: str, prompt: str, cost: float) -> Iterable[AgentEvent]:
     """A node that reads a file, writes one, ticks its checklist and finishes."""
     tool_a, tool_b = f"toolu_{uuid.uuid4().hex[:12]}", f"toolu_{uuid.uuid4().hex[:12]}"
     todo = f"toolu_{uuid.uuid4().hex[:12]}"
@@ -99,14 +111,14 @@ def success_script(session_id: str, cwd: str, prompt: str) -> Iterable[AgentEven
         session_id=session_id,
         model=FAKE_MODEL,
         usage=ev.Usage(input_tokens=1200, output_tokens=340, cache_read_tokens=800),
-        total_cost_usd=0.0123,
+        total_cost_usd=cost,
         duration_ms=4200,
         num_turns=1,
     )
     yield ev.Exit(session_id=session_id, cause="completed", code=0)
 
 
-def failure_script(session_id: str, cwd: str, prompt: str) -> Iterable[AgentEvent]:
+def failure_script(session_id: str, cwd: str, prompt: str, cost: float) -> Iterable[AgentEvent]:
     """A tool that fails, then a turn that fails, then a non-zero exit.
 
     The shape a node's `failed` state has to be reachable from — and the one
@@ -131,7 +143,7 @@ def failure_script(session_id: str, cwd: str, prompt: str) -> Iterable[AgentEven
         session_id=session_id,
         model=FAKE_MODEL,
         usage=ev.Usage(input_tokens=900, output_tokens=120),
-        total_cost_usd=0.0041,
+        total_cost_usd=cost,
         duration_ms=2600,
         num_turns=1,
     )
@@ -141,7 +153,7 @@ def failure_script(session_id: str, cwd: str, prompt: str) -> Iterable[AgentEven
     yield ev.Exit(session_id=session_id, cause="crash", code=1, detail="agent reported failure")
 
 
-def streaming_script(session_id: str, cwd: str, prompt: str) -> Iterable[AgentEvent]:
+def streaming_script(session_id: str, cwd: str, prompt: str, cost: float) -> Iterable[AgentEvent]:
     """Many small deltas, including a tool's arguments arriving in pieces.
 
     This is the one that makes a canvas honest: a node that only looks right
@@ -166,17 +178,55 @@ def streaming_script(session_id: str, cwd: str, prompt: str) -> Iterable[AgentEv
         session_id=session_id,
         model=FAKE_MODEL,
         usage=ev.Usage(input_tokens=2000, output_tokens=560),
-        total_cost_usd=0.0210,
+        total_cost_usd=cost,
         duration_ms=9100,
         num_turns=1,
     )
     yield ev.Exit(session_id=session_id, cause="completed", code=0)
 
 
-SCRIPTS: dict[str, Callable[[str, str, str], Iterable[AgentEvent]]] = {
+def _verdict_script(word: str, reason: str):
+    """A reviewer that looks at the work and writes a real verdict block.
+
+    Deliberately emits prose *before* the block and nothing after it, because
+    that is the shape a real reviewer produces and the shape
+    `verdict.parse_verdict` has to survive: the last fenced block is the answer.
+    """
+
+    def script(session_id: str, cwd: str, prompt: str, cost: float) -> Iterable[AgentEvent]:
+        tool = f"toolu_{uuid.uuid4().hex[:12]}"
+        yield _init(session_id, cwd)
+        yield ev.TextDelta(session_id=session_id, text="Reviewing what came down the belt.\n")
+        yield ev.ToolStart(
+            session_id=session_id, tool_use_id=tool, name="Read", input={"file_path": "README.md"}
+        )
+        yield ev.ToolEnd(session_id=session_id, tool_use_id=tool, output="# the readme\n")
+        yield ev.TextDelta(session_id=session_id, text=f"\n{reason}\n\n")
+        yield ev.TextDelta(
+            session_id=session_id,
+            text='```json\n{"verdict": "%s", "reason": "%s"}\n```' % (word, reason),
+        )
+        yield ev.TurnEnd(
+            session_id=session_id,
+            model=FAKE_MODEL,
+            usage=ev.Usage(input_tokens=900, output_tokens=120),
+            total_cost_usd=cost,
+            duration_ms=2600,
+            num_turns=1,
+        )
+        yield ev.Exit(session_id=session_id, cause="completed", code=0)
+
+    return script
+
+
+SCRIPTS: dict[str, Callable[[str, str, str, float], Iterable[AgentEvent]]] = {
     "success": success_script,
     "failure": failure_script,
     "streaming": streaming_script,
+    # The two a loop is built out of. `verdict-fail` sends the work back;
+    # `verdict-pass` releases it.
+    "verdict-pass": _verdict_script("pass", "the fix is there and the tests cover it"),
+    "verdict-fail": _verdict_script("fail", "the bounds check is still missing"),
 }
 
 
@@ -225,6 +275,7 @@ class FakeRun:
         script: Script,
         delay_s: float,
         write_files: bool = True,
+        cost_usd: float = FAKE_COST_USD,
     ) -> None:
         self.session_id = run_config.session_id or f"fake-{uuid.uuid4().hex[:12]}"
         self._prompt = prompt
@@ -232,6 +283,7 @@ class FakeRun:
         self._script = script
         self._delay_s = delay_s
         self._write_files = write_files
+        self._cost_usd = cost_usd
         self._interrupted = False
         #: Every path the run actually wrote. Asserted on by the tests that
         #: prove the edits landed in the worktree and nowhere else.
@@ -244,7 +296,9 @@ class FakeRun:
         self._interrupted = True
 
     async def _iterate(self) -> AsyncIterator[AgentEvent]:
-        for event in SCRIPTS[self._script](self.session_id, self._cwd, self._prompt):
+        for event in SCRIPTS[self._script](
+            self.session_id, self._cwd, self._prompt, self._cost_usd
+        ):
             if self._interrupted:
                 # Mid-script, like the real one: whatever had been emitted
                 # stands, and the terminal event says who stopped it.
@@ -269,18 +323,34 @@ class FakeAdapter:
 
     `delay_s` exists so a test can run the whole union in microseconds while
     stage 5's manual walkthrough can watch a node fill in at a readable pace.
+
+    `cost_usd` defaults to nothing spent (module docstring). It is here rather
+    than on `RunConfig` because what a turn cost is something a provider
+    *reports*, not something a caller asks for — a knob on the seam would be a
+    knob `ClaudeAdapter` could never honour.
     """
 
     id = "fake"
 
     def __init__(
-        self, script: Script = "success", delay_s: float = 0.0, write_files: bool = True
+        self,
+        script: Script = "success",
+        delay_s: float = 0.0,
+        write_files: bool = True,
+        cost_usd: float = FAKE_COST_USD,
     ) -> None:
         self.script = script
         self.delay_s = delay_s
         self.write_files = write_files
+        self.cost_usd = cost_usd
 
     def create_run(self, prompt: str, cwd: str, config: RunConfig | None = None) -> FakeRun:
         return FakeRun(
-            prompt, cwd, config or RunConfig(), self.script, self.delay_s, self.write_files
+            prompt,
+            cwd,
+            config or RunConfig(),
+            self.script,
+            self.delay_s,
+            self.write_files,
+            self.cost_usd,
         )

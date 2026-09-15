@@ -89,6 +89,16 @@ button.primary:hover:not(:disabled) {
   background: linear-gradient(180deg, #3a7fe4, #2a63bd);
 }
 
+button.destructive {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 55%, var(--edge-strong));
+}
+
+button.destructive:hover:not(:disabled) {
+  background: #2a1a1e;
+  border-color: var(--danger);
+}
+
 input,
 select {
   font: inherit;
@@ -202,6 +212,70 @@ button:focus-visible {
   gap: 0.85rem;
 }
 
+/* The skills library. Narrower cards than a project's, because a skill is a
+   thing you pick rather than a place you go — and one line of description is
+   what makes it pickable. */
+.skills-section {
+  margin-top: 2.4rem;
+  display: grid;
+  gap: 0.85rem;
+}
+
+.skill-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(17rem, 1fr));
+  gap: 0.85rem;
+}
+
+.skill-card {
+  position: relative;
+  text-align: left;
+  padding: 0.85rem;
+  background: var(--panel);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius);
+  display: grid;
+  gap: 0.35rem;
+  align-content: start;
+}
+
+.skill-card .name {
+  font-family: var(--mono);
+  font-size: 0.85rem;
+  color: var(--ink);
+}
+
+.skill-card .desc {
+  font-size: 0.78rem;
+  line-height: 1.4;
+  color: var(--ink-dim);
+}
+
+.skill-card .meta {
+  font-size: 0.72rem;
+  color: var(--ink-faint);
+}
+
+.skill-import {
+  display: grid;
+  gap: 0.6rem;
+  max-width: 34rem;
+}
+
+.skill-import textarea {
+  width: 100%;
+  min-height: 9rem;
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  resize: vertical;
+}
+
+.skill-import .card-actions {
+  display: flex;
+  gap: 0.6rem;
+  align-items: center;
+}
+
 .project-card {
   text-align: left;
   padding: 1rem;
@@ -225,6 +299,52 @@ button:focus-visible {
 .project-card .meta {
   color: var(--ink-faint);
   font-size: 0.8rem;
+}
+
+/* The delete affordance sits over the card rather than inside it: the card is
+   itself a button, and a button inside a button is not a thing the DOM has. */
+.project-slot {
+  position: relative;
+  display: grid;
+}
+
+.project-slot .project-card {
+  height: 100%;
+  padding-right: 2.4rem;
+}
+
+.card-delete {
+  position: absolute;
+  top: 0.45rem;
+  right: 0.45rem;
+  padding: 0;
+  width: 1.6rem;
+  height: 1.6rem;
+  line-height: 1;
+  font-size: 1.05rem;
+  border-color: transparent;
+  background: none;
+  /* Faint but always drawn — hover-only controls are invisible to touch and
+     to anyone scanning for the way out. */
+  color: var(--ink-faint);
+}
+
+.card-delete:hover:not(:disabled) {
+  color: var(--danger);
+  background: #2a1a1e;
+  border-color: color-mix(in srgb, var(--danger) 55%, transparent);
+}
+
+.project-card.is-confirming {
+  border-color: color-mix(in srgb, var(--danger) 60%, var(--edge));
+  background: linear-gradient(180deg, #1f1a20, var(--panel));
+}
+
+.card-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-top: 0.35rem;
 }
 
 .project-card-new {
@@ -785,6 +905,95 @@ button:focus-visible {
 
 .thread-foot .commit {
   color: var(--output);
+.request label .hint {
+  color: var(--ink-faint);
+}
+
+/* The human node's form. What arrived is shown above the note, capped in
+   height — it is context for a decision, not a document viewer, and a long
+   agent reply must not push the two buttons off the panel. */
+.decision-incoming {
+  max-height: 8.5rem;
+  margin: 0;
+  font-size: 0.75rem;
+  line-height: 1.45;
+  padding: 0.45rem 0.55rem;
+  border-radius: 8px;
+  border: 1px solid var(--edge);
+  background: #0f151e;
+  color: var(--ink-dim);
+  overflow: auto;
+  white-space: pre-wrap;
+}
+
+/* Side by side and equally weighted. Approve is the primary button because it
+   is the common answer, not because it is the safe one — the whole point of a
+   sign-off is that rejecting is exactly as easy. */
+.decision-actions {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.decision-actions button {
+  flex: 1;
+}
+
+/* A run with two inputs shows two of these, stacked. The rule keeps them from
+   reading as one long form. */
+.request + .request {
+  margin-top: 0.2rem;
+}
+
+/* ---- the PRD drop -------------------------------------------------------
+   A file read in the browser and posted as text: there is no upload endpoint
+   and nothing lands on disk, so the only state here is the name and the size,
+   shown so the operator can tell they picked the file they meant. */
+
+.prd-drop,
+.skill-drop {
+  display: grid;
+  gap: 0.4rem;
+  padding: 0.7rem;
+  border-radius: 8px;
+  border: 1px dashed var(--edge-strong);
+  background: #0f151e;
+  text-align: center;
+}
+
+.prd-drop.has-file,
+.skill-drop.has-file {
+  border-style: solid;
+  border-color: color-mix(in srgb, var(--input) 55%, transparent);
+  background: color-mix(in srgb, var(--input) 8%, transparent);
+}
+
+.prd-drop input[type="file"],
+.skill-drop input[type="file"] {
+  font-size: 0.72rem;
+  color: var(--ink-dim);
+  width: 100%;
+}
+
+.prd-drop .prd-chosen,
+.skill-drop .prd-chosen {
+  font-size: 0.75rem;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+.prd-drop .hint,
+.skill-drop .hint {
+  font-size: 0.72rem;
+  color: var(--ink-faint);
+}
+
+/* A notice is not a blocker: it is the sentence an operator should read before
+   pressing a button that changes a repository other people pull from. Amber,
+   and with the marker the blockers use, so it lands in the same place on the
+   page — but the Run button stays enabled. */
+.problems li.notice .marker,
+.problems li.notice span {
+  color: var(--input);
 }
 
 /* ---- save state --------------------------------------------------------- */
@@ -793,6 +1002,110 @@ button:focus-visible {
   display: flex;
   align-items: center;
   gap: 0.6rem;
+}
+
+/* ---- slide-over -----------------------------------------------------------
+ *
+ * The first overlay in this app, so it sets the convention. It sits outside the
+ * React Flow subtree on purpose: inside it, the canvas transform would scale it
+ * and `nodrag`/`nowheel` would have to be sprinkled over every control.
+ */
+
+.icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--ink-faint);
+}
+
+.icon-button:hover {
+  color: var(--ink);
+  border-color: var(--edge);
+}
+
+.icon-button svg {
+  width: 17px;
+  height: 17px;
+}
+
+.slideover-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  justify-content: flex-end;
+  background: rgb(8 10 14 / 0.55);
+}
+
+.slideover {
+  display: flex;
+  flex-direction: column;
+  width: min(26rem, 100vw);
+  height: 100%;
+  background: var(--panel);
+  border-left: 1px solid var(--edge);
+  box-shadow: var(--shadow);
+  animation: slide-over-in 160ms ease-out;
+}
+
+@keyframes slide-over-in {
+  from {
+    transform: translateX(100%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .slideover {
+    animation: none;
+  }
+}
+
+.slideover-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  padding: 0.85rem 1rem;
+  border-bottom: 1px solid var(--edge);
+}
+
+.slideover-head h2 {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0;
+  font-size: 0.95rem;
+}
+
+.slideover-head svg {
+  width: 15px;
+  height: 15px;
+  color: var(--ink-faint);
+}
+
+.slideover-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 1rem;
+}
+
+.slideover-body .setting {
+  display: grid;
+  gap: 0.4rem;
+}
+
+.slideover-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.6rem;
+  padding: 0.85rem 1rem;
+  border-top: 1px solid var(--edge);
 }
 
 .pill {

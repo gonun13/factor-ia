@@ -68,6 +68,29 @@ def test_no_model_flag_when_the_node_did_not_override_one() -> None:
     assert build_argv("s", RunConfig(model="haiku"))[-2:] == ["--model", "haiku"]
 
 
+def test_from_node_config_falls_back_to_the_project_default() -> None:
+    config = RunConfig.from_node_config({}, default_model="test-model-x")
+    assert config.model == "test-model-x"
+    assert build_argv("s", config)[-2:] == ["--model", "test-model-x"]
+
+
+def test_a_node_model_wins_over_the_project_default() -> None:
+    config = RunConfig.from_node_config(
+        {"model": "test-model-node"}, default_model="test-model-x"
+    )
+    assert config.model == "test-model-node"
+
+
+def test_a_blank_node_model_does_not_shadow_the_project_default() -> None:
+    """A `<select>` cleared back to "project default" can leave `""` behind.
+
+    An empty string is falsy everywhere downstream, so it would not reach the
+    CLI as a flag — it would just silently eat the project's answer.
+    """
+    config = RunConfig.from_node_config({"model": ""}, default_model="test-model-x")
+    assert config.model == "test-model-x"
+
+
 def test_prompt_is_one_user_frame() -> None:
     import json
 
@@ -248,3 +271,29 @@ def test_interrupt_takes_the_child_s_descendants_with_it(stub, workspace, tmp_pa
     settled = marker.stat().st_size
     time.sleep(0.6)
     assert marker.stat().st_size == settled, "the grandchild outlived the interrupt"
+
+
+def test_a_skill_becomes_an_appended_system_prompt() -> None:
+    """The body verbatim, and *appended*: `--system-prompt` would discard the
+    CLI's own, which is what knows how to use the tools this run is given."""
+    body = "# Repo recon\n\nRead the repo before touching it.\n"
+    argv = build_argv("s", RunConfig(append_system_prompt=body))
+    assert "--system-prompt" not in argv
+    assert argv[argv.index("--append-system-prompt") + 1] == body
+
+
+def test_no_append_flag_when_the_node_wears_no_skill() -> None:
+    assert "--append-system-prompt" not in build_argv("s", RunConfig())
+    # A blank body is dropped rather than passed, so a skill file that is
+    # somehow all frontmatter cannot produce an empty flag.
+    assert "--append-system-prompt" not in build_argv(
+        "s", RunConfig.from_node_config({}, append_system_prompt="")
+    )
+
+
+def test_from_node_config_takes_the_body_not_the_name() -> None:
+    """The *name* stays on the node. Resolving it against `/workspace/_skills`
+    is policy, and the seam is deliberately ignorant of where skills live."""
+    config = RunConfig.from_node_config({"skill": "repo-recon"}, append_system_prompt="body")
+    assert config.append_system_prompt == "body"
+    assert "repo-recon" not in (config.append_system_prompt or "")

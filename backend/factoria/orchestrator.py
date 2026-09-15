@@ -1,4 +1,4 @@
-"""The Orchestrator: a topological walk, a state machine per node, one bus.
+"""The Orchestrator: an edge-driven walk, a state machine per node, one bus.
 
 `DESIGN.md`, Architecture: *"Walks the graph, decides what's runnable, drives
 node state machines (`pending → waiting_input → running → succeeded/failed`),
@@ -22,21 +22,28 @@ state, including by cancellation.
         │                             └─────► failed
         └───────────────────────────────────► (stays pending)
 
-- `pending → waiting_input`: the run was created. Only an `input` node takes
-  this arrow — it is the one node whose work is a human's (open question 2: a
-  one-shot request submission, not a chat).
-- `waiting_input → running → succeeded`: the request was submitted.
-- `pending → running`: the walk reached the node and its predecessors all
-  succeeded.
+- `pending → waiting_input`: the run was created, for an `input` node; or the
+  walk arrived at a `human` node, which parks the line until a person answers.
+  Both are one-shot submissions rather than a chat (open question 2).
+- `waiting_input → running → succeeded`: the request, or the verdict, arrived.
+- `pending → running`: the walk reached the node along a belt that was taken.
 - `running → succeeded`: an agent's stream ended in `exit.cause: completed`;
   any other node type finished its work.
 - `running → failed`: any other exit cause, an adapter that raised, or a
   cancel. **Cancellation is `failed` with a detail**, not a sixth node state —
   see `models.NodeStatus`.
-- Nodes downstream of a failure **stay `pending`** rather than moving to some
-  "skipped" state. They did not run; a canvas showing them dark is telling the
-  truth, and inventing `skipped` would make replay describe something that
-  never happened.
+- Nodes downstream of a failure, and nodes on a branch the run did not take,
+  **stay `pending`** rather than moving to some "skipped" state. They did not
+  run; a canvas showing them dark is telling the truth, and inventing `skipped`
+  would make replay describe something that never happened.
+
+**Which belt the run leaves by is the node's outcome.** An `agent` and a `human`
+node have two ports — `success` and `fail` (`models.EdgeOutcome`, carried on the
+belt's `source_handle`) — so the walk cannot be a precomputed order and is a
+readiness traversal instead (`_walk`). A failure with a belt on its fail port is
+an *outcome*: the run carries on down it and can still end `succeeded`. A failure
+with nothing wired there is what it always was — the end of the run. Loops are
+still refused by `runcheck`; this is the shape they will arrive into.
 
 **Cancel actually stops work.** `DESIGN.md` names explicit cancellation as the
 answer to SSE's one weakness (*"the server keeps working after the client
@@ -75,24 +82,47 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
-from . import config, gitwork, runcheck, summary, worktree
+from . import config, gitwork, runcheck, skills, summary, worktree
 from .agent.adapter import AgentAdapter, AgentRun, RunConfig
 from .agent.claude import ClaudeAdapter, PermissionDenied, resolve_permission_mode
-from .agent.fake import FakeAdapter
+from .agent.fake import FAKE_COST_USD, SCRIPTS as FAKE_SCRIPTS, FakeAdapter
 from .discovery import discover_codebases
-from .models import Codebase, Factory, Node, NodeRun, NodeStatus, Run, RunStatus, utcnow
+from . import verdict
+from .models import (
+    Codebase,
+    Edge,
+    Factory,
+    Node,
+    NodeRun,
+    NodeStatus,
+    ProjectSettings,
+    PUSHING_OUTPUT_KINDS,
+    Run,
+    RunDecision,
+    RunStatus,
+    RunWorktree,
+    edge_outcome,
+    has_outcome_ports,
+    node_kind,
+    node_prompt,
+    node_remote,
+    utcnow,
+)
 from .runcheck import NotRunnable
+from .skills import SkillError
 from .runevents import (
     AgentStreamEvent,
     NodeStatusEvent,
     RunArtifactEvent,
     RunCostEvent,
+    RunDecisionEvent,
+    RunDecisionRequestEvent,
     RunInputEvent,
     RunStatusEvent,
 )
 from .worktree import RunWorkspaces, WorktreeError
 from .runlog import RunChannel, RunStore
-from .store import Store, get_store
+from .store import NotFound, Store, get_store
 
 CANCEL_GRACE_S = 10.0
 """How long a cancelled run may take to stop before the task is killed."""
@@ -125,35 +155,108 @@ def _fake_delay() -> float:
         return 0.35
 
 
-def adapter_name_for(node: Node) -> str:
-    """`fake` or `claude`, per node. The node wins over the container's default.
+def _fake_cost(node: Node) -> float:
+    """What a dry-run node reports its turns cost. Nothing, unless asked.
+
+    A fake run's `turn.end` is summed into `Run.total_cost_usd` by the same code
+    that sums a real one's, so the default has to be zero or a dry run bills the
+    project for money it never spent. `fake_cost` on the node exists so the
+    accounting itself stays testable — see `agent/fake.py`.
+    """
+    raw = node.definition.config.get("fake_cost")
+    if raw is None:
+        raw = os.environ.get("FACTOR_IA_FAKE_COST")
+    try:
+        return max(0.0, float(raw))  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return FAKE_COST_USD
+
+
+def adapter_name_for(node: Node, settings: ProjectSettings | None = None) -> str:
+    """`fake` or `claude`. The node, then the project, then the container.
 
     Per node rather than per run so one machine on a busy canvas can be dry-run
     while the rest are real — which is how you debug a factory without paying
-    for the parts that already work.
+    for the parts that already work. The project sits underneath as the answer
+    for every node that names nothing, which is most of them.
+
+    **A container pinned to `fake` stays fake**, and neither rung above can lift
+    it. `FACTOR_IA_ADAPTER=fake` is a deliberate pin — a machine with no
+    credential, a test suite that must cost nothing — and a stored project
+    setting that could spend money against it would make the pin advisory. The
+    override direction worth having is the other one: dry-running one machine
+    on a live canvas.
     """
-    requested = node.definition.config.get("adapter")
-    name = str(requested or config.adapter_name()).strip().lower()
+    container = config.adapter_name()
+    if container == "fake":
+        return "fake"
+    requested = node.definition.config.get("adapter") or (
+        settings.default_provider if settings else None
+    )
+    name = str(requested or container).strip().lower()
     return "fake" if name == "fake" else "claude"
 
 
-def adapter_for(node: Node) -> AgentAdapter:
+def adapter_for(
+    node: Node, settings: ProjectSettings | None = None, *, lap: int = 1
+) -> AgentAdapter:
     """The seam stage 5 left. Same signature, real body.
 
     The fake's script is still read from the node's freeform `config`, so a
     factory that exercises the failure path is a graph rather than a code
     change — stage 2 left `config` freeform for exactly this.
+
+    `fake_scripts` is the plural of that, and it exists because a loop cannot
+    be tested without it: a node's script was fixed for the whole run, so a fake
+    reviewer could fail or pass but never fail *and then* pass, which is the
+    only interesting shape a loop has. A list is indexed by lap and its last
+    entry repeats, so `["verdict-fail", "verdict-pass"]` is a review that is
+    satisfied on the second look.
     """
-    if adapter_name_for(node) == "fake":
-        script = str(
-            node.definition.config.get("fake_script")
-            or os.environ.get("FACTOR_IA_FAKE_SCRIPT")
-            or "success"
-        )
-        if script not in ("success", "failure", "streaming"):
+    if adapter_name_for(node, settings) == "fake":
+        scripts = node.definition.config.get("fake_scripts")
+        if isinstance(scripts, list) and scripts:
+            script = str(scripts[min(max(lap, 1) - 1, len(scripts) - 1)])
+        else:
+            script = str(
+                node.definition.config.get("fake_script")
+                or os.environ.get("FACTOR_IA_FAKE_SCRIPT")
+                or "success"
+            )
+        if script not in FAKE_SCRIPTS:
             script = "success"
-        return FakeAdapter(script=script, delay_s=_fake_delay())  # type: ignore[arg-type]
+        return FakeAdapter(  # type: ignore[arg-type]
+            script=script, delay_s=_fake_delay(), cost_usd=_fake_cost(node)
+        )
     return ClaudeAdapter()
+
+
+def model_for(node: Node, settings: ProjectSettings | None = None) -> str:
+    """What this node asked to run on. `""` when it defers to the CLI's default.
+
+    The same ladder `adapter_name_for` walks, and the same reason for existing:
+    one reader, so the run record, the spawn and anything that comes later all
+    resolve the model identically. Non-agent nodes never have one.
+    """
+    if node.definition.type != "agent":
+        return ""
+    resolved = RunConfig.from_node_config(
+        node.definition.config,
+        default_model=settings.default_model if settings else None,
+    ).model
+    return resolved or ""
+
+
+def skill_for(node: Node) -> str:
+    """The skill this node wears, `""` when it wears none.
+
+    One reader, for `model_for`'s reason: the run record, the run check and the
+    spawn must agree about which standing instructions applied. No ladder — a
+    skill is a property of the node and of nothing above it.
+    """
+    if node.definition.type != "agent":
+        return ""
+    return str(node.definition.config.get("skill") or "").strip()
 
 
 def run_is_dangerous(factory: Factory) -> bool:
@@ -175,6 +278,29 @@ def run_is_dangerous(factory: Factory) -> bool:
     return False
 
 
+def _carries(node: Node, edge: Edge, outcome: str) -> bool:
+    """Whether `edge` leaves `node` by the port matching `outcome`.
+
+    The one reader of a belt's outcome during a walk, so the rule that an input
+    node's single unnamed handle still means *success* is stated once. A node
+    with one way out takes it on success and has nowhere to route a failure —
+    which is why an output node that fails, and a worker that crashes, still end
+    the run.
+
+    Whether a node *has* two ports is `models.has_outcome_ports`, which is a
+    question about the node and not about its type: a worker and a reviewer are
+    both agents and answer it differently.
+    """
+    if outcome == "halt":
+        # Nothing carries a halt. Every belt out of the node goes dead and the
+        # walk breaks, which is what makes "the back-edge is taken only on an
+        # explicit fail verdict" true for a crash and a spent cap as well.
+        return False
+    if has_outcome_ports(node):
+        return edge_outcome(edge) == outcome
+    return outcome == "success"
+
+
 @dataclass
 class ActiveRun:
     """A run's in-process half: the task, the bus, the adapter run in flight."""
@@ -182,12 +308,39 @@ class ActiveRun:
     run: Run
     factory: Factory
     channel: RunChannel
+    #: The project's defaults as they stood when the run was created. Frozen
+    #: here and never re-read, for the same reason `NodeRun.kind` is: the
+    #: registry is editable while a run is in flight, and a run record has to
+    #: describe the run that actually happened.
+    settings: ProjectSettings = field(default_factory=ProjectSettings)
     #: Every worktree this run owns, created on demand (`worktree.py`).
     workspaces: RunWorkspaces | None = None
     task: asyncio.Task[None] | None = None
     agent_run: AgentRun | None = None
     cancelled: bool = False
     input_ready: asyncio.Event = field(default_factory=asyncio.Event)
+    #: The walk's own bookkeeping, by id. A belt is `taken` when its source ran
+    #: and its outcome matched the belt's port, and `dead` when it did not — or
+    #: when the source itself was never reached. A node is `settled` once it has
+    #: run or is known never to. Held here rather than local to `_walk` because
+    #: `_incoming_text` has to know which belts actually delivered.
+    taken: set[str] = field(default_factory=set)
+    dead: set[str] = field(default_factory=set)
+    settled: set[str] = field(default_factory=set)
+    #: Nodes that failed in a way nothing may route around: a crash, a cancel,
+    #: a reviewer that produced no verdict, a reviewer that has spent its laps.
+    #: Distinct from a `failed` status, which is an *outcome* a belt can carry —
+    #: this is the absence of one, and it is what keeps the back-edge reserved
+    #: for a reviewer that explicitly said "fail" with laps left.
+    halt: set[str] = field(default_factory=set)
+    #: The back-edges of this factory, by edge id, as `runcheck.back_edges`
+    #: computed them at the start of the walk. Held here because `_run_agent`
+    #: has to know whether the belt a crash would leave by loops back up the
+    #: line or runs forward to a rescue.
+    back_edges: dict[str, list[str]] = field(default_factory=dict)
+    #: Human nodes the walk is parked on, by node id. Resolved by
+    #: `submit_decision`, cancelled by `cancel`.
+    decisions: dict[str, "asyncio.Future[RunDecision]"] = field(default_factory=dict)
 
 
 class Orchestrator:
@@ -239,6 +392,15 @@ class Orchestrator:
             factory = await asyncio.to_thread(
                 self.store.get_factory, project_id, factory_id
             )
+            try:
+                project = await asyncio.to_thread(self.store.get_project, project_id)
+                settings = project.settings
+            except NotFound:
+                # A factory file outliving its registry entry is a shape this
+                # store creates on purpose — `delete_project` unregisters and
+                # leaves `_factories/` alone. Running one of those is not the
+                # moment to start failing; it just has no project defaults.
+                settings = ProjectSettings()
             codebases = await asyncio.to_thread(discover_codebases)
             # In a thread: the clean-repo precondition shells out to git once
             # per attached codebase, and the event loop is also serving an SSE
@@ -258,10 +420,30 @@ class Orchestrator:
                 # from the first frame; the ref itself is created with the first
                 # worktree (`DESIGN.md`, Assumptions).
                 branch=worktree.branch_name(factory_id, run_id),
-                adapter=_run_adapter_id(factory),
+                adapter=_run_adapter_id(factory, settings),
                 dangerous=run_is_dangerous(factory),
                 node_runs=[
-                    NodeRun(node_id=node.id, type=node.definition.type)
+                    NodeRun(
+                        node_id=node.id,
+                        type=node.definition.type,
+                        # Frozen here, not re-read later: the factory file is
+                        # editable while a run is in flight, and a run record
+                        # has to describe the run that actually happened.
+                        kind=node_kind(node),
+                        label=node.definition.label or node.id,
+                        prompt=node_prompt(node),
+                        # What the graph asked for. `session.init` overwrites it
+                        # with what the CLI actually chose, which is the answer
+                        # worth keeping — but a run that dies before that event
+                        # still says what it was reaching for.
+                        model=model_for(node, settings),
+                        # Frozen for the same reason as the rest, and worth
+                        # keeping for a stronger one: standing instructions
+                        # shape what an agent did more than the model id does,
+                        # and a run log that cannot say which applied cannot
+                        # explain its own output.
+                        skill=skill_for(node),
+                    )
                     for node in factory.nodes
                 ],
             )
@@ -271,6 +453,7 @@ class Orchestrator:
                 run=run,
                 factory=factory,
                 channel=channel,
+                settings=settings,
                 workspaces=RunWorkspaces(run_id=run.id, branch=run.branch or ""),
             )
             self._active[run.id] = state
@@ -288,15 +471,36 @@ class Orchestrator:
             await self._set_node(state, node.id, "pending")
         for node in factory.nodes:
             if node.definition.type == "input":
-                await self._set_node(state, node.id, "waiting_input", "waiting for the request")
+                await self._set_node(
+                    state, node.id, "waiting_input", _waiting_detail(node_kind(node))
+                )
         return run
 
-    async def submit_input(self, run_id: str, text: str) -> Run:
-        """The one-shot request (open question 2). Starts the walk.
+    async def submit_input(
+        self,
+        run_id: str,
+        text: str,
+        *,
+        node_id: str | None = None,
+        filename: str | None = None,
+    ) -> Run:
+        """One input node's submission. Starts the walk once the last one is in.
 
-        Every `input` node receives the same text: a factory with two request
-        nodes is not a shape the MVP draws, and asking twice for one submission
-        would be the conversational input this design deliberately does not have.
+        Still one-shot per node, and still not a chat (open question 2) — what
+        changed is that a factory may now have more than one input node, and
+        they do not all want the same thing. A `request` node wants a sentence
+        and a `prd` node wants a document, so a single broadcast of one string
+        to every input node stopped being a simplification and became a bug.
+
+        `node_id` addresses one node. Omitting it keeps the old meaning — every
+        input node still waiting receives the text — which is what the
+        single-request factory, and every existing client, already posts.
+
+        **The walk starts once, when no input node is still waiting.** A run
+        with two inputs therefore sits in `waiting_input` after the first
+        submission rather than starting a walk that would block on a node with
+        nothing in it, and `state.task` guards the transition so two
+        submissions racing cannot both create a walk.
         """
         state = self._active.get(run_id)
         if state is None:
@@ -304,25 +508,95 @@ class Orchestrator:
         if state.run.status != "waiting_input":
             raise RunConflict(f"run {run_id} is {state.run.status}, not waiting for input")
 
-        state.run.input_text = text
+        def is_waiting(node: Node) -> bool:
+            node_run = state.run.node_run(node.id)
+            return (
+                node.definition.type == "input"
+                and node_run is not None
+                and node_run.status == "waiting_input"
+            )
+
+        waiting = [node for node in state.factory.nodes if is_waiting(node)]
+        if node_id is not None:
+            waiting = [node for node in waiting if node.id == node_id]
+            if not waiting:
+                raise RunConflict(
+                    f"node {node_id} is not an input node of run {run_id} that is "
+                    "waiting for a submission"
+                )
+
+        for node in waiting:
+            kind = node_kind(node)
+            await state.channel.emit(
+                RunInputEvent(
+                    run_id=run_id,
+                    node_id=node.id,
+                    text=text,
+                    kind=kind,
+                    filename=filename,
+                )
+            )
+            node_run = state.run.node_run(node.id)
+            if node_run is not None:
+                node_run.output_text = text
+                node_run.filename = filename
+            await self._set_node(state, node.id, "running")
+            await self._set_node(
+                state,
+                node.id,
+                "succeeded",
+                f"{filename} received" if filename else "request submitted",
+            )
+
+        still_waiting = [
+            node_run
+            for node_run in state.run.node_runs
+            if node_run.type == "input" and node_run.status == "waiting_input"
+        ]
+        if still_waiting or state.task is not None:
+            # More inputs to collect — or a walk already started, which means two
+            # submissions raced and the first one won. Either way the run record
+            # is now different, so it is written before it is handed back.
+            await self._persist(state)
+            return state.run
+
+        # The subject line of the commit, and the fallback any node with no
+        # incoming belt reads. Computed from the submissions rather than from
+        # whichever one arrived last, so it does not depend on click order.
+        state.run.input_text = _request_line(state)
         state.run.status = "running"
         state.run.started_at = utcnow()
         await self._persist(state)
 
-        for node in state.factory.nodes:
-            if node.definition.type == "input":
-                await state.channel.emit(
-                    RunInputEvent(run_id=run_id, node_id=node.id, text=text)
-                )
-                node_run = state.run.node_run(node.id)
-                if node_run is not None:
-                    node_run.output_text = text
-                await self._set_node(state, node.id, "running")
-                await self._set_node(state, node.id, "succeeded", "request submitted")
-
         await state.channel.emit(RunStatusEvent(run_id=run_id, status="running"))
         state.input_ready.set()
         state.task = asyncio.create_task(self._walk(state), name=f"run:{run_id}")
+        return state.run
+
+    async def submit_decision(self, run_id: str, decision: RunDecision) -> Run:
+        """One human node's verdict. Resumes the walk down the matching belt.
+
+        `node_id` is required, unlike on `submit_input`. A run can only ever be
+        parked at one human node, so "whichever is waiting" would in practice
+        work — but a verdict is not re-postable, and addressing it by name is
+        what makes a stale form in a second tab fail loudly instead of
+        answering a question it was not showing.
+
+        The run handed back still says `waiting_input`: the walk resumes on its
+        own task and the transition arrives on the stream a moment later, which
+        is where every other transition arrives from. Returning a run this call
+        had to wait for would mean blocking the endpoint on the rest of the
+        graph.
+        """
+        state = self._active.get(run_id)
+        if state is None:
+            raise RunConflict(f"run {run_id} is not in flight")
+        future = state.decisions.get(decision.node_id)
+        if future is None or future.done():
+            raise RunConflict(
+                f"node {decision.node_id} of run {run_id} is not waiting for a decision"
+            )
+        future.set_result(decision)
         return state.run
 
     async def cancel(self, run_id: str) -> Run:
@@ -340,6 +614,14 @@ class Orchestrator:
             raise RunConflict(f"run {run_id} already finished as {run.status}")
 
         state.cancelled = True
+        for future in list(state.decisions.values()):
+            # Parked on a person: unblock the walk now rather than leave the
+            # watchdog to hard-cancel the task `CANCEL_GRACE_S` from now. The
+            # `CancelledError` this raises inside `_run_human` unwinds into
+            # `_walk`'s own handler, which is the same path every other cancel
+            # takes.
+            if not future.done():
+                future.cancel()
         if state.agent_run is not None:
             # Stage 4's interrupt: SIGTERM to the process *group*, then SIGKILL.
             # Not a control request the CLI might be too busy to read.
@@ -363,31 +645,222 @@ class Orchestrator:
     # ---- the walk ---------------------------------------------------------
 
     async def _walk(self, state: ActiveRun) -> None:
-        order = runcheck.topological_order(state.factory.nodes, state.factory.edges)
-        assert order is not None  # a cycle is a run precondition, checked in start()
+        """Follow the belts, leaving each node by the port its outcome matched.
+
+        **Edge-driven, not a precomputed order.** Until stage 8 this iterated
+        `runcheck.topological_order` and stopped at the first failure, which is
+        the same thing as saying every machine has exactly one way out. An agent
+        and a human node have two — `success` and `fail` (`models.EdgeOutcome`)
+        — so what runs next is a property of what just happened, and cannot be
+        computed before the run starts.
+
+        The bookkeeping is three sets on `ActiveRun`, and the invariant is that
+        a node runs when **every** belt into it has been decided and **at least
+        one** of them was taken:
+
+        - a node all of whose incoming belts are `dead` was never reached. It
+          stays `pending` — the module docstring's refusal to invent `skipped`
+          applies to an untaken branch for the same reason it applied to a
+          branch below a failure — and every belt out of it is `dead` in turn,
+          which is what propagates the miss to the rest of that branch;
+        - fan-in therefore waits for the branch that will never arrive to be
+          *ruled out*, rather than for it to succeed. That is the whole reason
+          `dead` is a set and not the absence of one.
+
+        A failure with nothing wired to the fail port is still a failure of the
+        whole run, and breaks the walk exactly where the old loop broke it. A
+        failure the graph *drew a belt for* is an outcome, not an accident: the
+        walk carries on and `failure` stays `None`, so the run can still end
+        `succeeded` with a red node on it.
+
+        **Loops.** A reviewer's `fail` belt may point back up the line it came
+        down (`runcheck.back_edges`). Taking one un-settles the work below it so
+        it runs again — see `_reset_loop` for exactly how much — and that is the
+        whole of the feature the three sets above were built for.
+
+        It used to terminate because the graph was acyclic. It now terminates
+        because: between two back-edge takings this is a traversal of a finite
+        acyclic graph, and so finite; a back-edge is taken only by a reviewer
+        returning an explicit `fail` verdict with laps left; and `NodeRun.lap`
+        is incremented on every run and **never reset**, including by an outer
+        loop. So each reviewer takes its own back-edge at most `max_laps - 1`
+        times in the whole run, `runcheck` bounds `max_laps` above, and the
+        number of takings is therefore a number rather than a hope.
+
+        The consequence of never resetting `lap`, stated because it is a design
+        decision and not an oversight: **with nested loops a cap is a budget for
+        the run, not an allowance per outer lap.** An inner reviewer capped at
+        three gets three laps altogether.
+        """
+        nodes = state.factory.nodes
+        edges = state.factory.edges
+        incoming: dict[str, list[Edge]] = {
+            node.id: [edge for edge in edges if edge.target == node.id] for node in nodes
+        }
+        outgoing: dict[str, list[Edge]] = {
+            node.id: [edge for edge in edges if edge.source == node.id] for node in nodes
+        }
+        decided = lambda edge: edge.id in state.taken or edge.id in state.dead  # noqa: E731
+        # Computed once, from the same function the run check refused the graph
+        # with, so what may close a loop and what gets reset cannot disagree.
+        back = runcheck.back_edges(nodes, edges)
+        state.back_edges = back
+        # **A back-edge starts dead, or nothing ever starts.** A node runs when
+        # every belt into it has been decided, and a back-edge into the top of a
+        # loop cannot be decided until the reviewer at the bottom has run — which
+        # cannot happen until the top does. Seeding them `dead` says the only
+        # thing that is true before the first lap: the work has not been sent
+        # back yet. The entry node is then reached by the belt that actually fed
+        # it, and `_reset_loop` marks the back-edge `taken` when it is genuinely
+        # taken.
+        state.dead.update(back)
         failure: str | None = None
         try:
-            for node in order:
-                if state.cancelled:
+            while not state.cancelled:
+                ready = [
+                    node
+                    for node in nodes  # factory order, so the walk is deterministic
+                    if node.id not in state.settled
+                    and all(decided(edge) for edge in incoming[node.id])
+                ]
+                if not ready:
                     break
-                node_run = state.run.node_run(node.id)
-                if node_run is None or node_run.status == "succeeded":
-                    continue  # the input node, already done by submit_input
-                try:
-                    await self._run_node(state, node)
-                except (WorktreeError, gitwork.GitError) as exc:
-                    # Already a sentence about git; prefixing it with a class
-                    # name would only make it less readable on the node.
-                    await self._set_node(state, node.id, "failed", str(exc))
-                except Exception as exc:  # an adapter that raised rather than exited
-                    await self._set_node(state, node.id, "failed", f"{type(exc).__name__}: {exc}")
-                if (state.run.node_run(node.id) or node_run).status == "failed":
+                node = ready[0]
+                state.settled.add(node.id)
+
+                # No incoming belts at all means an input node, which the run
+                # check guarantees and `submit_input` has already succeeded.
+                reached = not incoming[node.id] or any(
+                    edge.id in state.taken for edge in incoming[node.id]
+                )
+                if not reached:
+                    state.dead.update(edge.id for edge in outgoing[node.id])
+                    continue
+
+                outcome = await self._settle(state, node)
+                for edge in outgoing[node.id]:
+                    # Discarded from the other set, not merely added to this
+                    # one. The two were append-only while every belt was decided
+                    # exactly once; a back-edge is decided again on every lap,
+                    # and one that was `taken` last lap and is not taken this
+                    # lap would otherwise sit in both — which reads as "taken"
+                    # everywhere it is asked, and turns the loop forever.
+                    taken = _carries(node, edge, outcome)
+                    (state.dead if taken else state.taken).discard(edge.id)
+                    (state.taken if taken else state.dead).add(edge.id)
+                for edge in outgoing[node.id]:
+                    if edge.id in back and edge.id in state.taken:
+                        await self._reset_loop(state, edge, back[edge.id], outgoing)
+                if outcome != "success" and not any(
+                    _carries(node, edge, outcome) for edge in outgoing[node.id]
+                ):
                     failure = node.definition.label or node.id
                     break
         except asyncio.CancelledError:
             state.cancelled = True
         finally:
             await self._finalize(state, failure)
+
+    async def _reset_loop(
+        self,
+        state: ActiveRun,
+        back_edge: Edge,
+        body: list[str],
+        outgoing: dict[str, list[Edge]],
+    ) -> None:
+        """Un-settle the work a back-edge just sent back, so it runs again.
+
+        **The obvious rule is wrong, and wrong silently**, which is the reason
+        this is its own method with this comment on it. Resetting the loop body
+        alone leaves the reviewer's `success` belt `dead` from the lap that
+        failed — so everything below it was already reached-by-nothing, already
+        `settled`, and already deaded its own belts. None of that is on the body,
+        `ready` skips anything settled forever, and the loop would pass on its
+        second lap into a line that can no longer run. The run ends `succeeded`
+        having committed nothing.
+
+        So the reset set is the body **plus** every node reachable from the
+        back-edge's target that is still `pending` — which is exactly the set
+        that was settled without ever being reached. A node that actually ran is
+        not in that second group, which is what holds the invariant worth
+        stating out loud:
+
+        **Only nodes on the loop body ever run twice.** An output node drawn in
+        parallel with the reviewer has already run and is not reset, so it
+        cannot commit a second time; a human node outside the loop keeps its
+        answer and is not asked again. `runcheck` refuses an output node *on*
+        the body, which is what makes that pair of rules complete.
+
+        The back-edge itself stays `taken`: it is what carries the reviewer's
+        reason into the next lap (`_incoming_text`), and resetting it would
+        strand the worker with nothing to act on.
+        """
+        reset = set(body)
+        # Reachable-from-the-target, over every belt, so a branch below the
+        # reviewer is reached the same way the walk would have reached it.
+        seen: set[str] = set()
+        stack = [back_edge.target]
+        while stack:
+            current = stack.pop()
+            if current in seen:
+                continue
+            seen.add(current)
+            node_run = state.run.node_run(current)
+            if current not in reset and node_run is not None and node_run.status == "pending":
+                reset.add(current)
+            stack.extend(edge.target for edge in outgoing.get(current, []))
+
+        state.settled -= reset
+        for node_id in reset:
+            for edge in outgoing.get(node_id, []):
+                if edge.id == back_edge.id:
+                    continue
+                state.taken.discard(edge.id)
+                state.dead.discard(edge.id)
+        for node_id in reset:
+            node_run = state.run.node_run(node_id)
+            if node_run is None or node_run.status == "pending":
+                continue
+            # Back to `pending`, which is both the truth and the event the
+            # canvas needs: it is what tells a watching tab to clear the last
+            # lap's transcript before the next one starts streaming.
+            await self._set_node(state, node_id, "pending", "going round again")
+
+    async def _settle(self, state: ActiveRun, node: Node) -> str:
+        """Run one node and say which port it leaves by.
+
+        The outcome is read back off the `NodeRun` rather than returned by the
+        runners, so `_set_node` stays the single place a node's state moves —
+        including for the two failure modes that never reach a runner at all.
+
+        Three outcomes, not two. `halt` is a failure nothing may route around,
+        and it is what `state.halt` carries; `_carries` refuses every belt for
+        it, so the walk breaks. Without it a crashed reviewer would leave by its
+        fail port, which is a back-edge — and a broken CLI would spend the whole
+        lap budget before anyone found out.
+        """
+        node_run = state.run.node_run(node.id)
+        # **`type`, not `status`.** This is the input node's short-circuit, which
+        # is what its comment always said it was; reading it as "anything already
+        # succeeded" was harmless only while no node could run twice. A worker
+        # that succeeded on lap 1 and was un-settled for lap 2 is `succeeded`
+        # too, and would have returned here without running anything.
+        if node_run is None or node_run.type == "input":
+            return "success"  # an input node, already done by submit_input
+        try:
+            await self._run_node(state, node)
+        except (WorktreeError, gitwork.GitError) as exc:
+            # Already a sentence about git; prefixing it with a class name
+            # would only make it less readable on the node.
+            state.halt.add(node.id)
+            await self._set_node(state, node.id, "failed", str(exc))
+        except Exception as exc:  # an adapter that raised rather than exited
+            state.halt.add(node.id)
+            await self._set_node(state, node.id, "failed", f"{type(exc).__name__}: {exc}")
+        if node.id in state.halt:
+            return "halt"
+        current = state.run.node_run(node.id) or node_run
+        return "fail" if current.status == "failed" else "success"
 
     async def _finalize(self, state: ActiveRun, failure: str | None) -> None:
         for node_run in state.run.node_runs:
@@ -425,20 +898,127 @@ class Orchestrator:
 
     async def _run_node(self, state: ActiveRun, node: Node) -> None:
         kind = node.definition.type
-        await self._set_node(state, node.id, "running")
+        # One place, for every node type, so a worker's lap number is as real as
+        # the reviewer's — it is the machine doing the work, and the one a
+        # watcher is looking at when a loop turns.
+        node_run = state.run.node_run(node.id)
+        if node_run is not None:
+            node_run.lap += 1
+        if kind != "human":
+            # A human node takes `pending → waiting_input` instead. It has done
+            # no work yet, and a pip reading "running" over a form nobody has
+            # opened would be a lie for as long as the operator took to answer.
+            await self._set_node(state, node.id, "running")
         incoming = self._incoming_text(state, node)
         if kind == "agent":
             await self._run_agent(state, node, incoming)
         elif kind == "output":
             await self._run_output(state, node, incoming)
+        elif kind == "human":
+            await self._run_human(state, node, incoming)
         else:
-            node_run = state.run.node_run(node.id)
             if node_run is not None:
                 node_run.output_text = incoming
             await self._set_node(state, node.id, "succeeded")
 
+    async def _run_human(self, state: ActiveRun, node: Node, incoming: str) -> None:
+        """Stop the line and ask a person which belt the run leaves by.
+
+        The second node type whose work is a human's, and deliberately the same
+        shape as the first: a **one-shot** answer, not a conversation (open
+        question 2). That is what keeps run state one-way and SSE sufficient —
+        `DESIGN.md` names a human-in-the-middle node as the one deferred feature
+        that might have forced a `/ws` back-channel, and a verdict plus a note,
+        posted once, does not.
+
+        What it parks on is a future rather than the run-level `input_ready`
+        event: `submit_input` collects every input node *before* the walk
+        starts, so one event for the whole run was enough. This happens **inside**
+        the walk, at a node, and the walk's own task is what is suspended.
+
+        Approving without writing anything passes on exactly what arrived, so a
+        human node in the middle of a line is a gate and not a rewrite. A note
+        replaces it — which is how the fail belt carries a reason rather than a
+        copy of the thing that was rejected.
+
+        A rejection is `failed`. Not a sixth node state and not a special case
+        in the walk: the operator saying no is an outcome on the fail port, and
+        making it the *same* outcome an agent's crash produces is what lets one
+        belt handle both. `detail` says which it was.
+        """
+        node_run = state.run.node_run(node.id)
+        prompt = node_run.prompt if node_run is not None else node_prompt(node)
+        if node_run is not None:
+            node_run.output_text = incoming
+
+        # **Registered before the node is announced as waiting.** The events
+        # below are what tell a client a form is open, and a client that answers
+        # the instant it sees one would otherwise be refused for the width of
+        # this function — the run record would say `waiting_input` while
+        # `submit_decision` could still find nothing to resolve.
+        future: asyncio.Future[RunDecision] = asyncio.get_running_loop().create_future()
+        state.decisions[node.id] = future
+
+        await self._set_node(
+            state, node.id, "waiting_input", prompt or "waiting for a decision"
+        )
+        # The *run* is waiting too — a canvas that joined late reads this to
+        # know the line is stopped on a person rather than wedged on a machine.
+        state.run.status = "waiting_input"
+        await self._persist(state)
+        await state.channel.emit(
+            RunStatusEvent(
+                run_id=state.run.id, status="waiting_input", detail=prompt or None
+            )
+        )
+        await state.channel.emit(
+            RunDecisionRequestEvent(
+                run_id=state.run.id,
+                node_id=node.id,
+                prompt=prompt,
+                incoming=incoming,
+                kind=node_kind(node),
+            )
+        )
+
+        try:
+            decision = await future
+        finally:
+            # Including when the future was cancelled out from under us by
+            # `cancel()`: a run being torn down must not leave a node id in here
+            # for a later submission to resolve.
+            state.decisions.pop(node.id, None)
+
+        await state.channel.emit(
+            RunDecisionEvent(
+                run_id=state.run.id,
+                node_id=node.id,
+                approved=decision.approved,
+                note=decision.note,
+            )
+        )
+        state.run.status = "running"
+        await self._persist(state)
+        await state.channel.emit(RunStatusEvent(run_id=state.run.id, status="running"))
+        await self._set_node(state, node.id, "running")
+
+        note = decision.note.strip()
+        if note and node_run is not None:
+            node_run.output_text = note
+        if decision.approved:
+            await self._set_node(
+                state,
+                node.id,
+                "succeeded",
+                "approved, with a note" if note else "approved",
+            )
+        else:
+            await self._set_node(
+                state, node.id, "failed", f"rejected: {note}" if note else "rejected"
+            )
+
     async def _run_output(self, state: ActiveRun, node: Node, incoming: str) -> None:
-        """The commit. One per worktree the run touched, on the run's branch.
+        """The commit, and — for the two pushing kinds — where it goes next.
 
         **Failing when there is nothing to commit is deliberate.** The design's
         happy path ends with *"a commit or branch containing the change"*; a
@@ -447,9 +1027,22 @@ class Orchestrator:
         supposed to be an answer to. It also leaves the worktree behind (the
         failed-run policy), which is where the operator can see what the agent
         actually did with its time.
+
+        **The three kinds are one code path with two optional steps**, in
+        increasing order of reach (`models.OutputKind`):
+
+        1. commit on the run's branch — every kind does this;
+        2. push that branch to the remote — `commit-push` and `commit-merge`;
+        3. fast-forward the base branch on the remote to it — `commit-merge`.
+
+        A failure at step 2 or 3 fails the node, and the commit from step 1 is
+        still on the branch in the operator's own repository. That is the whole
+        recovery story and it needs no code: the work is never only on the
+        remote, so a network that is down costs a push and not a run.
         """
         node_run = state.run.node_run(node.id)
         assert state.workspaces is not None
+        kind = node_kind(node)
         made_all = state.workspaces.all
         if not made_all:
             await self._set_node(
@@ -465,6 +1058,7 @@ class Orchestrator:
             factory_name=state.run.factory_name or state.run.factory_id,
             run_id=state.run.id,
             agent_summary=incoming,
+            sources=_input_sources(state),
         )
         committed: list[str] = []
         empty: list[str] = []
@@ -508,16 +1102,139 @@ class Orchestrator:
                 f"nothing to commit — the agent left {', '.join(empty)} unchanged.",
             )
             return
-        await self._set_node(state, node.id, "succeeded", "committed " + "; ".join(committed))
+
+        detail = "committed " + "; ".join(committed)
+        if kind in PUSHING_OUTPUT_KINDS:
+            pushed = await self._push_all(state, node, kind, made_all)
+            if pushed is None:
+                return  # `_push_all` already failed the node, with git's words
+            detail = f"{detail} · {pushed}"
+            state.run.worktrees = state.workspaces.all
+        await self._set_node(state, node.id, "succeeded", detail)
+
+    async def _push_all(
+        self,
+        state: ActiveRun,
+        node: Node,
+        kind: str,
+        made_all: list[RunWorktree],
+    ) -> str | None:
+        """Step 2 and step 3 of `_run_output`. `None` means the node failed.
+
+        A `commit-merge` merges into **the branch the worktree was cut from**
+        (`RunWorktree.base_branch`) rather than a branch named in the node's
+        config. That branch is `worktree.base_ref`'s answer, and the pairing is
+        the point: the run is fast-forwarding exactly the ref it branched from
+        moments earlier, so the merge is a fast-forward by construction rather
+        than by luck. Refused only when there was no base branch at all.
+        """
+        assert state.workspaces is not None
+        remote = node_remote(node)
+        reported: list[str] = []
+        for made in made_all:
+            if not made.commit_sha:
+                continue  # nothing was produced here; nothing to send anywhere
+            merge_into: str | None = None
+            if kind == "commit-merge":
+                if not made.base_branch:
+                    await self._set_node(
+                        state,
+                        node.id,
+                        "failed",
+                        f"“{made.codebase_name or made.codebase_id}” had no base "
+                        "branch when the run branched, so there is nothing to merge "
+                        "into. Check out a branch and run again.",
+                    )
+                    return None
+                merge_into = made.base_branch
+            try:
+                await asyncio.to_thread(
+                    state.workspaces.push, made, remote=remote, merge_into=merge_into
+                )
+            except gitwork.GitError as error:
+                await self._set_node(
+                    state,
+                    node.id,
+                    "failed",
+                    # git's own words. A non-fast-forward is the expected
+                    # failure here and git explains it better than we would.
+                    f"{made.branch} is committed but the push was refused: {error}",
+                )
+                return None
+
+            await state.channel.emit(
+                RunArtifactEvent(
+                    run_id=state.run.id,
+                    node_id=node.id,
+                    kind="push",
+                    codebase_id=made.codebase_id,
+                    branch=made.branch,
+                    path=made.path,
+                    base_branch=made.base_branch,
+                    base_commit=made.base_commit,
+                    commit_sha=made.commit_sha,
+                    file_count=len(made.files),
+                    detail=made.push_detail,
+                    remote=remote,
+                )
+            )
+            reported.append(f"pushed {made.branch} to {remote}")
+            if merge_into:
+                await state.channel.emit(
+                    RunArtifactEvent(
+                        run_id=state.run.id,
+                        node_id=node.id,
+                        kind="merge",
+                        codebase_id=made.codebase_id,
+                        branch=made.branch,
+                        path=made.path,
+                        base_branch=made.base_branch,
+                        base_commit=made.base_commit,
+                        commit_sha=made.commit_sha,
+                        file_count=len(made.files),
+                        detail=made.push_detail,
+                        remote=remote,
+                        merged_into=merge_into,
+                    )
+                )
+                reported.append(f"fast-forwarded {remote}/{merge_into}")
+        return "; ".join(reported) if reported else None
 
     async def _run_agent(self, state: ActiveRun, node: Node, prompt: str) -> None:
         node_run = state.run.node_run(node.id)
         assert node_run is not None
         codebase = self._codebase(node)
+        # The run check proved this readable, subprocesses ago; a file can go
+        # in between, which is the same window `_codebase` acknowledges below.
+        # **Failing is the point.** A skill is unconditional, so a run that
+        # quietly dropped its standing instructions would produce output that
+        # looks right and was made under rules nobody chose — the one failure
+        # mode nothing downstream can catch. Failing here costs a re-import.
+        wanted = skill_for(node)
+        appended: str | None = None
+        if wanted:
+            try:
+                appended = skills.body(wanted)
+            except SkillError as exc:
+                await self._set_node(
+                    state, node.id, "failed", f"skill {wanted!r} unavailable: {exc}"
+                )
+                return
+        # Composed here, on this side of the seam, so no adapter ever learns
+        # what a reviewer is (`agent/adapter.py`). A worker's prompt is exactly
+        # what it was before this existed.
+        reviewer = node_kind(node) == "reviewer"
+        appended = verdict.compose_system_prompt(appended, reviewer=reviewer)
         cwd = await self._worktree_for(state, node, codebase)
-        adapter = adapter_for(node)
+        adapter = adapter_for(node, state.settings, lap=node_run.lap)
         agent_run = adapter.create_run(
-            prompt, cwd, RunConfig.from_node_config(node.definition.config)
+            prompt,
+            cwd,
+            RunConfig.from_node_config(
+                node.definition.config,
+                default_model=state.settings.default_model,
+                append_system_prompt=appended,
+            ),
         )
         state.agent_run = agent_run
         collected: list[str] = []
@@ -531,6 +1248,10 @@ class Orchestrator:
                 )
                 if event.type == "session.init":
                     node_run.session_id = event.session_id
+                    # The CLI's own answer, which is the only honest one: we may
+                    # have asked for nothing at all and let it choose.
+                    if event.model:
+                        node_run.model = event.model
                 elif event.type == "text.delta":
                     collected.append(event.text)
                 elif event.type == "turn.end":
@@ -555,13 +1276,74 @@ class Orchestrator:
         finally:
             state.agent_run = None
 
+        # The reviewer's **whole** reply, not just its reason. The analysis is
+        # what the next lap has to act on — unlike `_run_human`, where a note
+        # replaces the text because a person writing one is choosing what to
+        # send on. Nobody chose here.
         node_run.output_text = "".join(collected).strip()
-        if cause == "completed":
+
+        if cause != "completed":
+            # **A crash may be rescued, but never retried.** Stage 8 made "a
+            # failure the graph drew a belt for is an outcome, not an accident"
+            # true, and a fail belt running forward to a rescue agent still is:
+            # the run carries on down it exactly as it always did. What a crash
+            # may not do is take a belt that *loops*, because you cannot retry
+            # your way out of a CLI that dies — a reviewer whose process fails
+            # every time would spend the whole lap budget re-running a worker
+            # that did nothing wrong before anybody saw the real error.
+            if any(
+                edge.id in state.back_edges
+                for edge in state.factory.edges
+                if edge.source == node.id
+            ):
+                state.halt.add(node.id)
+            if cause == "user":
+                await self._set_node(state, node.id, "failed", "cancelled")
+            else:
+                await self._set_node(
+                    state, node.id, "failed", detail or f"agent exited: {cause}"
+                )
+            return
+
+        if not reviewer:
             await self._set_node(state, node.id, "succeeded")
-        elif cause == "user":
-            await self._set_node(state, node.id, "failed", "cancelled")
-        else:
-            await self._set_node(state, node.id, "failed", detail or f"agent exited: {cause}")
+            return
+
+        try:
+            decided = verdict.parse_verdict(node_run.output_text)
+        except verdict.VerdictError as exc:
+            # The same shape as the unreadable-skill failure above, and for the
+            # same reason: a contract this node was required to keep was not
+            # kept, and guessing at what it meant is the one thing that must not
+            # happen. Explicitly **not** a verdict of fail — no belt is taken,
+            # no lap is spent, and the operator reads the real problem rather
+            # than three laps of a worker being told nothing useful.
+            state.halt.add(node.id)
+            await self._set_node(state, node.id, "failed", str(exc))
+            return
+
+        if decided.verdict == "pass":
+            await self._set_node(
+                state, node.id, "succeeded", f"passed — {decided.reason}" if decided.reason else "passed"
+            )
+            return
+
+        cap = verdict.max_laps(node)
+        if node_run.lap >= cap:
+            state.halt.add(node.id)
+            await self._set_node(
+                state,
+                node.id,
+                "failed",
+                f"still asking for changes after {node_run.lap} of {cap} laps "
+                f"— {decided.reason}",
+            )
+            return
+
+        # The one path that takes a back-edge: an explicit fail, with laps left.
+        await self._set_node(
+            state, node.id, "failed", f"sent back for another lap — {decided.reason}"
+        )
 
     def _incoming_text(self, state: ActiveRun, node: Node) -> str:
         """What the belts carry into this node: its predecessors' output.
@@ -569,8 +1351,33 @@ class Orchestrator:
         Freeform text, joined (open question 4, *"start freeform"*). A typed
         payload is an added field on the edge, not a change to this function's
         callers.
+
+        **Only the belts that actually delivered.** Since stage 8 a predecessor
+        may be `pending` because its branch was never taken, or `failed` with
+        its output routed down a belt that does not end here. Reading every
+        predecessor would hand a node the text of a branch the run did not go
+        down, which is worse than handing it nothing.
         """
-        sources = [edge.source for edge in state.factory.edges if edge.target == node.id]
+        # **One predecessor, one contribution.** Two belts between the same pair
+        # of machines carrying the same outcome are both taken, and reading the
+        # source twice would hand this node the same text twice — which is how
+        # it looks on screen: the agent's report, verbatim, repeated. Dropping
+        # the duplicate never loses anything, because a node leaves by exactly
+        # one outcome, so belts on the *other* port are dead and were never in
+        # this list. Two belts from **different** sources are ordinary fan-in
+        # and both still arrive — a worker fed by the request and by a
+        # reviewer's back-edge is a loop, not a mistake. `runcheck` refuses the
+        # duplicate belt outright; this is what keeps the text right for a file
+        # edited by hand in between.
+        seen: set[str] = set()
+        sources: list[str] = []
+        for edge in state.factory.edges:
+            if edge.target != node.id or edge.id not in state.taken:
+                continue
+            if edge.source in seen:
+                continue
+            seen.add(edge.source)
+            sources.append(edge.source)
         parts = [
             (state.run.node_run(source_id).output_text if state.run.node_run(source_id) else "")
             for source_id in sources
@@ -634,9 +1441,20 @@ class Orchestrator:
             node_run.started_at = utcnow()
         if status in ("succeeded", "failed"):
             node_run.ended_at = utcnow()
+        if status == "pending":
+            # A node sent round again by a loop. `started_at` is kept — it is
+            # when this machine first started work, and a run surface that reset
+            # it would report a node as having taken only its final lap.
+            node_run.ended_at = None
         await self._persist(state)
         await state.channel.emit(
-            NodeStatusEvent(run_id=state.run.id, node_id=node_id, status=status, detail=detail)
+            NodeStatusEvent(
+                run_id=state.run.id,
+                node_id=node_id,
+                status=status,
+                detail=detail,
+                lap=node_run.lap,
+            )
         )
 
     async def _finish(self, state: ActiveRun, status: RunStatus, detail: str | None = None) -> None:
@@ -707,6 +1525,63 @@ class Orchestrator:
         return interrupted
 
 
+def _waiting_detail(kind: str) -> str:
+    """What a node says while it waits for a human. One sentence, per kind."""
+    return "waiting for a PRD" if kind == "prd" else "waiting for the request"
+
+
+def prd_title(text: str, filename: str | None = None) -> str:
+    """A one-line name for a PRD, for the commit subject and the run list.
+
+    The document's first ATX heading, because a PRD that has one has put its
+    title there; the filename when it has not; and a stated fallback when there
+    is neither. Never the first 68 characters of the body — a commit subject
+    reading "## Background This document describes" is worse than useless.
+    """
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("#"):
+            heading = stripped.lstrip("#").strip()
+            if heading:
+                return heading
+        elif stripped:
+            break  # prose before any heading: this document has no title
+    if filename:
+        return filename
+    return "Factor-ia run from a PRD"
+
+
+def _request_line(state: ActiveRun) -> str:
+    """The run's one-line description of what it was asked to do.
+
+    A `request` node's text if the factory has one — that is a human writing a
+    sentence, which is exactly what a commit subject wants. Otherwise the title
+    of the first PRD. Read in **factory node order** rather than submission
+    order, so a factory produces the same subject however the operator happened
+    to fill the forms in.
+    """
+    inputs = [node for node in state.factory.nodes if node.definition.type == "input"]
+    for node in inputs:
+        node_run = state.run.node_run(node.id)
+        if node_run and node_kind(node) == "request" and node_run.output_text.strip():
+            return node_run.output_text
+    for node in inputs:
+        node_run = state.run.node_run(node.id)
+        if node_run and node_run.output_text.strip():
+            return prd_title(node_run.output_text, node_run.filename)
+    return ""
+
+
+def _input_sources(state: ActiveRun) -> list[str]:
+    """The documents this run was fed, for the commit's `Factor-ia-Source`
+    trailers. Filenames only — a trailer is a reference, not a payload."""
+    return [
+        node_run.filename
+        for node_run in state.run.node_runs
+        if node_run.type == "input" and node_run.filename
+    ]
+
+
 async def _hard_cancel_after(task: asyncio.Task[None], grace: float) -> None:
     try:
         await asyncio.wait_for(asyncio.shield(task), grace)
@@ -714,7 +1589,7 @@ async def _hard_cancel_after(task: asyncio.Task[None], grace: float) -> None:
         task.cancel()
 
 
-def _run_adapter_id(factory: Factory) -> str:
+def _run_adapter_id(factory: Factory, settings: ProjectSettings | None = None) -> str:
     """What the run record says drove it. The agent nodes decide, not the run.
 
     A mixed factory — one fake machine among real ones — reports `mixed`, which
@@ -722,7 +1597,7 @@ def _run_adapter_id(factory: Factory) -> str:
     on.
     """
     names = {
-        adapter_name_for(node)
+        adapter_name_for(node, settings)
         for node in factory.nodes
         if node.definition.type == "agent"
     }

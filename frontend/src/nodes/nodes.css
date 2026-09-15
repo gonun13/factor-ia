@@ -204,6 +204,51 @@
   font-weight: 600;
 }
 
+/* ---- the reach slot on a pushing output ---------------------------------
+   Same plate as the codebase slot, in the output node's own green for a push
+   and in amber for a merge. Amber is the colour this canvas already uses for
+   "read this before you press Run", and a node that fast-forwards a branch
+   other people pull from has earned it. */
+
+.slot.reach {
+  border-color: color-mix(in srgb, var(--output) 55%, transparent);
+  background: color-mix(in srgb, var(--output) 9%, transparent);
+  color: var(--output);
+}
+
+.slot.reach input {
+  width: 100%;
+  font-size: 0.78rem;
+  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  padding: 0.3rem 0.4rem;
+  border-radius: 6px;
+  border: 1px solid color-mix(in srgb, var(--output) 40%, transparent);
+  background: #0c1512;
+  color: var(--ink);
+}
+
+.slot.reach .reach-note {
+  font-size: 0.68rem;
+  line-height: 1.35;
+  color: var(--ink-faint);
+  white-space: normal;
+}
+
+.node.kind-commit-merge .slot.reach {
+  border-color: color-mix(in srgb, var(--input) 60%, transparent);
+  background: color-mix(in srgb, var(--input) 10%, transparent);
+  color: var(--input);
+}
+
+.node.kind-commit-merge .slot.reach input {
+  border-color: color-mix(in srgb, var(--input) 45%, transparent);
+  background: #171309;
+}
+
+.node.kind-commit-merge .slot.reach .reach-note {
+  color: var(--input);
+}
+
 /* The run's own branch, once it exists. */
 .slot .worktree-line {
   font-size: 0.68rem;
@@ -234,6 +279,37 @@
 
 .react-flow__edge.selected .belt-casing {
   stroke: var(--agent);
+}
+
+/* The fail belt. Same casing — it is still a belt and material still moves
+   down it — but tinted and drawn thinner, so a glance at a canvas separates
+   "what normally happens" from "what happens when it doesn't" without having
+   to trace either line to its end. */
+.belt-fail .belt-casing {
+  stroke: color-mix(in srgb, var(--danger) 28%, var(--belt-casing));
+}
+
+.belt-fail .belt-tread {
+  stroke: var(--danger);
+  stroke-width: 2;
+  opacity: 0.75;
+}
+
+/* The return conveyor. A loop's belt runs the other way round the canvas, but
+   the tread on it still crawls *towards the target* — material moves from the
+   reviewer back to the machine it is being sent back to, which is the whole
+   point of the loop. No `animation-direction` here: `returnPath` in
+   `BeltEdge.tsx` is authored from source to target like any other belt, so the
+   shared `belt` keyframe already crawls the right way, the same way the
+   arrowhead points. Reversing it a second time sends the tread against the
+   arrow. */
+.belt-back .belt-tread {
+  stroke-dasharray: 5 9;
+}
+
+.belt-back .belt-casing {
+  stroke-dasharray: none;
+  opacity: 0.85;
 }
 
 @keyframes belt {
@@ -356,4 +432,162 @@
   text-transform: uppercase;
   letter-spacing: 0.08em;
   color: var(--ink-faint);
+}
+
+/* Only ever drawn above lap 1 (`NodeShell`), so it is a signal that something
+   unusual is happening rather than a permanent fixture on every node. */
+.node .lap {
+  font-size: 0.6rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  padding: 0.05rem 0.3rem;
+  border-radius: 999px;
+  color: var(--ink);
+  background: color-mix(in srgb, var(--danger) 18%, transparent);
+  border: 1px solid color-mix(in srgb, var(--danger) 35%, transparent);
+}
+
+
+.runtime {
+  display: grid;
+  gap: 0.35rem;
+  border-top: 1px solid var(--edge);
+  padding-top: 0.45rem;
+}
+
+.runtime-detail {
+  font-size: 0.7rem;
+  line-height: 1.35;
+  color: var(--ink-dim);
+}
+
+.runtime[data-status="failed"] .runtime-detail {
+  color: var(--danger);
+}
+
+/* The tool in flight: name plus the argument that says what it acts on. */
+.runtime .tool {
+  display: flex;
+  gap: 0.35rem;
+  align-items: baseline;
+  font-size: 0.68rem;
+  color: var(--ink-dim);
+  background: #0f151e;
+  border: 1px solid var(--edge);
+  border-radius: 6px;
+  padding: 0.25rem 0.4rem;
+  overflow: hidden;
+}
+
+.runtime .tool b {
+  color: var(--agent);
+  flex: 0 0 auto;
+}
+
+.runtime .tool .target {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.runtime .tool[data-state="running"] b {
+  animation: pulse 1.4s ease-in-out infinite;
+}
+
+.runtime .tool[data-state="error"] b {
+  color: var(--danger);
+}
+
+/* The agent's own words, as they arrive. Fixed height and pinned to the
+   bottom: a node that grows with every delta would shove the graph around. */
+.runtime .stream {
+  margin: 0;
+  max-height: 5.5rem;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 0.68rem;
+  line-height: 1.45;
+  color: var(--ink);
+  background: #0b1017;
+  border: 1px solid var(--edge);
+  border-radius: 6px;
+  padding: 0.35rem 0.45rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.runtime-foot {
+  display: flex;
+  gap: 0.6rem;
+  font-size: 0.65rem;
+  color: var(--ink-faint);
+}
+
+/* The model plate. Neutral on purpose: the codebase slot is violet because it
+   is *required*, and two identically-coloured plates would flatten that. */
+.slot.model {
+  border-color: color-mix(in srgb, var(--ink-faint) 55%, transparent);
+  background: color-mix(in srgb, var(--ink-faint) 8%, transparent);
+  color: var(--ink-dim);
+}
+
+.slot.model select {
+  border-color: color-mix(in srgb, var(--ink-faint) 45%, transparent);
+  background: #10141b;
+}
+
+/* The skill plate reads like the model plate — both are properties of the
+   machine rather than things flowing through it — but it carries a sentence as
+   well as a name, so the description is clamped: a node is a label on a
+   machine, not a place to read a document. */
+.slot.skill {
+  border-color: color-mix(in srgb, var(--ink-faint) 55%, transparent);
+  background: color-mix(in srgb, var(--ink-faint) 8%, transparent);
+  color: var(--ink-dim);
+}
+
+.slot.skill select {
+  border-color: color-mix(in srgb, var(--ink-faint) 45%, transparent);
+  background: #10141b;
+}
+
+.slot.skill .skill-what {
+  font-size: 0.72rem;
+  line-height: 1.35;
+  color: var(--ink-faint);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* ---- the two ports ------------------------------------------------------
+   An agent and a human node leave by `success` or by `fail`. React Flow puts
+   every right-hand handle at the vertical middle, so two of them need saying
+   apart: position does it at a glance and colour confirms it. Both are pulled
+   in from the edge slightly less than the single handle, because a node with
+   two of them is a node whose right edge is worth reading. */
+
+.react-flow__handle.handle-success,
+.react-flow__handle.handle-fail {
+  height: 14px;
+}
+
+.react-flow__handle.handle-success {
+  top: 34%;
+  background: color-mix(in srgb, var(--output) 45%, var(--belt-casing));
+}
+
+.react-flow__handle.handle-fail {
+  top: 72%;
+  background: color-mix(in srgb, var(--danger) 45%, var(--belt-casing));
+}
+
+.react-flow__handle.handle-success:hover {
+  background: var(--output);
+}
+
+.react-flow__handle.handle-fail:hover {
+  background: var(--danger);
 }

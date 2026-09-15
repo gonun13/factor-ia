@@ -14,6 +14,8 @@ import type {
   LoginState,
   Project,
   Run,
+  Skill,
+  SkillSummary,
   SshKeyStatus,
 } from "./types";
 
@@ -58,6 +60,22 @@ export const api = {
       canvas sees it before it offers a Run. */
   codebaseGit: (id: string) => request<CodebaseGit>(`/api/codebases/${id}/git`),
 
+  /** The workspace's standing instructions. A directory read, not a
+      subprocess — cheap enough to sit in the canvas's own load. */
+  skills: () => request<SkillSummary[]>("/api/skills"),
+  skill: (name: string) => request<Skill>(`/api/skills/${encodeURIComponent(name)}`),
+  /** The file was read in the browser and is posted as text — the bargain the
+      PRD drop zone already struck: no upload endpoint, and no second path into
+      the container that takes a filename. `overwrite` is reachable only from
+      the conflict the first attempt reported. */
+  importSkill: (text: string, filename?: string, overwrite = false) =>
+    request<Skill>("/api/skills", {
+      method: "POST",
+      body: JSON.stringify({ text, filename, overwrite }),
+    }),
+  deleteSkill: (name: string) =>
+    request<void>(`/api/skills/${encodeURIComponent(name)}`, { method: "DELETE" }),
+
   projects: () => request<Project[]>("/api/projects"),
   createProject: (name: string, codebaseIds: string[] = []) =>
     request<Project>("/api/projects", {
@@ -65,6 +83,24 @@ export const api = {
       body: JSON.stringify({ name, codebase_ids: codebaseIds }),
     }),
   project: (id: string) => request<Project>(`/api/projects/${id}`),
+  /** Unregisters the project and deletes its `_factories/<project>/` directory,
+      sparing any nested factory shared with another project — that is the
+      server's call, and the confirmation says so. */
+  deleteProject: (id: string) =>
+    request<void>(`/api/projects/${id}`, { method: "DELETE" }),
+  /** Sparse: an omitted key means *unchanged*. `settings` is the exception and
+      is replaced whole, because the panel that sends it always knows both
+      halves. Writes to `/data/projects.json`, which is machine-local and not
+      the git-tracked factory file — so this saves immediately rather than
+      joining the canvas's explicit-save policy. */
+  updateProject: (
+    id: string,
+    body: Partial<Pick<Project, "name" | "codebase_ids" | "settings">>,
+  ) =>
+    request<Project>(`/api/projects/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    }),
 
   factory: (projectId: string, factoryId = "main") =>
     request<Factory>(`/api/projects/${projectId}/factories/${factoryId}`),
@@ -98,11 +134,39 @@ export const api = {
     request<Run>(`/api/projects/${projectId}/factories/${factoryId}/runs`, {
       method: "POST",
     }),
-  /** The request, submitted once (open question 2). This starts the walk. */
-  submitRunInput: (runId: string, text: string) =>
+  /**
+   * One input node's submission. The last one starts the walk.
+   *
+   * `nodeId` addresses a single node, which is what a factory with a request
+   * *and* a PRD needs. Omitting it keeps the original meaning — every input
+   * node still waiting takes this text — so the single-request factory posts
+   * exactly what it always did.
+   */
+  submitRunInput: (
+    runId: string,
+    text: string,
+    options: { nodeId?: string; filename?: string } = {},
+  ) =>
     request<Run>(`/api/runs/${runId}/input`, {
       method: "POST",
-      body: JSON.stringify({ text }),
+      body: JSON.stringify({
+        text,
+        node_id: options.nodeId ?? null,
+        filename: options.filename ?? null,
+      }),
+    }),
+  /** One human node's verdict, which resumes the walk down the matching belt.
+   * `nodeId` is required, unlike on a submission: a verdict is not re-postable,
+   * so a stale form has to fail loudly rather than answer the wrong question. */
+  submitRunDecision: (
+    runId: string,
+    nodeId: string,
+    approved: boolean,
+    note = "",
+  ) =>
+    request<Run>(`/api/runs/${runId}/decision`, {
+      method: "POST",
+      body: JSON.stringify({ node_id: nodeId, approved, note }),
     }),
   /** Explicit cancel — closing the tab is not a decision to stop work. */
   cancelRun: (runId: string) =>

@@ -14,6 +14,7 @@ from fastapi.testclient import TestClient
 
 from factoria import config
 from factoria.agent import login
+from factoria.agent.fake import FAKE_MODEL
 
 STUB = Path(__file__).parent / "stub_auth_cli.py"
 
@@ -39,6 +40,31 @@ def test_status_reports_the_account_and_the_handshake(stubbed, client: TestClien
     # than a guess — which is the behaviour a CLI version bump would produce.
     assert body["handshake"]["default_model"] is None
     assert body["handshake"]["detail"]
+
+
+def test_every_provider_reports_what_it_offers_not_just_the_cli(
+    stubbed, client: TestClient
+) -> None:
+    """The model pickers read this, and there is more than one provider.
+
+    Fed only `handshake.models`, a picker offers Claude ids for a node a fake
+    will drive and names a default that run never reports — and the browser
+    cannot tell, because what an adapter honours is not visible from there.
+    """
+    body = client.get("/api/agent/status").json()
+    assert set(body["providers"]) == {"claude", "fake"}
+
+    # The CLI's entry is the handshake's answer, not a second opinion on it.
+    assert body["providers"]["claude"]["default_model"] == body["handshake"]["default_model"]
+    assert body["providers"]["claude"]["fixed"] is False
+
+    # The fake's is its own: one model, which is also its default, and `fixed`
+    # — it keeps only the session id off a `RunConfig` and reports this id
+    # whatever a node asked for.
+    fake = body["providers"]["fake"]
+    assert fake["fixed"] is True
+    assert fake["default_model"] == FAKE_MODEL
+    assert [model["value"] for model in fake["models"]] == [FAKE_MODEL]
 
 
 def test_reading_the_login_state_never_starts_one(stubbed, client: TestClient) -> None:
@@ -96,3 +122,17 @@ def test_a_token_shaped_detail_is_scrubbed_before_it_is_returned(
     detail = client.get("/api/agent/status").json()["account"]["detail"]
     assert "sk-ant-" not in detail
     assert "[redacted:anthropic-key]" in detail
+
+
+def test_status_names_the_container_s_default_provider(client, monkeypatch) -> None:
+    """The browser cannot read `FACTOR_IA_ADAPTER`, so the API says it.
+
+    Without this the settings panel can only offer "the container default" as an
+    unnamed option, which tells an operator nothing about whether a run they did
+    not configure will spend money.
+    """
+    monkeypatch.setenv("FACTOR_IA_ADAPTER", "fake")
+    assert client.get("/api/agent/status").json()["default_provider"] == "fake"
+
+    monkeypatch.delenv("FACTOR_IA_ADAPTER", raising=False)
+    assert client.get("/api/agent/status").json()["default_provider"] == "claude"

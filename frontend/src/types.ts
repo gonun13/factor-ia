@@ -10,6 +10,56 @@
 
 export type NodeType = "input" | "agent" | "output" | "human" | "factory-ref";
 
+/**
+ * What an input node asks for, and what an output node does with the branch.
+ *
+ * **Kinds, not node types.** Both live in `definition.config.kind`, which is
+ * what keeps "a factory starts with an input and ends with an output" a rule
+ * about `NodeType` — one check, rather than a list of type names that grows
+ * every time there is a new way to ask for work or to ship it. Mirrors
+ * `models.InputKind` / `models.OutputKind`.
+ */
+export type InputKind = "request" | "prd";
+export type OutputKind = "commit" | "commit-push" | "commit-merge";
+export type HumanKind = "approval";
+/**
+ * What an agent node is *for* — `models.AgentKind`.
+ *
+ * A `worker` does the job and has one way out. A `reviewer` judges what it is
+ * given, must end its reply with a verdict, and its `fail` belt is the one belt
+ * allowed to close a loop. `worker` is the default, which is a statement about
+ * files already on disk: an agent drawn before this existed has no kind, and
+ * what an agent has always done is work.
+ */
+export type AgentKind = "worker" | "reviewer";
+export type NodeKind = InputKind | OutputKind | HumanKind | AgentKind;
+
+export const DEFAULT_INPUT_KIND: InputKind = "request";
+export const DEFAULT_OUTPUT_KIND: OutputKind = "commit";
+export const DEFAULT_HUMAN_KIND: HumanKind = "approval";
+export const DEFAULT_AGENT_KIND: AgentKind = "worker";
+
+/** A reviewer's lap cap, and the bounds the server enforces — `verdict.py`. */
+export const DEFAULT_MAX_LAPS = 3;
+export const MAX_LAPS_LIMIT = 10;
+
+/**
+ * Which of a node's two outcomes a belt carries away — `models.EdgeOutcome`.
+ *
+ * It rides on the belt's `source_handle`, which React Flow has always set and
+ * which has always round-tripped through the factory file, so a graph that says
+ * what happens when a machine fails is not a file format change. `null` means
+ * `success`, which is what makes every belt drawn before ports existed — and
+ * every belt out of an input node, which has one way out — mean what it always
+ * meant.
+ */
+export type EdgeOutcome = "success" | "fail";
+export const DEFAULT_EDGE_OUTCOME: EdgeOutcome = "success";
+export const EDGE_OUTCOMES: EdgeOutcome[] = ["success", "fail"];
+
+/** `commit-push` and `commit-merge` put a ref on a remote; `commit` does not. */
+export const PUSHING_OUTPUT_KINDS: OutputKind[] = ["commit-push", "commit-merge"];
+
 /** A node's state machine. No `cancelled`: a cancelled node is `failed` with a
  * detail saying who stopped it (backend `models.NodeStatus`). */
 export type RunStatus =
@@ -37,6 +87,23 @@ export type Codebase = {
   path: string;
   branch: string | null;
 };
+
+/**
+ * A standing-instructions document in the workspace's `_skills/`.
+ *
+ * Owned by nothing — not a project, not a factory — so it is fetched from a
+ * workspace-scoped route and offered to every agent node everywhere.
+ */
+export type SkillSummary = {
+  name: string;
+  /** The one line an agent node's picker can show about a skill nobody opened. */
+  description: string;
+  bytes: number;
+  updated_at: string;
+};
+
+/** A skill and its instructions. Only the import round-trip needs the body. */
+export type Skill = SkillSummary & { body: string };
 
 /**
  * A codebase's live git state — the clean-repo precondition, as data.
@@ -91,13 +158,22 @@ export type NodeRuntime = {
   todos?: TodoItem[];
   /** The worktree this node is writing in, and the commit it produced. */
   artifact?: RunArtifact | null;
+  /** The model the provider says it chose, off `session.init`. Not what we
+   * asked for — the two differ whenever we asked for nothing. */
+  model?: string;
+  /** Which lap of a loop this node is on. 1 for everything that runs once, so
+   * the chip only shows above that. Comes down on `node.status` rather than
+   * being counted here — the counter lives on the server's `NodeRun`, and a
+   * second implementation of it that only a reconnecting tab exercises is the
+   * kind that drifts. */
+  lap?: number;
 };
 
 /** Something durable that now exists outside `/data` — a branch in the
  * operator's own repository. Still true after the run ends, which is why it is
  * its own event and not a line of streamed text. */
 export type RunArtifact = {
-  kind: "worktree" | "commit";
+  kind: "worktree" | "commit" | "push" | "merge";
   codebaseId: string;
   branch: string;
   path: string;
@@ -106,6 +182,9 @@ export type RunArtifact = {
   commitSha: string | null;
   fileCount: number;
   detail: string;
+  /** Set on `push` / `merge`: the remote, and the branch it fast-forwarded. */
+  remote?: string;
+  mergedInto?: string | null;
 };
 
 export type ToolActivity = {
@@ -150,10 +229,20 @@ export type Factory = {
   updated_at: string;
 };
 
+/** Project-wide execution defaults an agent node inherits unless it overrides
+ * them. `null` means *ask nobody*: the provider falls through to the
+ * container's, and the model to the CLI's own — which is the only place a model
+ * id ever comes from. */
+export type ProjectSettings = {
+  default_provider: "claude" | "fake" | null;
+  default_model: string | null;
+};
+
 export type Project = {
   id: string;
   name: string;
   codebase_ids: string[];
+  settings: ProjectSettings;
   created_at: string;
   updated_at: string;
 };
@@ -201,7 +290,28 @@ export type Handshake = {
   detail: string;
 };
 
-export type AgentStatus = { account: AccountStatus; handshake: Handshake };
+/** What one provider can be asked to run on. Not the same question as whether
+ * the CLI is healthy — see `handshake` for that. `fixed` means the provider
+ * reports its own model id whatever it is handed (the fake does), so a picker
+ * must offer no choice rather than one that will be ignored. */
+export type ModelOffer = {
+  models: AgentModel[];
+  default_model: string | null;
+  default_model_label: string | null;
+  fixed: boolean;
+};
+
+export type AgentStatus = {
+  account: AccountStatus;
+  handshake: Handshake;
+  /** Every provider that exists, keyed by the name a node's `adapter` and a
+   * project's `default_provider` are spelled with. */
+  providers: Record<string, ModelOffer>;
+  /** What a run uses when neither the node nor the project names a provider.
+   * An environment fact on the container (`FACTOR_IA_ADAPTER`), which the
+   * browser has no other way to learn. */
+  default_provider: "claude" | "fake";
+};
 
 export type LoginPhase =
   | "starting"
@@ -234,13 +344,28 @@ export type SshKeyStatus = {
 export type NodeRun = {
   node_id: string;
   type: NodeType;
+  /** The node's kind, frozen when the run was created — the factory file is
+   * editable while a run is in flight, so a run record describes the run that
+   * happened rather than the graph as it is now. */
+  kind: string;
+  /** Likewise frozen. It is what the run surface calls this node when it asks
+   * a human for something, and a second tab has no canvas to read it off. */
+  label: string;
+  /** A `human` node's question, frozen the same way and for the same reason. */
+  prompt: string;
   status: RunStatus;
   detail: string | null;
   started_at: string | null;
   ended_at: string | null;
   cost_usd: number;
   session_id: string | null;
+  /** What this node actually ran on, reported by the provider itself. `""`
+   * until the first `session.init`, and on every node that is not an agent. */
+  model: string;
   output_text: string;
+  /** The document a `prd` input node was given. The contents are `output_text`;
+   * this is only ever the label. */
+  filename: string | null;
 };
 
 /** One codebase's isolated checkout for one run. `kept` is the cleanup policy:
@@ -258,6 +383,11 @@ export type RunWorktree = {
   files: string[];
   stat: string;
   kept: boolean;
+  /** What left the machine. `merged_into` is a branch on the *remote*. */
+  remote: string;
+  pushed_branch: string | null;
+  merged_into: string | null;
+  push_detail: string;
 };
 
 export type Run = {
@@ -305,13 +435,36 @@ export type AgentEvent = { session_id: string; timestamp: string } & (
  * `seq` is the SSE `id:`, and the whole reconnection contract. */
 export type RunEvent = { seq: number; run_id: string; timestamp: string } & (
   | { type: "run.status"; status: OverallRunStatus; detail: string | null }
-  | { type: "node.status"; node_id: string; status: RunStatus; detail: string | null }
-  | { type: "run.input"; node_id: string; text: string }
+  | {
+      type: "node.status";
+      node_id: string;
+      status: RunStatus;
+      detail: string | null;
+      lap?: number;
+    }
+  | {
+      type: "run.input";
+      node_id: string;
+      text: string;
+      kind: string;
+      filename: string | null;
+    }
+  | {
+      type: "run.decision.request";
+      node_id: string;
+      prompt: string;
+      /** What the belts brought in — the thing being judged. It travels with
+       * the question so a canvas that joined late can render the form from the
+       * log alone, without refetching the run. */
+      incoming: string;
+      kind: string;
+    }
+  | { type: "run.decision"; node_id: string; approved: boolean; note: string }
   | { type: "agent"; node_id: string; event: AgentEvent }
   | {
       type: "run.artifact";
       node_id: string;
-      kind: "worktree" | "commit";
+      kind: "worktree" | "commit" | "push" | "merge";
       codebase_id: string;
       branch: string;
       path: string;
@@ -320,6 +473,8 @@ export type RunEvent = { seq: number; run_id: string; timestamp: string } & (
       commit_sha: string | null;
       file_count: number;
       detail: string;
+      remote: string;
+      merged_into: string | null;
     }
   | { type: "run.cost"; node_id: string; delta_usd: number; total_usd: number }
 );
@@ -328,6 +483,8 @@ export const RUN_EVENT_TYPES: RunEvent["type"][] = [
   "run.status",
   "node.status",
   "run.input",
+  "run.decision.request",
+  "run.decision",
   "agent",
   "run.artifact",
   "run.cost",

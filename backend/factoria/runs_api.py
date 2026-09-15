@@ -39,7 +39,7 @@ from typing import Any, AsyncIterator
 from fastapi import APIRouter, Header, HTTPException, Query, Request, status
 from fastapi.responses import StreamingResponse
 
-from .models import Run, RunInput
+from .models import Run, RunDecision, RunInput
 from .orchestrator import Orchestrator, RunBusy, RunConflict, get_orchestrator
 from .runcheck import NotRunnable
 from .runlog import RunLog
@@ -105,11 +105,58 @@ async def get_run(run_id: str) -> Run:
 
 @router.post("/runs/{run_id}/input", response_model=Run)
 async def submit_run_input(run_id: str, body: RunInput) -> Run:
-    """The request, submitted once. This is what starts the walk."""
+    """One input node's submission. The last one starts the walk.
+
+    `node_id` is optional, and omitting it still means what it always meant:
+    every input node still waiting takes this text. A factory with a `request`
+    node *and* a `prd` node addresses them one at a time.
+    """
     try:
-        return await orchestrator().submit_input(run_id, body.text)
+        return await orchestrator().submit_input(
+            run_id,
+            body.text,
+            node_id=body.node_id,
+            filename=label(body.filename),
+        )
     except RunConflict as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+
+
+@router.post("/runs/{run_id}/decision", response_model=Run)
+async def submit_run_decision(run_id: str, body: RunDecision) -> Run:
+    """One human node's verdict. Resumes the walk down the belt it names.
+
+    A sibling of `/input` rather than a widening of it. Both stop a run to ask a
+    person something, but a submission *carries the work* and a decision *routes
+    it* — different bodies, different preconditions, and one endpoint serving
+    both would have to document which of its fields are meaningful when. The
+    reply still says `waiting_input`; the transition arrives on `/events`.
+    """
+    try:
+        return await orchestrator().submit_decision(run_id, body)
+    except RunConflict as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+
+
+def label(filename: str | None) -> str | None:
+    """A submitted filename, reduced to something safe to display and to write
+    into a commit trailer.
+
+    Public because `skills_api` imports it: a skill arrives the same way a PRD
+    does — contents in the body, the name alongside as a label — so it wants
+    the same cleaning, and a second copy would be a second set of rules.
+
+    Nothing opens this — the file's *contents* arrived in the body and the name
+    is only ever shown — but it is written into a commit message and rendered in
+    a browser, so it gets the same treatment a path segment would: the basename,
+    no separators, no control characters, and a length cap.
+    """
+    if filename is None:
+        return None
+    base = filename.replace("\\", "/").rsplit("/", 1)[-1].strip()
+    cleaned = "".join(char for char in base if char.isprintable()).strip()
+    return cleaned[:120] or None
+
 
 
 @router.post("/runs/{run_id}/cancel", response_model=Run)

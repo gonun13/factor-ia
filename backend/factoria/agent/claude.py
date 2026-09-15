@@ -55,6 +55,14 @@ wants a *policy*, not a prompt with no human behind it, so:
 - `--resume` / `--fork-session` — no resume in the interface (`DESIGN.md`).
 - `--include-hook-events`, `--forward-subagent-text` — nothing renders either,
   and both add volume to an event log that stage 5 persists whole.
+
+**What a node *can* put words into: `--append-system-prompt`.** It carries a
+skill's body (`skills.py`), and it is the only flag here whose value is not a
+fixed string or an identifier. That is deliberate and it is why the value comes
+from a file in `/workspace/_skills` that the team reviews in git, rather than
+from a text box on the node: standing instructions determine what an agent
+does more than any other setting, and instructions nobody reviewed are the
+thing this design has no way to catch after the fact.
 """
 
 from __future__ import annotations
@@ -170,6 +178,11 @@ def build_argv(session_id: str, run_config: RunConfig) -> list[str]:
     # No `--model` when the node did not override one. That is the mechanism
     # behind "the default is the CLI's own": omitting the flag defers to the
     # CLI, and `session.init` then reports what it actually chose.
+    # Standing instructions, in force for this node on every spawn. *Appended*,
+    # never replacing: `--system-prompt` would throw away the CLI's own, which
+    # is what knows how to use the tools this run is given.
+    if run_config.append_system_prompt:
+        argv += ["--append-system-prompt", run_config.append_system_prompt]
     if run_config.model:
         argv += ["--model", run_config.model]
     if run_config.effort:

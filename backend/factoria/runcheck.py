@@ -39,17 +39,41 @@ spent tokens is the expensive way to be told.
   by a `git commit` at the end of the run (`gitwork.identity`).
 - **The permission mode must be one the server hands out**, including the
   `bypassPermissions`-shaped gate (`agent/claude.resolve_permission_mode`).
+- **A named skill must still be readable.** A skill is unconditional once
+  attached, so a node whose skill was deleted or hand-edited into something
+  unparseable has to be refused rather than run without it — and the cheap
+  place to learn that is here, beside the stale-codebase check it is the exact
+  analogue of, not after the tokens are spent.
 """
 
 from __future__ import annotations
 
 from typing import Callable
 
-from . import config, gitwork
+from . import config, gitwork, skills, worktree
 from .agent.claude import PermissionDenied, resolve_permission_mode
 from .api import validate_graph
 from .discovery import discover_codebases
-from .models import Codebase, Edge, Factory, Node
+from .paths import PathEscape
+from . import sshkeys
+from .models import (
+    INPUT_KINDS,
+    OUTPUT_KINDS,
+    PUSHING_OUTPUT_KINDS,
+    Codebase,
+    Edge,
+    Factory,
+    Node,
+    AGENT_KINDS,
+    DEFAULT_EDGE_OUTCOME,
+    EDGE_OUTCOMES,
+    HUMAN_KINDS,
+    edge_outcome,
+    has_outcome_ports,
+    node_kind,
+    node_remote,
+)
+from . import verdict
 
 
 class NotRunnable(Exception):
@@ -92,11 +116,20 @@ def run_problems(
         by_type.setdefault(node.definition.type, []).append(node)
 
     if not by_type.get("input"):
-        problems.append("No request node — a run has nothing to submit.")
+        problems.append(
+            "No input node — a factory starts with one, and a run has nothing "
+            "to submit without it."
+        )
     if not by_type.get("agent"):
         problems.append("No agent node — nothing would do any work.")
     if not by_type.get("output"):
-        problems.append("No commit node — the run would produce nothing.")
+        problems.append(
+            "No output node — a factory ends with one, and the run would "
+            "produce nothing without it."
+        )
+    problems += _kind_problems(nodes, label)
+    problems += _outcome_problems(nodes, edges, label)
+    problems += _duplicate_belt_problems(nodes, edges, label)
 
     for node in by_type.get("agent", []):
         attached = node.definition.codebase_id
@@ -110,7 +143,35 @@ def run_problems(
                 f"Agent “{label(node)}”: attached codebase {attached!r} is no "
                 "longer discovered under /workspace."
             )
+        # The same class of stale reference, one directory over. Reading the
+        # file is the check — there is nothing to inject for a test, which is
+        # why this is not routed through a callable the way `tree_state` is.
+        wanted = str(node.definition.config.get("skill") or "").strip()
+        if wanted:
+            try:
+                skills.get_skill(wanted)
+            except skills.SkillNotFound:
+                problems.append(
+                    f"Agent “{label(node)}”: skill {wanted!r} is no longer in "
+                    "/workspace/_skills — attach another, or clear the plate."
+                )
+            except (skills.SkillError, PathEscape) as exc:
+                problems.append(
+                    f"Agent “{label(node)}”: skill {wanted!r} cannot be read — {exc}"
+                )
 
+    # "A factory starts with an input and ends with an output" — as two rules
+    # about the *ends of the line*, which is the only way to state it that a
+    # graph can be checked against:
+    #
+    #   every node with no incoming belt is an input;
+    #   every node with no outgoing belt is an output;
+    #
+    # and their mirror image, that an input is never fed and an output never
+    # feeds. The canvas enforces the mirror image by drawing no target handle on
+    # an input and no source handle on an output, so it is unreachable by
+    # dragging — but `main.json` is a file a human edits in a pull request, and
+    # a rule the UI happens to make awkward is not a rule.
     incoming = {edge.target for edge in edges}
     outgoing = {edge.source for edge in edges}
     for node in nodes:
@@ -124,24 +185,293 @@ def run_problems(
         if off_line:
             problems.append(f"“{label(node)}” is not on the line — connect it with a belt.")
 
+        if kind == "input" and node.id in incoming:
+            problems.append(
+                f"“{label(node)}” is an input, so nothing may feed it — a factory "
+                "starts with its inputs."
+            )
+        elif kind == "output" and node.id in outgoing:
+            problems.append(
+                f"“{label(node)}” is an output, so it may not feed anything — a "
+                "factory ends with its outputs."
+            )
+        elif kind not in ("input", "output"):
+            if node.id not in incoming:
+                problems.append(
+                    f"“{label(node)}” starts a line but is not an input — a factory "
+                    "starts with an input node."
+                )
+            if node.id not in outgoing:
+                problems.append(
+                    f"“{label(node)}” ends a line but is not an output — a factory "
+                    "ends with an output node."
+                )
+
     # Cycle detection is the one blocker the client does not check, because the
     # client never has to walk the graph. The orchestrator does, and a cycle is
-    # how a topological walk becomes an infinite one. Loops are a named later
-    # feature (`DESIGN.md`, Later) and will arrive as a typed edge, not as a
-    # relaxation of this.
-    if topological_order(nodes, edges) is None:
-        problems.append("The belts form a loop — a run walks the graph once, top to bottom.")
+    # how a walk becomes an infinite one.
+    #
+    # **One belt may close a loop, and exactly one: a reviewer's fail belt.**
+    # That is the typed back-edge `DESIGN.md` promised, and `back_edges` is the
+    # only thing that decides which belts qualify — shared with
+    # `orchestrator._walk`, so what this refuses and what the walk resets can
+    # never drift. Dropping those belts and requiring the rest to be acyclic is
+    # the whole rule: removing edges cannot create a cycle, so a graph whose
+    # only cycles run through a reviewer's fail port is accepted and every
+    # other cycle is refused exactly as strictly as before.
+    back = back_edges(nodes, edges)
+    forward = [edge for edge in edges if edge.id not in back]
+    if topological_order(nodes, forward) is None:
+        problems.append(
+            "The belts form a loop — a run walks the graph once, top to bottom. "
+            "The one belt that may close a loop is a reviewer’s fail belt, which "
+            "sends the work back for another lap."
+        )
+    problems += _loop_problems(nodes, back, label)
 
     problems += _git_problems(by_type.get("agent", []), known_codebases, tree_state)
+    problems += _remote_problems(
+        by_type.get("output", []), by_type.get("agent", []), known_codebases, tree_state
+    )
     problems += _permission_problems(by_type.get("agent", []), label)
 
     for node in nodes:
-        if node.definition.type in ("human", "factory-ref"):
+        if node.definition.type == "factory-ref":
             problems.append(
                 f"“{label(node)}” is a {node.definition.type} node, which nothing "
                 "executes yet."
             )
     return problems
+
+
+def _outcome_problems(
+    nodes: list[Node], edges: list[Edge], label: Callable[[Node], str]
+) -> list[str]:
+    """A belt leaving by a port its source node does not have.
+
+    Checked here rather than at save time for the same reason kinds are (see
+    `_kind_problems`): a handle is a string React Flow wrote, a factory file may
+    have been drawn by a newer Factor-ia that has ports this one has never heard
+    of, and refusing to *load* it would strand the operator with a file they
+    cannot open to fix. Refusing to *run* it names the belt and the word.
+
+    The stakes are higher here than for a kind, which is why it is not simply
+    defaulted: `models.edge_outcome` returns an unknown port **as written**, so
+    a belt marked `timeout` is refused rather than quietly treated as the
+    success path and followed by a run nobody drew.
+    """
+    problems: list[str] = []
+    by_id = {node.id: node for node in nodes}
+    for edge in edges:
+        source = by_id.get(edge.source)
+        if source is None:
+            continue  # a dangling belt; `validate_graph` already said so
+        if edge.source_handle is None:
+            continue  # the one unnamed way out, which is every belt on disk
+        outcome = edge_outcome(edge)
+        if outcome not in EDGE_OUTCOMES:
+            problems.append(
+                f"The belt out of “{label(source)}” leaves by {outcome!r}, which is "
+                f"not a port this version knows ({', '.join(sorted(EDGE_OUTCOMES))})."
+            )
+        elif not has_outcome_ports(source):
+            if source.definition.type == "agent" and outcome == DEFAULT_EDGE_OUTCOME:
+                # **A worker's `success` belt is not a problem.** Every agent
+                # had two ports until agents had kinds, so a factory drawn back
+                # then wrote `success` onto belts that are now a worker's single
+                # way out — and that belt still means exactly what it meant, and
+                # is still the only place it could go. Refusing it would break
+                # files to no end. `fail` is the one that genuinely has nowhere
+                # to route, and it is refused below.
+                continue
+            # A worker gets its own sentence. Every other node here has one way
+            # out because of what it *is*, so the only fix is to remove the
+            # belt; a worker has one because of a kind the operator can change
+            # on the node, and a refusal that did not say so would read as a
+            # dead end.
+            if source.definition.type == "agent":
+                problems.append(
+                    f"“{label(source)}” is a worker agent, which has one way out — its "
+                    f"belt cannot leave by {outcome!r}. A machine that judges what it is "
+                    "given is a Reviewer: drop one from the palette in its place, or "
+                    "remove the belt."
+                )
+            else:
+                problems.append(
+                    f"“{label(source)}” is a {source.definition.type} node, which has one "
+                    f"way out — its belt cannot leave by {outcome!r}."
+                )
+    return problems
+
+
+def _duplicate_belt_problems(
+    nodes: list[Node], edges: list[Edge], label: Callable[[Node], str]
+) -> list[str]:
+    """Two belts between the same machines, carrying the same outcome.
+
+    A second belt from A to B on the same port delivers nothing a first one did
+    not, and both are taken — so the node downstream is handed its predecessor's
+    output **twice**, which reads on screen as the agent having said everything
+    it said a second time. Nothing refused this before, and drawing one became
+    easy the moment agents grew kinds: a belt drawn from an agent's old
+    `success` handle and a belt drawn after that node became a worker, from its
+    one unnamed handle, are different handles saying the same word.
+
+    Deliberately keyed on the **outcome**, not merely on the pair. Two belts
+    from a reviewer to the same machine, one off each port, are how a graph says
+    "whatever happens, go here", and are left alone. So is ordinary fan-in: two
+    belts into one node from *different* sources are the normal case — a worker
+    fed by the request and by a reviewer's back-edge is a loop, not a mistake.
+
+    Checked here rather than at save time under the rule `validate_graph` states:
+    that one refuses graphs which could not be *loaded back*, and this one loads
+    perfectly well. Refusing to run it names both belts instead of stranding the
+    operator with a file they cannot save.
+    """
+    by_id = {node.id: node for node in nodes}
+    seen: dict[tuple[str, str, str], str] = {}
+    problems: list[str] = []
+    for edge in edges:
+        source = by_id.get(edge.source)
+        if source is None or edge.target not in by_id:
+            continue
+        key = (edge.source, edge.target, edge_outcome(edge))
+        first = seen.setdefault(key, edge.id)
+        if first == edge.id:
+            continue
+        target = by_id[edge.target]
+        problems.append(
+            f"Two belts run from “{label(source)}” to “{label(target)}” carrying "
+            f"the same outcome, so “{label(target)}” would be handed the same "
+            "thing twice. Remove one of them."
+        )
+    return problems
+
+
+def _kind_problems(nodes: list[Node], label: Callable[[Node], str]) -> list[str]:
+    """An input or output node whose `config["kind"]` is not one this server
+    executes.
+
+    Checked at run time rather than at save time on purpose, and it is the same
+    reasoning that keeps a half-drawn canvas saveable: `config` is freeform, a
+    factory file may have been written by a newer Factor-ia than this one, and
+    refusing to *load* it would strand the operator with a file they cannot open
+    to fix. Refusing to *run* it names the node and the word it does not know.
+    """
+    problems: list[str] = []
+    for node in nodes:
+        kind = node.definition.type
+        if kind == "input" and node_kind(node) not in INPUT_KINDS:
+            problems.append(
+                f"Input “{label(node)}” is of kind {node_kind(node)!r}, which this "
+                f"version does not know how to ask for ({', '.join(sorted(INPUT_KINDS))})."
+            )
+        elif kind == "human" and node_kind(node) not in HUMAN_KINDS:
+            problems.append(
+                f"Human “{label(node)}” is of kind {node_kind(node)!r}, which this "
+                f"version does not know how to ask ({', '.join(sorted(HUMAN_KINDS))})."
+            )
+        elif kind == "output" and node_kind(node) not in OUTPUT_KINDS:
+            problems.append(
+                f"Output “{label(node)}” is of kind {node_kind(node)!r}, which this "
+                f"version does not know how to produce ({', '.join(sorted(OUTPUT_KINDS))})."
+            )
+        elif kind == "agent":
+            if node_kind(node) not in AGENT_KINDS:
+                problems.append(
+                    f"Agent “{label(node)}” is of kind {node_kind(node)!r}, which this "
+                    f"version does not know how to run ({', '.join(sorted(AGENT_KINDS))})."
+                )
+            elif node_kind(node) == "reviewer":
+                # Only read on a reviewer. A `max_laps` left behind on a node
+                # flipped back to worker is ignored rather than refused: config
+                # is freeform, and a stale key is not a graph anybody has to fix.
+                problem = verdict.max_laps_problem(node, label(node))
+                if problem:
+                    problems.append(problem)
+    return problems
+
+
+def _remote_problems(
+    outputs: list[Node],
+    agents: list[Node],
+    known: dict[str, Codebase],
+    tree_state: Callable[[str], gitwork.TreeState],
+) -> list[str]:
+    """Everything a `commit-push` / `commit-merge` node needs that a plain
+    `commit` node does not — asked **before** an agent has been paid for.
+
+    This is the most expensive check in the module: `remote_reachable` opens a
+    connection to the forge. It earns it. A push that fails is a run whose whole
+    cost has already been spent, whose work is sitting on a local branch the
+    operator did not ask for, and whose failure — a missing deploy key — takes a
+    minute to fix and would have been free to discover.
+
+    The `commit-merge` extras are about the *base* branch, because that is what
+    it fast-forwards. The base branch is `worktree.base_ref`'s answer — the
+    branch the run will actually be cut from, which is usually the checked-out
+    one but is deliberately *not* it when the codebase sits on a run branch or a
+    detached HEAD. Asked with `fetch=False`: this is a precondition, and whether
+    a base branch exists is not a question worth a round trip to the forge.
+    """
+    pushing = [node for node in outputs if node_kind(node) in PUSHING_OUTPUT_KINDS]
+    if not pushing:
+        return []
+
+    merging = any(node_kind(node) == "commit-merge" for node in pushing)
+    problems: list[str] = []
+    # The *public* half, because `run_problems` is synchronous (it runs in a
+    # thread) and `sshkeys.status()` is not — and because this module has no
+    # business touching the private key even to stat it (`sshkeys`, module
+    # docstring). A generated pair always has both halves; a missing public half
+    # means no pair was generated.
+    has_key = sshkeys.public_key_path().exists()
+    checked: set[tuple[str, str]] = set()
+
+    for node in pushing:
+        remote = node_remote(node)
+        for agent in agents:
+            codebase = known.get(agent.definition.codebase_id or "")
+            if codebase is None or (codebase.id, remote) in checked:
+                continue
+            checked.add((codebase.id, remote))
+
+            state = tree_state(codebase.path)
+            if not state.is_repo:
+                continue  # already reported by `_git_problems`
+            if merging and worktree.base_ref(codebase.path, fetch=False).branch is None:
+                problems.append(
+                    f"“{codebase.name}” has no base branch to fast-forward — it is on "
+                    "a detached HEAD and has no default branch to fall back to. Check "
+                    "out a branch first."
+                )
+
+            url = gitwork.remote_url(codebase.path, remote)
+            if url is None:
+                problems.append(
+                    f"“{codebase.name}” has no remote named {remote!r}, so its branch "
+                    "cannot be pushed. Add one, or use a plain commit output."
+                )
+                continue
+            if _is_ssh(url) and not has_key:
+                problems.append(
+                    f"“{codebase.name}” pushes over ssh ({url}) and this container has "
+                    "no key. Generate one in Settings and add the public half to your "
+                    "forge."
+                )
+                continue
+            reachable, said = gitwork.remote_reachable(codebase.path, remote)
+            if not reachable:
+                problems.append(
+                    f"“{codebase.name}”: {remote} ({url}) could not be reached — {said}"
+                )
+    return problems
+
+
+def _is_ssh(url: str) -> bool:
+    """`git@host:path` and `ssh://…` push over ssh and need the container's key;
+    `https://…` and a local path do not."""
+    return url.startswith("ssh://") or ("@" in url.split("/", 1)[0] and ":" in url)
 
 
 def _git_problems(
@@ -166,8 +496,8 @@ def _git_problems(
             continue
         if state.unborn:
             problems.append(
-                f"“{codebase.name}” has no commits yet — a run branches from HEAD, "
-                "so there has to be one."
+                f"“{codebase.name}” has no commits yet — a run branches from its "
+                "base branch, so there has to be one."
             )
             continue
         if state.dirty:
@@ -180,8 +510,8 @@ def _git_problems(
             problems.append(
                 f"“{codebase.name}” has {state.change_count} uncommitted "
                 f"change{'s' if state.change_count != 1 else ''} ({listed}{more}). "
-                "Commit or stash them — a run branches from HEAD and must not be "
-                "mixed up with work in progress."
+                "Commit or stash them — a run branches from the base branch and "
+                "must not be mixed up with work in progress."
             )
     if seen:
         # One identity for the whole run; checked once, and only when something
@@ -206,6 +536,105 @@ def _permission_problems(agents: list[Node], label: Callable[[Node], str]) -> li
             )
         except PermissionDenied as error:
             problems.append(f"Agent “{label(node)}”: {error}")
+    return problems
+
+
+def back_edges(nodes: list[Node], edges: list[Edge]) -> dict[str, list[str]]:
+    """Every belt that closes a loop, mapped to the loop it closes.
+
+    A belt qualifies when it is a **reviewer's `fail` belt** and its target can
+    reach its source — i.e. it points back up the line it came down. A
+    reviewer's fail belt that runs *forward*, to a human node that escalates
+    say, closes nothing and is not one of these; it is an ordinary belt.
+
+    The value is the **loop body**: every node on some path from the belt's
+    target back to its source, inclusive — `descendants(target) ∩
+    ancestors(source)`. Those are the nodes that run again on the next lap, and
+    the `run check` and `orchestrator._walk` read this one function so that what
+    is refused here and what is reset there cannot drift apart.
+
+    Ancestry is computed over **all** edges, back-edges included. That is not an
+    oversight: the question "can the target reach the source" is about the graph
+    the operator drew, and a second back-edge inside the body is part of it.
+    """
+    by_id = {node.id: node for node in nodes}
+    successors: dict[str, list[str]] = {node.id: [] for node in nodes}
+    predecessors: dict[str, list[str]] = {node.id: [] for node in nodes}
+    for edge in edges:
+        if edge.source in successors and edge.target in predecessors:
+            successors[edge.source].append(edge.target)
+            predecessors[edge.target].append(edge.source)
+
+    def reach(start: str, graph: dict[str, list[str]]) -> set[str]:
+        seen: set[str] = set()
+        stack = [start]
+        while stack:
+            current = stack.pop()
+            if current in seen:
+                continue
+            seen.add(current)
+            stack.extend(graph[current])
+        return seen
+
+    found: dict[str, list[str]] = {}
+    for edge in edges:
+        source = by_id.get(edge.source)
+        if source is None or edge.target not in by_id:
+            continue
+        if edge_outcome(edge) != "fail" or not has_outcome_ports(source):
+            continue
+        if source.definition.type != "agent":
+            continue  # a human node's fail belt is a decision, not a lap
+        body = reach(edge.target, successors) & reach(edge.source, predecessors)
+        if edge.source not in body:
+            continue  # points forward; closes nothing
+        # File order, so a run log and a refusal list the body the same way twice.
+        found[edge.id] = [node.id for node in nodes if node.id in body]
+    return found
+
+
+def _loop_problems(
+    nodes: list[Node], back: dict[str, list[str]], label: Callable[[Node], str]
+) -> list[str]:
+    """A machine inside a loop that must not run twice.
+
+    Only one so far, and it is the one that would cost real money: an **output**
+    node commits, pushes, or fast-forwards a remote branch, so a loop that
+    enclosed one would do that again on every lap. The walk's own rule is that
+    only the loop body ever runs twice, which makes this refusal both necessary
+    and sufficient — everything outside the body is already safe.
+
+    A **human** node inside a loop is deliberately *not* refused: it is asked
+    again on every lap, which is the entire point of putting a person in a loop.
+    The canvas raises a notice about it so nobody is surprised.
+    """
+    if not back:
+        return []
+    by_id = {node.id: node for node in nodes}
+    problems: list[str] = []
+    reported: set[str] = set()
+    for body in back.values():
+        for node_id in body:
+            node = by_id.get(node_id)
+            if node is None or node.definition.type != "output" or node_id in reported:
+                continue
+            reported.add(node_id)
+            # Name the reviewer that closes the loop: "inside a loop" is not
+            # actionable on a canvas with two of them.
+            closer = next(
+                (
+                    by_id[other].definition.label or other
+                    for other in body
+                    if by_id.get(other) is not None
+                    and node_kind(by_id[other]) == "reviewer"
+                ),
+                "a reviewer",
+            )
+            problems.append(
+                f"“{label(node)}” is inside the loop that “{closer}” closes, so it "
+                "would commit on every lap. Move it onto the reviewer’s success "
+                "belt, below the loop."
+            )
     return problems
 
 

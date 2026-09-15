@@ -46,16 +46,50 @@ class RunConfig(BaseModel):
     session_id: str | None = None
     #: Extra environment for the child, merged over the server's own.
     env: dict[str, str] = Field(default_factory=dict)
+    #: Standing instructions appended to the agent's system prompt for this
+    #: node — the *body* of a skill, already read from `/workspace/_skills` by
+    #: the orchestrator. The **body**, never the name: resolving a name against
+    #: a workspace directory is policy, and putting it on the seam would make
+    #: every adapter, `FakeAdapter` included, know where skills live and how to
+    #: parse one.
+    append_system_prompt: str | None = None
 
     @classmethod
-    def from_node_config(cls, config: dict[str, Any] | None) -> "RunConfig":
+    def from_node_config(
+        cls,
+        config: dict[str, Any] | None,
+        *,
+        default_model: str | None = None,
+        append_system_prompt: str | None = None,
+    ) -> "RunConfig":
         """Build from an agent node's freeform `config` dict, ignoring the rest.
 
         Node config is freeform while the node types are still moving (stage 2's
         decision), so unknown keys are the normal case and must not fail a run.
+
+        `default_model` is the project's, and it is the middle rung of a ladder
+        this class deliberately does not know the top of: **node, then project,
+        then the CLI's own**. Passing `None` keeps the old behaviour exactly,
+        and a `None` that survives to the adapter still means "omit `--model`".
+
+        Blank values are dropped rather than carried. A `<select>` cleared back
+        to "project default" can leave `config["model"] == ""`, and an empty
+        string that reached the `known` dict would shadow the project's default
+        with a falsier version of nothing.
         """
         raw = config or {}
-        known = {key: raw[key] for key in ("model", "permission_mode", "effort") if key in raw}
+        known = {
+            key: raw[key]
+            for key in ("model", "permission_mode", "effort")
+            if key in raw and raw[key] not in (None, "")
+        }
+        if default_model and not known.get("model"):
+            known["model"] = default_model
+        # Passed in, like `default_model`, for the reason above. Blank is
+        # dropped under the same rule blank values get here: a skill file that
+        # is somehow all frontmatter must not produce an empty flag.
+        if append_system_prompt:
+            known["append_system_prompt"] = append_system_prompt
         return cls(**known)
 
 
