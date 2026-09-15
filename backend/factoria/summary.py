@@ -70,10 +70,20 @@ def render(run: Run) -> str:
         lines.append(f"### {made.codebase_name or made.codebase_id}")
         lines.append("")
         lines.append(f"- Repository `{made.repo_path}`")
-        lines.append(
-            f"- Branch `{made.branch}`, cut from `{made.base_commit[:12]}`"
-            + (f" on `{made.base_branch}`" if made.base_branch else "")
-        )
+        # Where the branch was cut from, spelled out rather than implied. A
+        # conflicted pull request is almost always a stale base, and the first
+        # thing that question needs is whether the base was the remote's copy
+        # or something the clone had lying around.
+        base = f"- Branch `{made.branch}`, cut from `{made.base_commit[:12]}`"
+        if made.base_label or made.base_branch:
+            base += f" on `{made.base_label or made.base_branch}`"
+        if made.base_source == "remote" and made.base_fetched:
+            base += " (fetched)"
+        elif made.base_source in ("local", "head"):
+            base += " (local copy — not fetched)"
+        lines.append(base)
+        if made.base_detail:
+            lines.append(f"  - Base chosen this way because {made.base_detail}")
         if made.commit_sha:
             lines.append(f"- Commit `{made.commit_sha[:12]}` — {made.subject}")
             lines.append(f"- {len(made.files)} file(s) changed")

@@ -85,6 +85,7 @@ ALLOWED_SUBCOMMANDS: frozenset[str] = frozenset(
         "push",  # one shape only — see `_check_push`
         "remote",  # `get-url` only — see `_check`
         "ls-remote",  # read-only, and the pre-flight a pushing node needs
+        "fetch",  # one shape only — see `_check_fetch`
         "var",
         "init",  # tests build repos with it; harmless and never reaches a codebase
         "config",
@@ -99,6 +100,12 @@ _DELETE_FLAGS = frozenset({"-d", "-D", "--delete", "--remove"})
 #: them changes what is written. Anything else is refused, which is what makes
 #: the list of dangerous push flags something we never have to keep up to date.
 _PUSH_FLAGS = frozenset({"--porcelain", "--atomic", "--verbose", "-v"})
+
+#: The only flags a `fetch` may carry, and all three are about *reporting*.
+#: `--prune` is deliberately absent: it deletes remote-tracking refs, and "refs
+#: are never deleted" is a rule this module keeps even for refs it could
+#: reconstruct in one round trip.
+_FETCH_FLAGS = frozenset({"--quiet", "-q", "--no-tags", "--no-recurse-submodules"})
 
 #: A remote *name*, never a URL, and never a path. See the module docstring.
 _REMOTE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
@@ -168,6 +175,8 @@ def _check(args: list[str]) -> None:
             raise GitDenied(args, f"{force[0]} is only allowed on `worktree remove`")
     if subcommand == "push":
         _check_push(args, rest)
+    if subcommand == "fetch":
+        _check_fetch(args, rest)
     if subcommand == "remote" and rest[:1] != ["get-url"]:
         # `remote add`/`set-url` would let a factory file point a push at a
         # host of its choosing; `remote show` talks to the network to answer a
@@ -207,6 +216,32 @@ def _check_push(args: list[str], rest: list[str]) -> None:
         raise GitDenied(args, "a push refspec must name both sides, as `src:dst`")
     if not _REF.match(source) or not _REF.match(destination):
         raise GitDenied(args, f"{refspec!r} is not a plain `src:dst` refspec")
+
+
+def _check_fetch(args: list[str], rest: list[str]) -> None:
+    """A fetch is `git fetch [safe flags] <remote-name>`. No refspec, ever.
+
+    The missing refspec is the whole safety property. Without one git uses the
+    remote's *configured* refspec, which on any normal clone writes only
+    `refs/remotes/<remote>/*` — so this command can move remote-tracking refs
+    and nothing else. Spelling a refspec here would let a caller write
+    `refs/heads/main` in the operator's own repository, which is the one thing
+    a codebase's owner is entitled to assume we never do.
+    """
+    flags = [item for item in rest if item.startswith("-")]
+    positional = [item for item in rest if not item.startswith("-")]
+    unknown = [flag for flag in flags if flag not in _FETCH_FLAGS]
+    if unknown:
+        raise GitDenied(args, f"{unknown[0]} is not an allowed fetch flag")
+    if len(positional) != 1:
+        raise GitDenied(args, "a fetch must name exactly one remote and no refspec")
+    remote = positional[0]
+    if not _REMOTE_NAME.match(remote):
+        raise GitDenied(
+            args,
+            f"{remote!r} is not a remote name — a fetch may only read a remote "
+            "already configured in the repository, never a URL or a path",
+        )
 
 
 def _env(extra: dict[str, str] | None = None) -> dict[str, str]:
@@ -436,6 +471,83 @@ def remote_reachable(repo: Path | str, remote: str = DEFAULT_REMOTE) -> tuple[bo
     if done.returncode == 0:
         return True, ""
     return False, (done.stderr.strip().splitlines() or ["unreachable"])[-1]
+
+
+@dataclass(frozen=True)
+class FetchResult:
+    """What one `git fetch` did, as data rather than as an exception.
+
+    A fetch that fails is **not** a failed run: a codebase with no remote, or a
+    laptop on a train, still has a perfectly good local base branch to cut from.
+    So this reports instead of raising, and `worktree.base_ref` decides what the
+    failure means — which is how a run stays possible offline while still
+    telling the operator, in `summary.md`, that the base it used was whatever
+    the clone had last seen.
+    """
+
+    ok: bool
+    remote: str
+    detail: str = ""
+    #: True when the repo has no such remote, so nothing was even attempted.
+    #: Distinct from a failure: there is nothing here for the operator to fix.
+    absent: bool = False
+
+
+def fetch(repo: Path | str, remote: str = DEFAULT_REMOTE) -> FetchResult:
+    """Update `remote`'s remote-tracking refs. Never raises on a bad network.
+
+    This is the one write this module performs on the *operator's own* repo, and
+    it is deliberately the narrowest one there is: `_check_fetch` forbids a
+    refspec, so the only refs that can move are `refs/remotes/<remote>/*`. No
+    local branch, no working tree, no index — a dev with the codebase open in
+    their editor sees nothing change.
+    """
+    if remote_url(repo, remote) is None:
+        return FetchResult(ok=False, remote=remote, absent=True, detail="no such remote")
+    done = _git(
+        ["fetch", "--quiet", "--no-tags", remote],
+        cwd=repo,
+        check=False,
+        timeout=PUSH_TIMEOUT_S,
+    )
+    if done.returncode == 0:
+        return FetchResult(ok=True, remote=remote)
+    said = (done.stderr.strip().splitlines() or ["fetch failed"])[-1]
+    return FetchResult(ok=False, remote=remote, detail=said)
+
+
+def default_branch(repo: Path | str, remote: str = DEFAULT_REMOTE) -> str | None:
+    """The remote's default branch — what `origin/HEAD` points at — or `None`.
+
+    Read from the clone's own `refs/remotes/<remote>/HEAD`, which `git clone`
+    writes once and nothing since has had a reason to move. No network: this is
+    asked on the way into every run, and a run must not depend on a forge being
+    up to know what "main" is called.
+    """
+    done = _git(
+        ["symbolic-ref", "--quiet", "--short", f"refs/remotes/{remote}/HEAD"],
+        cwd=repo,
+        check=False,
+    )
+    if done.returncode != 0:
+        return None
+    name = done.stdout.strip()
+    prefix = f"{remote}/"
+    return name[len(prefix):] if name.startswith(prefix) else (name or None)
+
+
+def rev(repo: Path | str, ref: str) -> str | None:
+    """The commit `ref` names, or `None` when there is no such ref."""
+    done = _git(["rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"], cwd=repo, check=False)
+    return done.stdout.strip() or None if done.returncode == 0 else None
+
+
+def local_branches(repo: Path | str) -> list[str]:
+    """Every local branch name, in git's own order."""
+    done = _git(
+        ["branch", "--list", "--format=%(refname:short)"], cwd=repo, check=False
+    )
+    return [line.strip() for line in done.stdout.splitlines() if line.strip()]
 
 
 def push_ref(

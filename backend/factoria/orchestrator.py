@@ -1123,10 +1123,10 @@ class Orchestrator:
 
         A `commit-merge` merges into **the branch the worktree was cut from**
         (`RunWorktree.base_branch`) rather than a branch named in the node's
-        config or a remote HEAD looked up over the network. That is the branch
-        the operator had checked out when they pressed Run, so it is the one
-        they meant, and it is already recorded on the run for the diff to have a
-        left-hand side. A detached HEAD has no such branch and is refused.
+        config. That branch is `worktree.base_ref`'s answer, and the pairing is
+        the point: the run is fast-forwarding exactly the ref it branched from
+        moments earlier, so the merge is a fast-forward by construction rather
+        than by luck. Refused only when there was no base branch at all.
         """
         assert state.workspaces is not None
         remote = node_remote(node)
@@ -1141,9 +1141,9 @@ class Orchestrator:
                         state,
                         node.id,
                         "failed",
-                        f"“{made.codebase_name or made.codebase_id}” was on a detached "
-                        "HEAD when the run branched, so there is no base branch to "
-                        "merge into. Check out a branch and run again.",
+                        f"“{made.codebase_name or made.codebase_id}” had no base "
+                        "branch when the run branched, so there is nothing to merge "
+                        "into. Check out a branch and run again.",
                     )
                     return None
                 merge_into = made.base_branch

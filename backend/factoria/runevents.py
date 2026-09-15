@@ -150,8 +150,10 @@ class RunArtifactEvent(RunEventBase):
     codebase_id: str
     branch: str
     path: str = ""
-    #: The codebase's own branch when the worktree was cut, so a reviewer can
-    #: see what this was branched from without leaving the canvas.
+    #: The branch the worktree was cut from — `worktree.base_ref`'s answer, so
+    #: usually the remote's copy of the base branch rather than whatever the
+    #: clone had checked out. Here so a reviewer can see what this was branched
+    #: from without leaving the canvas.
     base_branch: str | None = None
     base_commit: str = ""
     commit_sha: str | None = None

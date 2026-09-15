@@ -19,7 +19,7 @@ from pathlib import Path
 
 import pytest
 
-from factoria import runcheck
+from factoria import runcheck, worktree
 from factoria.models import Codebase, Edge, Factory, Node, NodeDefinition, Project
 from factoria.orchestrator import Orchestrator, prd_title
 from factoria.store import Store
@@ -262,16 +262,9 @@ def test_commit_and_merge_fast_forwards_the_base_branch_on_the_remote(
     assert git(repo, "status", "--porcelain") == ""
 
 
-def test_a_merge_onto_a_base_that_moved_fails_the_node_with_gits_own_words(
-    test_store: Store, orch: Orchestrator, repo: Path, forge: Path, tmp_path: Path
-) -> None:
-    """No force, so no third outcome: it fast-forwards or it fails.
-
-    And when it fails, the commit is still on the run's branch in the
-    operator's own repository *and* on the remote — the branch is pushed before
-    the base branch is, so a refused merge costs a merge and never the run.
-    """
-    other = make_git_repo(tmp_path / "other", branch="main")
+def _push_a_commit_from_elsewhere(forge: Path, where: Path) -> str:
+    """Somebody else's commit lands on the remote's `main`. Returns the new tip."""
+    other = make_git_repo(where, branch="main")
     git(other, "remote", "add", "origin", str(forge))
     git(other, "fetch", "-q", "origin")
     git(other, "reset", "-q", "--hard", "origin/main")
@@ -279,7 +272,74 @@ def test_a_merge_onto_a_base_that_moved_fails_the_node_with_gits_own_words(
     git(other, "add", "theirs.txt")
     git(other, "-c", "user.name=T", "-c", "user.email=t@e.com", "commit", "-q", "-m", "theirs")
     git(other, "push", "-q", "origin", "main")
-    moved = git(forge, "rev-parse", "main")
+    return git(forge, "rev-parse", "main")
+
+
+def test_a_base_that_moved_before_the_run_is_picked_up_rather_than_conflicted_with(
+    test_store: Store, orch: Orchestrator, repo: Path, forge: Path, tmp_path: Path
+) -> None:
+    """The regression this pairs with, at the level of a whole run.
+
+    Their commit lands on `origin/main` while the operator's clone knows nothing
+    about it. The run must branch from *their* tip, not from the clone's stale
+    `main` — so the merge that follows is an ordinary fast-forward and not a
+    conflict for someone to untangle by hand.
+    """
+    theirs = _push_a_commit_from_elsewhere(forge, tmp_path / "other")
+    stale = git(repo, "rev-parse", "main")
+    assert theirs != stale
+
+    save(
+        test_store,
+        line(
+            inputs=[node("n-req", "input", "Request")],
+            output=node("n-out", "output", "Commit & merge", kind="commit-merge"),
+        ),
+    )
+    run = drive(orch, [{"text": "tidy the readme"}])
+
+    assert run.status == "succeeded", run.detail
+    made = run.worktrees[0]
+    assert made.base_commit == theirs, "branched from the clone's stale main"
+    assert made.base_source == "remote"
+    assert made.base_fetched is True
+    # Their work is still in the history the run merged into.
+    assert theirs in git(repo, "log", "--format=%H", run.branch or "").splitlines()
+    assert git(forge, "rev-parse", "main") == git(repo, "rev-parse", run.branch or "")
+
+
+def test_a_merge_onto_a_base_that_moved_fails_the_node_with_gits_own_words(
+    test_store: Store,
+    orch: Orchestrator,
+    repo: Path,
+    forge: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No force, so no third outcome: it fast-forwards or it fails.
+
+    The fetch on the way in closes the *stale clone* race, but not this one: the
+    base can move after the branch is cut and while the agent is working, and no
+    amount of fetching earlier makes that a fast-forward. So the divergence here
+    is created between `ensure` and the push, which is the only window left.
+
+    And when it fails, the commit is still on the run's branch in the operator's
+    own repository *and* on the remote — the branch is pushed before the base
+    branch is, so a refused merge costs a merge and never the run.
+    """
+    moved = ""
+    original = worktree.RunWorkspaces.ensure
+
+    def ensure_then_let_somebody_else_push(self, codebase):
+        nonlocal moved
+        made = original(self, codebase)
+        if not moved:
+            moved = _push_a_commit_from_elsewhere(forge, tmp_path / "other")
+        return made
+
+    monkeypatch.setattr(
+        worktree.RunWorkspaces, "ensure", ensure_then_let_somebody_else_push
+    )
 
     save(
         test_store,

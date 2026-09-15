@@ -50,7 +50,7 @@ from __future__ import annotations
 
 from typing import Callable
 
-from . import config, gitwork, skills
+from . import config, gitwork, skills, worktree
 from .agent.claude import PermissionDenied, resolve_permission_mode
 from .api import validate_graph
 from .discovery import discover_codebases
@@ -408,9 +408,11 @@ def _remote_problems(
     minute to fix and would have been free to discover.
 
     The `commit-merge` extras are about the *base* branch, because that is what
-    it fast-forwards: a detached HEAD has no base branch to name, and a base
-    branch is the operator's own checked-out branch (`RunWorktree.base_branch`),
-    not a remote default looked up over the wire.
+    it fast-forwards. The base branch is `worktree.base_ref`'s answer — the
+    branch the run will actually be cut from, which is usually the checked-out
+    one but is deliberately *not* it when the codebase sits on a run branch or a
+    detached HEAD. Asked with `fetch=False`: this is a precondition, and whether
+    a base branch exists is not a question worth a round trip to the forge.
     """
     pushing = [node for node in outputs if node_kind(node) in PUSHING_OUTPUT_KINDS]
     if not pushing:
@@ -437,11 +439,11 @@ def _remote_problems(
             state = tree_state(codebase.path)
             if not state.is_repo:
                 continue  # already reported by `_git_problems`
-            if merging and (state.detached or not state.branch):
+            if merging and worktree.base_ref(codebase.path, fetch=False).branch is None:
                 problems.append(
-                    f"“{codebase.name}” is on a detached HEAD, so a commit & merge "
-                    "output has no base branch to fast-forward. Check out a branch "
-                    "first."
+                    f"“{codebase.name}” has no base branch to fast-forward — it is on "
+                    "a detached HEAD and has no default branch to fall back to. Check "
+                    "out a branch first."
                 )
 
             url = gitwork.remote_url(codebase.path, remote)
@@ -494,8 +496,8 @@ def _git_problems(
             continue
         if state.unborn:
             problems.append(
-                f"“{codebase.name}” has no commits yet — a run branches from HEAD, "
-                "so there has to be one."
+                f"“{codebase.name}” has no commits yet — a run branches from its "
+                "base branch, so there has to be one."
             )
             continue
         if state.dirty:
@@ -508,8 +510,8 @@ def _git_problems(
             problems.append(
                 f"“{codebase.name}” has {state.change_count} uncommitted "
                 f"change{'s' if state.change_count != 1 else ''} ({listed}{more}). "
-                "Commit or stash them — a run branches from HEAD and must not be "
-                "mixed up with work in progress."
+                "Commit or stash them — a run branches from the base branch and "
+                "must not be mixed up with work in progress."
             )
     if seen:
         # One identity for the whole run; checked once, and only when something

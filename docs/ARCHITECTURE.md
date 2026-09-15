@@ -248,8 +248,13 @@ A run with a codebase attached does this to it:
    sentence, not as a failure halfway through.
 2. The agent gets a **git worktree of its own** at
    `/workspace/_runs/<run-id>/<codebase>/`, on `factor-ia/<factory>/<run-id>`,
-   cut from HEAD. That directory is its cwd and the only place it writes. The
-   operator's working tree is never touched.
+   cut from the **freshly fetched base branch** — `<remote>/<branch>`, not the
+   codebase's `HEAD` (`worktree.base_ref`). The base branch is the checked-out
+   one unless that is itself a run branch or a detached HEAD, in which case the
+   remote's default branch stands in; with no remote, or an unreachable one, the
+   local branch is used and the run says so in `summary.md`. That directory is
+   its cwd and the only place it writes. The operator's working tree is never
+   touched — the fetch moves `refs/remotes/*` and nothing else.
 3. The commit node **commits** on that branch, with the `GIT_AUTHOR_*` /
    `GIT_COMMITTER_*` identity (or a stated `Factor-ia <factor-ia@localhost>`
    fallback when the host sets none). A run whose agent changed nothing **fails**

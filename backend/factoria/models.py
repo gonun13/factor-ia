@@ -625,9 +625,23 @@ class RunWorktree(Base):
     branch: str
     #: What the branch was cut from, so a diff has a left-hand side.
     base_commit: str = ""
-    #: The operator's branch at the moment the worktree was made. Context for a
-    #: reviewer, and the residual risk `DESIGN.md` accepts made visible.
+    #: The branch this run is a branch *of* — resolved by `worktree.base_ref`,
+    #: which prefers the remote's copy over whatever the clone had checked out.
+    #: Also the branch a `commit-merge` fast-forwards, so it is load-bearing and
+    #: not merely context.
     base_branch: str | None = None
+    #: How `base_commit` was chosen: `remote` (a freshly fetched
+    #: remote-tracking ref — the ordinary case), `local`, or `head`. Recorded
+    #: because a run that started from a stale base is invisible otherwise, and
+    #: was invisible once for ten commits.
+    base_source: str = ""
+    #: The base as it reads to a human: `origin/main`, `main`, `HEAD`.
+    base_label: str = ""
+    #: True when a fetch ran and succeeded before the branch was cut.
+    base_fetched: bool = False
+    #: Anything unusual about the choice — a run branch skipped, a detached
+    #: HEAD, an unreachable remote. Empty when nothing was.
+    base_detail: str = ""
     commit_sha: str | None = None
     subject: str = ""
     files: list[str] = Field(default_factory=list)

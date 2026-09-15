@@ -208,8 +208,16 @@ def test_cancel_stops_the_run_and_interrupts_the_adapter(
     async def go():
         run = await orch.start("demo", "main")
         await orch.submit_input(run.id, "a long job")
-        await asyncio.sleep(0.12)
+        # Waited for rather than slept past: what has to be true is that the
+        # agent is mid-stream when the cancel lands, and a fixed sleep asserts
+        # that only as long as everything before the agent — making a worktree,
+        # which shells out to git several times — stays as fast as it was the
+        # day the number was picked.
         state = orch._active[run.id]
+        for _ in range(200):
+            if state.agent_run is not None:
+                break
+            await asyncio.sleep(0.01)
         assert state.agent_run is not None, "the agent should still be streaming"
         await orch.cancel(run.id)
         return orch.get(run.id)
