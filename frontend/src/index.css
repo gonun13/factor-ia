@@ -292,10 +292,20 @@ button:focus-visible {
 
 /* ---- canvas ------------------------------------------------------------- */
 
+/* The sheet and the run pane, side by side under the topbar. */
+.workbench {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+
 .canvas-wrap {
   flex: 1;
   position: relative;
   min-height: 0;
+  /* A flex item's floor is its content, and React Flow's content is however far
+     the graph sprawls. Without this the sheet refuses to give the pane room. */
+  min-width: 0;
 }
 
 .react-flow__attribution {
@@ -583,6 +593,198 @@ button:focus-visible {
 .request textarea:focus {
   outline: none;
   border-color: var(--agent);
+}
+
+/* ---- the run pane -------------------------------------------------------
+   The right-hand dock: the run box, and under it one thread per machine. It is
+   a sibling of the canvas rather than a panel floating over it, so it takes
+   width from the layout instead of covering the far side of the line — the
+   machines underneath a floating panel are the ones you most want to see while
+   a run is going. Fixed width: the canvas is the thing that pans and zooms, and
+   a draggable splitter here would be a second way to resize the same view. */
+
+.runpane {
+  flex: 0 0 25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  padding: 0.6rem;
+  min-height: 0;
+  border-left: 1px solid var(--edge);
+  background: linear-gradient(180deg, #121822, #0e131b);
+}
+
+/* In the pane the run box is a card in a column, not a floating panel: it keeps
+   its own chrome (the border is how a live run announces itself) and gives up
+   only its fixed width. It scrolls before the threads do — the log is the part
+   that must stay on screen. */
+.runpane .runbox {
+  width: auto;
+  flex: 0 1 auto;
+  overflow-y: auto;
+}
+
+.runchat {
+  flex: 1 1 auto;
+  min-height: 8rem;
+  overflow-y: auto;
+  padding: 0.75rem;
+  display: grid;
+  gap: 0.7rem;
+  align-content: start;
+}
+
+.runchat-empty {
+  margin: 0;
+  font-size: 0.75rem;
+  line-height: 1.5;
+  color: var(--ink-faint);
+}
+
+/* One machine's thread. The border says what it is doing, the same way the
+   node's does — the pane and the sheet are two views of one state. */
+.thread {
+  display: grid;
+  gap: 0.35rem;
+  border: 1px solid var(--edge);
+  border-radius: 8px;
+  background: var(--raised);
+  padding: 0.5rem 0.55rem;
+}
+
+.thread[data-status="running"] {
+  border-color: color-mix(in srgb, var(--agent) 55%, var(--edge));
+}
+
+.thread[data-status="waiting_input"] {
+  border-color: color-mix(in srgb, var(--input) 55%, var(--edge));
+}
+
+.thread[data-status="succeeded"] {
+  border-color: color-mix(in srgb, var(--output) 40%, var(--edge));
+}
+
+.thread[data-status="failed"] {
+  border-color: color-mix(in srgb, var(--danger) 55%, var(--edge));
+}
+
+.thread-head {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.thread-head .who {
+  font-weight: 600;
+  font-size: 0.85rem;
+}
+
+.thread-head .eyebrow {
+  flex: 1;
+}
+
+.thread-detail {
+  margin: 0;
+  font-size: 0.72rem;
+  line-height: 1.4;
+  color: var(--ink-dim);
+}
+
+.thread[data-status="failed"] .thread-detail {
+  color: var(--danger);
+}
+
+/* The tool in flight: name plus the argument that says what it acts on. */
+.thread .tool {
+  display: flex;
+  gap: 0.35rem;
+  align-items: baseline;
+  font-size: 0.7rem;
+  color: var(--ink-dim);
+  background: #0f151e;
+  border: 1px solid var(--edge);
+  border-radius: 6px;
+  padding: 0.25rem 0.4rem;
+  overflow: hidden;
+}
+
+.thread .tool b {
+  color: var(--agent);
+  flex: 0 0 auto;
+}
+
+.thread .tool .target {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.thread .tool[data-state="running"] b {
+  animation: pulse 1.4s ease-in-out infinite;
+}
+
+.thread .tool[data-state="error"] b {
+  color: var(--danger);
+}
+
+/* The checklist in full, which is what "the step it is on" actually means. */
+.thread .todos {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 0.15rem;
+  font-size: 0.72rem;
+  line-height: 1.4;
+  color: var(--ink-dim);
+}
+
+.thread .todos li {
+  display: flex;
+  gap: 0.4rem;
+  align-items: baseline;
+}
+
+.thread .todos li[data-status="completed"] {
+  color: var(--ink-faint);
+  text-decoration: line-through;
+}
+
+.thread .todos li[data-status="in_progress"] {
+  color: var(--ink);
+}
+
+.thread .todos .box {
+  flex: 0 0 auto;
+}
+
+/* The agent's own words, as they arrive. Capped and tail-following: one
+   talkative machine must not push every other thread out of the pane. */
+.thread .stream {
+  margin: 0;
+  max-height: 18rem;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 0.72rem;
+  line-height: 1.5;
+  color: var(--ink);
+  background: #0b1017;
+  border: 1px solid var(--edge);
+  border-radius: 6px;
+  padding: 0.4rem 0.5rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.thread-foot {
+  display: flex;
+  gap: 0.6rem;
+  font-size: 0.65rem;
+  color: var(--ink-faint);
+}
+
+.thread-foot .commit {
+  color: var(--output);
 }
 
 /* ---- save state --------------------------------------------------------- */

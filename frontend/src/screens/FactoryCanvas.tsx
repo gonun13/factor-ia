@@ -16,6 +16,13 @@
  * constraint). The merge is one `setNodes` — nothing about editing,
  * serialization or the node components moves, because stage 3 put the
  * `definition`/`runtime` split on the node object from the first render.
+ *
+ * **The run pane is docked, not floating.** The right-hand side is a sibling of
+ * the canvas rather than a panel over it — the run box on top, then one thread
+ * per machine (`RunChat`) fed by the same `runtimes` map. The node keeps the
+ * part that reads at a glance, its pip and status word; the words, the tool and
+ * the checklist go where there is room for them. Nothing on the line is ever
+ * hidden behind the pane, which is why it takes width instead of overlaying.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from "react";
@@ -51,6 +58,7 @@ import {
 import { edgeTypes, nodeTypes } from "../nodes";
 import { AgentGlyph, InputGlyph, OutputGlyph } from "../nodes/Glyphs";
 import { useRun, type RunState } from "../run";
+import { RunChat } from "./RunChat";
 import { runProblems } from "../validation";
 import type {
   Codebase,
@@ -286,107 +294,120 @@ function CanvasInner({ projectId, onBack }: { projectId: string; onBack: () => v
 
       {error && <div className="error" style={{ margin: "0.75rem 1rem 0" }}>{error}</div>}
 
-      {/* React Flow is mounted only once the graph is in hand: `fitView` latches
-          on the first render that has measured nodes, so mounting it empty makes
-          it re-centre on whatever node is dropped first — which yanks the
-          viewport out from under the cursor mid-drop. */}
-      <div
-        className="canvas-wrap"
-        onDragOver={(event) => {
-          event.preventDefault();
-          event.dataTransfer.dropEffect = "copy";
-        }}
-        onDrop={(event) => {
-          event.preventDefault();
-          const type = event.dataTransfer.getData(DND_TYPE) as NodeType;
-          if (type) addNode(type, event.clientX, event.clientY);
-        }}
-      >
-        {factory === null ? (
-          <p className="loading">Loading the factory…</p>
-        ) : (
-        <CanvasContext.Provider value={context}>
-          <ReactFlow<FlowNode, FlowEdge>
-            nodes={nodes}
-            edges={edges}
-            onNodesChange={onNodesChange}
-            onEdgesChange={onEdgesChange}
-            onConnect={onConnect}
-            nodeTypes={nodeTypes}
-            edgeTypes={edgeTypes}
-            defaultEdgeOptions={{ type: BELT_EDGE }}
-            deleteKeyCode={["Backspace", "Delete"]}
-            // Only for a graph that already has something in it: `fitView`
-            // latches on the first render with measured nodes, so an empty
-            // factory would fit on whatever node is dropped first and yank the
-            // viewport out from under the cursor.
-            fitView={factory.nodes.length > 0}
-            fitViewOptions={{ padding: 0.35, maxZoom: 1 }}
-            minZoom={0.25}
-            proOptions={{ hideAttribution: false }}
-          >
-            <Background
-              variant={BackgroundVariant.Dots}
-              gap={22}
-              size={1.5}
-              color="var(--grid)"
-            />
-            <Controls showInteractive={false} />
-            <MiniMap
-              pannable
-              zoomable
-              bgColor="#131922"
-              maskColor="rgba(8,10,14,0.65)"
-              nodeColor={(node: FlowNode) => NODE_COLOUR[node.data.definition.type] ?? "#3a4558"}
-            />
+      <div className="workbench">
+        {/* React Flow is mounted only once the graph is in hand: `fitView` latches
+            on the first render that has measured nodes, so mounting it empty makes
+            it re-centre on whatever node is dropped first — which yanks the
+            viewport out from under the cursor mid-drop. */}
+        <div
+          className="canvas-wrap"
+          onDragOver={(event) => {
+            event.preventDefault();
+            event.dataTransfer.dropEffect = "copy";
+          }}
+          onDrop={(event) => {
+            event.preventDefault();
+            const type = event.dataTransfer.getData(DND_TYPE) as NodeType;
+            if (type) addNode(type, event.clientX, event.clientY);
+          }}
+        >
+          {factory === null ? (
+            <p className="loading">Loading the factory…</p>
+          ) : (
+          <CanvasContext.Provider value={context}>
+            <ReactFlow<FlowNode, FlowEdge>
+              nodes={nodes}
+              edges={edges}
+              onNodesChange={onNodesChange}
+              onEdgesChange={onEdgesChange}
+              onConnect={onConnect}
+              nodeTypes={nodeTypes}
+              edgeTypes={edgeTypes}
+              defaultEdgeOptions={{ type: BELT_EDGE }}
+              deleteKeyCode={["Backspace", "Delete"]}
+              // Only for a graph that already has something in it: `fitView`
+              // latches on the first render with measured nodes, so an empty
+              // factory would fit on whatever node is dropped first and yank the
+              // viewport out from under the cursor.
+              fitView={factory.nodes.length > 0}
+              fitViewOptions={{ padding: 0.35, maxZoom: 1 }}
+              minZoom={0.25}
+              proOptions={{ hideAttribution: false }}
+            >
+              <Background
+                variant={BackgroundVariant.Dots}
+                gap={22}
+                size={1.5}
+                color="var(--grid)"
+              />
+              <Controls showInteractive={false} />
+              {/* Beside the zoom controls, not opposite them: the bottom-right
+                  corner is the pane's edge now, and a minimap tucked against it
+                  reads as part of the pane rather than part of the sheet. */}
+              <MiniMap
+                position="bottom-left"
+                pannable
+                zoomable
+                bgColor="#131922"
+                maskColor="rgba(8,10,14,0.65)"
+                nodeColor={(node: FlowNode) => NODE_COLOUR[node.data.definition.type] ?? "#3a4558"}
+              />
 
-            <Panel position="top-left">
-              <div className="panel palette">
-                <span className="eyebrow">Machines</span>
-                {PALETTE.map(({ type, label, hint, Glyph }) => (
-                  <button
-                    key={type}
-                    className={`palette-item type-${type}`}
-                    draggable
-                    onDragStart={(event) => {
-                      event.dataTransfer.setData(DND_TYPE, type);
-                      event.dataTransfer.effectAllowed = "copy";
-                    }}
-                    onClick={(event) => {
-                      const box = event.currentTarget
-                        .closest(".canvas-wrap")
-                        ?.getBoundingClientRect();
-                      addNode(
-                        type,
-                        (box?.left ?? 0) + (box?.width ?? 800) / 2,
-                        (box?.top ?? 0) + (box?.height ?? 600) / 2,
-                      );
-                    }}
-                  >
-                    <span className="glyph">
-                      <Glyph />
-                    </span>
-                    <span>
-                      <span className="label" style={{ display: "block", color: "var(--ink)" }}>
-                        {label}
+              <Panel position="top-left">
+                <div className="panel palette">
+                  <span className="eyebrow">Machines</span>
+                  {PALETTE.map(({ type, label, hint, Glyph }) => (
+                    <button
+                      key={type}
+                      className={`palette-item type-${type}`}
+                      draggable
+                      onDragStart={(event) => {
+                        event.dataTransfer.setData(DND_TYPE, type);
+                        event.dataTransfer.effectAllowed = "copy";
+                      }}
+                      onClick={(event) => {
+                        const box = event.currentTarget
+                          .closest(".canvas-wrap")
+                          ?.getBoundingClientRect();
+                        addNode(
+                          type,
+                          (box?.left ?? 0) + (box?.width ?? 800) / 2,
+                          (box?.top ?? 0) + (box?.height ?? 600) / 2,
+                        );
+                      }}
+                    >
+                      <span className="glyph">
+                        <Glyph />
                       </span>
-                      <span className="hint">{hint}</span>
-                    </span>
-                  </button>
-                ))}
-                <p className="palette-note">
-                  Drag onto the line, or click to drop one in the middle. Belts
-                  carry work between machines; a codebase is a property of an
-                  agent, not a belt. Select and press ⌫ to remove.
-                </p>
-              </div>
-            </Panel>
+                      <span>
+                        <span className="label" style={{ display: "block", color: "var(--ink)" }}>
+                          {label}
+                        </span>
+                        <span className="hint">{hint}</span>
+                      </span>
+                    </button>
+                  ))}
+                  <p className="palette-note">
+                    Drag onto the line, or click to drop one in the middle. Belts
+                    carry work between machines; a codebase is a property of an
+                    agent, not a belt. Select and press ⌫ to remove.
+                  </p>
+                </div>
+              </Panel>
+            </ReactFlow>
+          </CanvasContext.Provider>
+          )}
+        </div>
 
-            <Panel position="top-right">
-              <RunBox problems={problems} onFocus={focus} run={run} />
-            </Panel>
-          </ReactFlow>
-        </CanvasContext.Provider>
+        {/* The run, docked down the right: the controls it starts from, then a
+            thread per machine. It waits for the factory for the same reason the
+            canvas does — a run box that lists everything wrong with a graph
+            nobody has loaded yet is noise, not a warning. */}
+        {factory !== null && (
+          <aside className="runpane">
+            <RunBox problems={problems} onFocus={focus} run={run} />
+            <RunChat nodes={nodes} runtimes={run.runtimes} />
+          </aside>
         )}
       </div>
     </div>
@@ -491,7 +512,6 @@ function RunBox({
           <label htmlFor="run-request">What should this factory do?</label>
           <textarea
             id="run-request"
-            className="nodrag nowheel"
             autoFocus
             rows={3}
             value={request}

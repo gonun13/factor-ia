@@ -309,6 +309,13 @@
   box-shadow: var(--shadow);
 }
 
+/* Both corners at the bottom-left would sit on top of each other — React Flow
+   pins every panel to its corner and nothing else. So the minimap is pushed
+   clear of the controls column: 26px of button, then a gap. */
+.react-flow__minimap.react-flow__panel.bottom.left {
+  left: 34px;
+}
+
 .react-flow__minimap-svg {
   border-radius: 8px;
 }
@@ -325,7 +332,10 @@
 /* ---- the live half ------------------------------------------------------
    Everything below renders from `data.runtime`, which only exists while a run
    is in flight. A node that has never run is byte-for-byte the node you drew:
-   no reserved space, no empty panels, no "waiting" placeholder. */
+   no reserved space, no empty panels, no "waiting" placeholder — and a node
+   that *is* running is the same node, one pip and one word larger. The rest of
+   the live state is in the run pane (`index.css`, the run pane), which shares
+   the pip and the status word so the two surfaces speak with one vocabulary. */
 
 .node.live {
   border-color: color-mix(in srgb, currentColor 45%, var(--edge));
@@ -339,84 +349,11 @@
   border-color: color-mix(in srgb, var(--danger) 60%, var(--edge));
 }
 
-.node .status-word {
+/* Shared with the run pane's threads, which say the same word about the same
+   node — hence no `.node` in front of it. */
+.status-word {
   font-size: 0.6rem;
   text-transform: uppercase;
   letter-spacing: 0.08em;
-  color: var(--ink-faint);
-}
-
-.runtime {
-  display: grid;
-  gap: 0.35rem;
-  border-top: 1px solid var(--edge);
-  padding-top: 0.45rem;
-}
-
-.runtime-detail {
-  font-size: 0.7rem;
-  line-height: 1.35;
-  color: var(--ink-dim);
-}
-
-.runtime[data-status="failed"] .runtime-detail {
-  color: var(--danger);
-}
-
-/* The tool in flight: name plus the argument that says what it acts on. */
-.runtime .tool {
-  display: flex;
-  gap: 0.35rem;
-  align-items: baseline;
-  font-size: 0.68rem;
-  color: var(--ink-dim);
-  background: #0f151e;
-  border: 1px solid var(--edge);
-  border-radius: 6px;
-  padding: 0.25rem 0.4rem;
-  overflow: hidden;
-}
-
-.runtime .tool b {
-  color: var(--agent);
-  flex: 0 0 auto;
-}
-
-.runtime .tool .target {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.runtime .tool[data-state="running"] b {
-  animation: pulse 1.4s ease-in-out infinite;
-}
-
-.runtime .tool[data-state="error"] b {
-  color: var(--danger);
-}
-
-/* The agent's own words, as they arrive. Fixed height and pinned to the
-   bottom: a node that grows with every delta would shove the graph around. */
-.runtime .stream {
-  margin: 0;
-  max-height: 5.5rem;
-  overflow-y: auto;
-  white-space: pre-wrap;
-  word-break: break-word;
-  font-size: 0.68rem;
-  line-height: 1.45;
-  color: var(--ink);
-  background: #0b1017;
-  border: 1px solid var(--edge);
-  border-radius: 6px;
-  padding: 0.35rem 0.45rem;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-}
-
-.runtime-foot {
-  display: flex;
-  gap: 0.6rem;
-  font-size: 0.65rem;
   color: var(--ink-faint);
 }

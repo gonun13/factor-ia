@@ -48,9 +48,15 @@ Press **Run** and the viewport does not move. No second screen opens. The run
 box asks for the request, it is submitted **once** — this is not a chat — and
 the machines light up where they already are:
 
-- a status pip per node,
-- the tool the agent is running,
-- its words streaming onto the agent node as they arrive.
+- a status pip and a status word on the node itself,
+- a thread per machine in the **run pane** down the right-hand side: the tool it
+  is running, its checklist, and its words as they arrive.
+
+The pane is docked beside the canvas rather than floating over it, so no part of
+the line is ever hidden while a run is going, and the run box sits at the top of
+it. It is a transcript you read, not a conversation you type into — the request
+is still submitted once. The zoom controls and the minimap share the canvas's
+bottom-left corner.
 
 ### Cancel means cancel
 
