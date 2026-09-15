@@ -21,7 +21,7 @@ from pathlib import Path
 
 import pytest
 
-from factoria import gitwork, worktree
+from factoria import gitwork, skills, worktree
 from factoria.models import Edge, Factory, Node, NodeDefinition, Project, ProjectSettings
 from factoria.orchestrator import (
     Orchestrator,
@@ -29,6 +29,7 @@ from factoria.orchestrator import (
     adapter_name_for,
     model_for,
 )
+from factoria.agent.fake import FakeAdapter
 from factoria.runcheck import NotRunnable, run_problems
 from factoria.runlog import RunLog, run_dir
 from factoria.store import Store
@@ -519,3 +520,147 @@ def test_the_run_is_refused_422_with_the_reason_on_the_wire(
     response = client.post("/api/projects/demo/factories/main/runs")
     assert response.status_code == 422
     assert any("uncommitted" in reason for reason in response.json()["detail"])
+
+
+# ---- skills ----------------------------------------------------------------
+#
+# A skill is unconditional once attached: whatever else a run does, the node
+# either ran with its standing instructions or did not run at all. These pin
+# both halves of that.
+
+SKILL = """---
+name: repo-recon
+description: Reads a repository and reports what it is.
+---
+
+# Repo recon
+
+Read before touching.
+"""
+
+
+def wear_skill(test_store: Store, factory: Factory, name: str) -> Factory:
+    loaded = test_store.get_factory("demo", "main")
+    loaded.nodes, loaded.edges = graph()
+    for node in loaded.nodes:
+        if node.definition.type == "agent":
+            node.definition.config = {"skill": name}
+    return test_store.save_factory(loaded)
+
+
+def test_the_skill_body_reaches_the_spawn(
+    orch: Orchestrator, test_store: Store, factory: Factory, workspace: Path, monkeypatch
+) -> None:
+    """The *body*, read from `_skills/` by the orchestrator, not the name."""
+    skills.create_skill(SKILL)
+    wear_skill(test_store, factory, "repo-recon")
+
+    seen: list[str | None] = []
+    original = FakeAdapter.create_run
+
+    def capture(self, prompt, cwd, config=None):
+        seen.append(config.append_system_prompt if config else None)
+        return original(self, prompt, cwd, config)
+
+    monkeypatch.setattr(FakeAdapter, "create_run", capture)
+    run = run_to_completion(orch)
+    assert run.status == "succeeded"
+    assert seen and seen[0] is not None
+    assert "Read before touching." in seen[0]
+    # The frontmatter is not instructions and does not travel with them.
+    assert "description:" not in seen[0]
+
+
+def test_a_node_wearing_no_skill_appends_nothing(
+    orch: Orchestrator, factory: Factory, monkeypatch
+) -> None:
+    seen: list[str | None] = []
+    original = FakeAdapter.create_run
+
+    def capture(self, prompt, cwd, config=None):
+        seen.append(config.append_system_prompt if config else None)
+        return original(self, prompt, cwd, config)
+
+    monkeypatch.setattr(FakeAdapter, "create_run", capture)
+    run_to_completion(orch)
+    assert seen == [None]
+
+
+def test_the_run_record_names_the_skill_that_applied(
+    orch: Orchestrator, test_store: Store, factory: Factory
+) -> None:
+    """Frozen at start, like `kind` and `label`. A log that cannot say which
+    standing instructions applied cannot account for the output it carries."""
+    skills.create_skill(SKILL)
+    wear_skill(test_store, factory, "repo-recon")
+    run = run_to_completion(orch)
+    agent_run = next(one for one in run.node_runs if one.type == "agent")
+    assert agent_run.skill == "repo-recon"
+    assert "repo-recon" in (run_dir(run.id) / "summary.md").read_text(encoding="utf-8")
+
+
+def test_a_skill_deleted_after_the_check_fails_the_node_before_the_spawn(
+    orch: Orchestrator, test_store: Store, factory: Factory, workspace: Path, monkeypatch
+) -> None:
+    """The window `_codebase` already acknowledges: the precondition ran
+    subprocesses ago. Failing is the point — a run that quietly dropped its
+    standing instructions would look right and be made under rules nobody
+    chose, which is the one failure nothing downstream can catch.
+    """
+    skills.create_skill(SKILL)
+    wear_skill(test_store, factory, "repo-recon")
+
+    spawned: list[str] = []
+    original = FakeAdapter.create_run
+
+    def capture(self, prompt, cwd, config=None):
+        spawned.append(prompt)
+        return original(self, prompt, cwd, config)
+
+    monkeypatch.setattr(FakeAdapter, "create_run", capture)
+
+    async def scenario():
+        run = await orch.start("demo", "main")
+        # After the precondition, before the node's turn.
+        skills.delete_skill("repo-recon")
+        await orch.submit_input(run.id, "tidy the readme")
+        await asyncio.wait_for(orch._active[run.id].task, 15)
+        return orch.get(run.id)
+
+    run = asyncio.run(scenario())
+    agent_run = next(one for one in run.node_runs if one.type == "agent")
+    assert agent_run.status == "failed"
+    assert "repo-recon" in (agent_run.detail or "")
+    # Not a token spent, and no worktree cut for a node that could not run.
+    assert spawned == []
+
+
+def test_a_missing_skill_is_refused_before_the_run_starts(
+    test_store: Store, factory: Factory, workspace: Path
+) -> None:
+    """The cheap place to learn it, beside the stale-codebase check it is the
+    exact analogue of (`runcheck`)."""
+    saved = wear_skill(test_store, factory, "repo-recon")
+    problems = [one for one in run_problems(saved) if "skill" in one]
+    assert len(problems) == 1
+    assert "repo-recon" in problems[0] and "_skills" in problems[0]
+
+
+def test_an_unparseable_skill_is_refused_with_the_rule_it_broke(
+    test_store: Store, factory: Factory, workspace: Path
+) -> None:
+    directory = workspace / "_skills"
+    directory.mkdir()
+    (directory / "repo-recon.md").write_text("no frontmatter at all\n", encoding="utf-8")
+    saved = wear_skill(test_store, factory, "repo-recon")
+    problems = [one for one in run_problems(saved) if "skill" in one]
+    assert len(problems) == 1
+    assert "frontmatter" in problems[0]
+
+
+def test_a_readable_skill_is_no_problem_at_all(
+    test_store: Store, factory: Factory, workspace: Path
+) -> None:
+    skills.create_skill(SKILL)
+    saved = wear_skill(test_store, factory, "repo-recon")
+    assert run_problems(saved) == []

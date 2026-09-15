@@ -71,6 +71,7 @@ import type {
   NodeRun,
   NodeType,
   Project,
+  SkillSummary,
 } from "../types";
 
 const DND_TYPE = "application/factoria-node";
@@ -114,6 +115,7 @@ function CanvasInner({ projectId, onBack }: { projectId: string; onBack: () => v
   const [project, setProject] = useState<Project | null>(null);
   const [factory, setFactory] = useState<Factory | null>(null);
   const [codebases, setCodebases] = useState<Codebase[]>([]);
+  const [skills, setSkills] = useState<SkillSummary[]>([]);
   const [gitStates, setGitStates] = useState<Record<string, CodebaseGit>>({});
   const [agent, setAgent] = useState<AgentStatus | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -128,13 +130,24 @@ function CanvasInner({ projectId, onBack }: { projectId: string; onBack: () => v
 
   useEffect(() => {
     let live = true;
-    Promise.all([api.project(projectId), api.factory(projectId), api.codebases()])
-      .then(([loadedProject, loadedFactory, discovered]) => {
+    Promise.all([
+      api.project(projectId),
+      api.factory(projectId),
+      api.codebases(),
+      // In the blocking load, unlike `agentStatus` below: this is a directory
+      // read, not two subprocesses, so it cannot be the thing that makes a
+      // canvas slow. The `.catch` keeps the same guarantee all the same — a
+      // problem with `_skills/` must not turn a good factory into an error
+      // screen, it must turn the skill picker into an empty one.
+      api.skills().catch(() => [] as SkillSummary[]),
+    ])
+      .then(([loadedProject, loadedFactory, discovered, library]) => {
         if (!live) return;
         const graph = loadGraph(loadedFactory);
         setProject(loadedProject);
         setFactory(loadedFactory);
         setCodebases(discovered);
+        setSkills(library);
         setNodes(graph.nodes);
         setEdges(graph.edges);
         baseline.current = JSON.stringify(serialize(graph.nodes, graph.edges));
@@ -329,8 +342,9 @@ function CanvasInner({ projectId, onBack }: { projectId: string; onBack: () => v
         default_provider: null,
         default_model: null,
       },
+      skills,
     }),
-    [codebases, gitStates, invalid, patch, agent, project],
+    [codebases, gitStates, invalid, patch, agent, project, skills],
   );
 
   return (

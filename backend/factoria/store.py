@@ -63,7 +63,13 @@ def _dump(model: BaseModel, **kwargs: Any) -> str:
     return json.dumps(payload, indent=2, ensure_ascii=False) + "\n"
 
 
-def _atomic_write(path: Path, text: str) -> None:
+def atomic_write(path: Path, text: str) -> None:
+    """Write `text` to `path` so a reader never sees a half-written file.
+
+    Public because `skills.py` needs the same discipline for a document this
+    module does not own: the reason (a torn file after a crash is worse than no
+    file at all) has nothing to do with the thing being written.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp_name = tempfile.mkstemp(
         dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp"
@@ -146,7 +152,7 @@ class Store:
             raise Corrupt(f"projects.json does not match the model: {exc}") from None
 
     def _save_registry(self, registry: ProjectRegistry) -> None:
-        _atomic_write(self.registry_path, _dump(registry))
+        atomic_write(self.registry_path, _dump(registry))
 
     def list_projects(self) -> list[Project]:
         return self.load_registry().projects
@@ -303,7 +309,7 @@ class Store:
         # `runtime` is stage 5's, lives in memory, and must never reach a file
         # a human reviews in a pull request.
         text = _dump(factory, exclude={"nodes": {"__all__": {"runtime"}}})
-        _atomic_write(path, text)
+        atomic_write(path, text)
 
 
 _store: Store | None = None

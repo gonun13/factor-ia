@@ -493,6 +493,32 @@
   background: #10141b;
 }
 
+/* The skill plate reads like the model plate — both are properties of the
+   machine rather than things flowing through it — but it carries a sentence as
+   well as a name, so the description is clamped: a node is a label on a
+   machine, not a place to read a document. */
+.slot.skill {
+  border-color: color-mix(in srgb, var(--ink-faint) 55%, transparent);
+  background: color-mix(in srgb, var(--ink-faint) 8%, transparent);
+  color: var(--ink-dim);
+}
+
+.slot.skill select {
+  border-color: color-mix(in srgb, var(--ink-faint) 45%, transparent);
+  background: #10141b;
+}
+
+.slot.skill .skill-what {
+  font-size: 0.72rem;
+  line-height: 1.35;
+  color: var(--ink-faint);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
 /* ---- the two ports ------------------------------------------------------
    An agent and a human node leave by `success` or by `fail`. React Flow puts
    every right-hand handle at the vertical middle, so two of them need saying

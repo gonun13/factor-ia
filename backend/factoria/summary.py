@@ -150,6 +150,22 @@ def render(run: Run) -> str:
             f"| `{node_run.node_id}` | {node_run.type} | {status} | {detail} |"
         )
 
+    # Named separately rather than as a sixth table column, which would widen
+    # the line for every run to carry a fact most runs do not have. What an
+    # agent was told to *be* is not visible anywhere else in this file, and a
+    # summary that cannot say it cannot account for the output below.
+    worn = [
+        (node_run.node_id, node_run.skill)
+        for node_run in run.node_runs
+        if node_run.skill
+    ]
+    if worn:
+        lines += ["", "## Standing instructions", ""]
+        lines += [
+            f"- `{node_id}` wore the skill **{skill}** (`_skills/{skill}.md`)."
+            for node_id, skill in worn
+        ]
+
     agent_text = "\n\n".join(
         node_run.output_text.strip()
         for node_run in run.node_runs

@@ -16,6 +16,7 @@ from .orchestrator import get_orchestrator
 from .runs_api import router as runs_router
 from .security import OriginCheckMiddleware
 from .settings_api import router as settings_router
+from .skills_api import router as skills_router
 
 log = logging.getLogger("factoria")
 
@@ -71,6 +72,10 @@ app.include_router(settings_router)
 # Run control and the SSE stream. Separate module because it supervises the
 # orchestrator rather than the store, and because SSE is a different transport.
 app.include_router(runs_router)
+# Skills: the workspace's standing instructions. Separate module because they
+# are scoped to the workspace rather than to a project, and are markdown a
+# human wrote rather than JSON the store owns.
+app.include_router(skills_router)
 
 
 # Static last: this mount matches everything, and Starlette resolves routes in

@@ -15,6 +15,7 @@ import type {
   CodebaseGit,
   NodeDefinition,
   ProjectSettings,
+  SkillSummary,
 } from "./types";
 
 export type CanvasContextValue = {
@@ -39,6 +40,11 @@ export type CanvasContextValue = {
   /** So a node's "— project default —" can say what that actually resolves to
    * without anyone opening the settings panel. */
   projectSettings: ProjectSettings;
+  /** The workspace's skill library, fetched once per canvas for the same
+   * reason `models` is — though the cost here is a directory read, not two
+   * subprocesses. Empty when `_skills/` does not exist yet, which an agent
+   * node renders as "no list" rather than as every node looking broken. */
+  skills: SkillSummary[];
 };
 
 export const CanvasContext = createContext<CanvasContextValue>({
@@ -50,6 +56,7 @@ export const CanvasContext = createContext<CanvasContextValue>({
   cliDefaultModel: null,
   containerProvider: "claude",
   projectSettings: { default_provider: null, default_model: null },
+  skills: [],
 });
 
 export const useCanvas = () => useContext(CanvasContext);

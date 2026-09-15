@@ -118,6 +118,19 @@ export function SettingsGlyph() {
   );
 }
 
+/** A page of standing instructions: a sheet with a turned corner and ruled
+ *  lines. Deliberately not a spark or a wand — a skill is a document somebody
+ *  wrote and reviewed, and the glyph should say so. */
+export function SkillGlyph() {
+  return (
+    <svg viewBox="0 0 16 16" aria-hidden>
+      <path d="M4 2h5l3 3v9H4z" {...stroke} />
+      <path d="M9 2v3h3" {...stroke} />
+      <path d="M6 8h4M6 10.5h4" {...stroke} />
+    </svg>
+  );
+}
+
 /** Model: a chip. A property of the machine, not something that flows through it. */
 export function ModelGlyph() {
   return (

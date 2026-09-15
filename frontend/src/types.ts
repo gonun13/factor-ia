@@ -78,6 +78,23 @@ export type Codebase = {
 };
 
 /**
+ * A standing-instructions document in the workspace's `_skills/`.
+ *
+ * Owned by nothing — not a project, not a factory — so it is fetched from a
+ * workspace-scoped route and offered to every agent node everywhere.
+ */
+export type SkillSummary = {
+  name: string;
+  /** The one line an agent node's picker can show about a skill nobody opened. */
+  description: string;
+  bytes: number;
+  updated_at: string;
+};
+
+/** A skill and its instructions. Only the import round-trip needs the body. */
+export type Skill = SkillSummary & { body: string };
+
+/**
  * A codebase's live git state — the clean-repo precondition, as data.
  *
  * Fetched separately from the codebase list because it costs a subprocess per

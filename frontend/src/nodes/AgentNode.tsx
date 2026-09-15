@@ -2,7 +2,7 @@ import type { NodeProps } from "@xyflow/react";
 import type { FlowNode } from "../graph";
 import { useCanvas } from "../canvasContext";
 import { NodeShell } from "./NodeShell";
-import { CodebaseGlyph, ModelGlyph } from "./Glyphs";
+import { CodebaseGlyph, ModelGlyph, SkillGlyph } from "./Glyphs";
 
 /**
  * The machine. Its one required setting is the codebase, and the codebase is
@@ -18,10 +18,24 @@ import { CodebaseGlyph, ModelGlyph } from "./Glyphs";
  * on the machine rather than by selecting it and looking somewhere else. The
  * project settings panel is not a counterexample: it holds only the defaults,
  * which are a property of no node in particular.
+ *
+ * The skill is the third plate, and the one that says the most about what this
+ * machine will do: it names the standing instructions appended to the agent's
+ * system prompt on every spawn. The plate shows the chosen skill's description
+ * rather than just its name, because "what is in force here" is the question a
+ * canvas is read to answer, and a name alone answers it only for whoever
+ * imported it.
  */
 export function AgentNode({ id, data }: NodeProps<FlowNode>) {
-  const { codebases, gitStates, patch, models, cliDefaultModel, projectSettings } =
-    useCanvas();
+  const {
+    codebases,
+    gitStates,
+    patch,
+    models,
+    cliDefaultModel,
+    projectSettings,
+    skills,
+  } = useCanvas();
   const attachedId = data.definition.codebase_id;
   const attached = codebases.find((codebase) => codebase.id === attachedId);
   const missing = attachedId !== null && attached === undefined;
@@ -37,6 +51,12 @@ export function AgentNode({ id, data }: NodeProps<FlowNode>) {
   // project's own choice is preferred to the CLI's, which is the order a run
   // resolves them in; a project id is shown by its list label where the CLI
   // offers one, and verbatim where it does not.
+  const nodeSkill = (data.definition.config.skill as string | undefined) ?? "";
+  const chosenSkill = skills.find((skill) => skill.name === nodeSkill);
+  // A skill the workspace no longer has. Guarded on a non-empty list for
+  // `staleModel`'s reason: an unreadable `_skills/` must not make every node
+  // that wears a skill look broken.
+  const staleSkill = nodeSkill !== "" && skills.length > 0 && chosenSkill === undefined;
   const inheritedModel = projectSettings.default_model
     ? (models.find((model) => model.value === projectSettings.default_model)?.label ??
       projectSettings.default_model)
@@ -146,6 +166,44 @@ export function AgentNode({ id, data }: NodeProps<FlowNode>) {
           <span className="branch mono">ran on {data.runtime.model}</span>
         )}
         {staleModel && <span className="warn">The CLI no longer offers this model.</span>}
+      </div>
+
+      {/* Never `.empty`, for the model plate's reason: no skill is the normal,
+          correct state. A skill is unconditional once attached, which is why a
+          stale one is a `warn` here and a refused run in `runcheck` — the two
+          sentences are deliberately the same. */}
+      <div className="slot skill">
+        <span className="slot-head">
+          <SkillGlyph />
+          skill · optional
+        </span>
+        <select
+          className="nodrag nowheel"
+          value={nodeSkill}
+          aria-label="skill"
+          onChange={(event) =>
+            patch(id, {
+              // The whole config respread and `undefined` on clear, exactly as
+              // the model plate does it and for the same two reasons: patching
+              // at the definition level would drop `kind`/`adapter`/`model`,
+              // and an empty string would be written into a git-tracked file.
+              config: {
+                ...data.definition.config,
+                skill: event.target.value || undefined,
+              },
+            })
+          }
+        >
+          <option value="">— none —</option>
+          {staleSkill && <option value={nodeSkill}>{nodeSkill} (not in _skills/)</option>}
+          {skills.map((skill) => (
+            <option key={skill.name} value={skill.name} title={skill.description}>
+              {skill.name}
+            </option>
+          ))}
+        </select>
+        {chosenSkill && <span className="skill-what">{chosenSkill.description}</span>}
+        {staleSkill && <span className="warn">No longer in _skills/.</span>}
       </div>
     </NodeShell>
   );

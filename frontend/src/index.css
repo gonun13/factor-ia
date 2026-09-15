@@ -212,6 +212,70 @@ button:focus-visible {
   gap: 0.85rem;
 }
 
+/* The skills library. Narrower cards than a project's, because a skill is a
+   thing you pick rather than a place you go — and one line of description is
+   what makes it pickable. */
+.skills-section {
+  margin-top: 2.4rem;
+  display: grid;
+  gap: 0.85rem;
+}
+
+.skill-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(17rem, 1fr));
+  gap: 0.85rem;
+}
+
+.skill-card {
+  position: relative;
+  text-align: left;
+  padding: 0.85rem;
+  background: var(--panel);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius);
+  display: grid;
+  gap: 0.35rem;
+  align-content: start;
+}
+
+.skill-card .name {
+  font-family: var(--mono);
+  font-size: 0.85rem;
+  color: var(--ink);
+}
+
+.skill-card .desc {
+  font-size: 0.78rem;
+  line-height: 1.4;
+  color: var(--ink-dim);
+}
+
+.skill-card .meta {
+  font-size: 0.72rem;
+  color: var(--ink-faint);
+}
+
+.skill-import {
+  display: grid;
+  gap: 0.6rem;
+  max-width: 34rem;
+}
+
+.skill-import textarea {
+  width: 100%;
+  min-height: 9rem;
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  resize: vertical;
+}
+
+.skill-import .card-actions {
+  display: flex;
+  gap: 0.6rem;
+  align-items: center;
+}
+
 .project-card {
   text-align: left;
   padding: 1rem;
@@ -685,7 +749,8 @@ button:focus-visible {
    and nothing lands on disk, so the only state here is the name and the size,
    shown so the operator can tell they picked the file they meant. */
 
-.prd-drop {
+.prd-drop,
+.skill-drop {
   display: grid;
   gap: 0.4rem;
   padding: 0.7rem;
@@ -695,25 +760,29 @@ button:focus-visible {
   text-align: center;
 }
 
-.prd-drop.has-file {
+.prd-drop.has-file,
+.skill-drop.has-file {
   border-style: solid;
   border-color: color-mix(in srgb, var(--input) 55%, transparent);
   background: color-mix(in srgb, var(--input) 8%, transparent);
 }
 
-.prd-drop input[type="file"] {
+.prd-drop input[type="file"],
+.skill-drop input[type="file"] {
   font-size: 0.72rem;
   color: var(--ink-dim);
   width: 100%;
 }
 
-.prd-drop .prd-chosen {
+.prd-drop .prd-chosen,
+.skill-drop .prd-chosen {
   font-size: 0.75rem;
   color: var(--ink);
   overflow-wrap: anywhere;
 }
 
-.prd-drop .hint {
+.prd-drop .hint,
+.skill-drop .hint {
   font-size: 0.72rem;
   color: var(--ink-faint);
 }

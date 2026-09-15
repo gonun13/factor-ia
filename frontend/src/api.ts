@@ -14,6 +14,8 @@ import type {
   LoginState,
   Project,
   Run,
+  Skill,
+  SkillSummary,
   SshKeyStatus,
 } from "./types";
 
@@ -57,6 +59,22 @@ export const api = {
   /** Live git state for one codebase: the clean-repo precondition, as the
       canvas sees it before it offers a Run. */
   codebaseGit: (id: string) => request<CodebaseGit>(`/api/codebases/${id}/git`),
+
+  /** The workspace's standing instructions. A directory read, not a
+      subprocess — cheap enough to sit in the canvas's own load. */
+  skills: () => request<SkillSummary[]>("/api/skills"),
+  skill: (name: string) => request<Skill>(`/api/skills/${encodeURIComponent(name)}`),
+  /** The file was read in the browser and is posted as text — the bargain the
+      PRD drop zone already struck: no upload endpoint, and no second path into
+      the container that takes a filename. `overwrite` is reachable only from
+      the conflict the first attempt reported. */
+  importSkill: (text: string, filename?: string, overwrite = false) =>
+    request<Skill>("/api/skills", {
+      method: "POST",
+      body: JSON.stringify({ text, filename, overwrite }),
+    }),
+  deleteSkill: (name: string) =>
+    request<void>(`/api/skills/${encodeURIComponent(name)}`, { method: "DELETE" }),
 
   projects: () => request<Project[]>("/api/projects"),
   createProject: (name: string, codebaseIds: string[] = []) =>

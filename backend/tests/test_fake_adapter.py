@@ -122,3 +122,16 @@ def test_every_script_ends_with_exactly_one_exit(script: str) -> None:
     events = drain(FakeAdapter(script).create_run("x", "/w"))
     assert types_of(events).count("exit") == 1
     assert events[-1].type == "exit"
+
+
+def test_the_fake_ignores_an_appended_system_prompt() -> None:
+    """The seam's new field must not break the token-free path: the fake reads
+    only what it cares about, and a skill is not one of those things."""
+    # `/w` like every other test here: the fake makes **real** file edits, so
+    # a cwd that exists is a cwd it writes into.
+    run = FakeAdapter(delay_s=0).create_run(
+        "do the thing",
+        "/w",
+        RunConfig(append_system_prompt="# standing instructions\n"),
+    )
+    assert types_of(drain(run))[-1] == "exit"

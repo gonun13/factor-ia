@@ -150,6 +150,35 @@ class Codebase(Base):
     branch: str | None = None
 
 
+class SkillSummary(Base):
+    """A standing-instructions document under /workspace/_skills, as metadata.
+
+    Like `Codebase`, this is *discovered* rather than owned: the file is the
+    record, git is the history, and this server only reads the directory. The
+    filename is the name — see `skills.py` for why that is stricter than a
+    path segment needs to be.
+    """
+
+    name: str
+    #: The frontmatter's `description`. Required, because it is the only thing
+    #: an agent node's picker can show about a skill it has not opened.
+    description: str
+    bytes: int = 0
+    #: The file's mtime, not a field we wrote: a skill edited by hand in the
+    #: workspace and committed is the normal way one changes.
+    updated_at: datetime
+
+
+class Skill(SkillSummary):
+    """A skill and its body — everything after the frontmatter, verbatim.
+
+    The body is what gets appended to an agent's system prompt, so it is
+    round-tripped byte for byte rather than re-rendered.
+    """
+
+    body: str
+
+
 class CodebaseGit(Base):
     """A codebase's live git state — the clean-repo precondition, as data.
 
@@ -497,6 +526,10 @@ class NodeRun(Base):
     #: Per-node cost, accumulated from **deltas** of the adapter's cumulative
     #: `turn.end.total_cost_usd` — see `orchestrator.py`.
     cost_usd: float = 0.0
+    #: The skill in force on this node, frozen like `kind` and `label`. `""`
+    #: when it wore none. What an agent was told to be is part of the record of
+    #: what it did.
+    skill: str = ""
     #: The provider session this node ran as, for correlation with the log.
     session_id: str | None = None
     #: The model this node ran on. Set when the run is created to what the graph

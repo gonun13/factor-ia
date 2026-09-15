@@ -383,6 +383,11 @@ Project ──< Codebase        (v1: exactly one; model allows many)
   `agent` or `human` node has two: `success` and `fail`.
 - **Run** — one execution of a factory, with its input and final status.
 - **NodeRun** — one node's execution within a run: status, timings, artifacts.
+- **Skill** — a named markdown document of standing instructions, owned by the
+  *workspace* rather than by any project: any agent in any factory can wear
+  one. An agent node names one, and its body is appended to that node's system
+  prompt on every spawn. Not a node and not an edge — a property of the
+  machine, like its model.
 - **Event** — an append-only record of everything that happened, in the adapter's
   normalized union. The live canvas and the history view read the same stream,
   which is why replay comes cheap later.
@@ -393,6 +398,7 @@ On disk:
 /workspace/_factories/<project>/main.json             # the main factory — shared via git
 /workspace/_factories/<project>/<name>.json           # nested factories (later)
 /workspace/_factories/<project>/memory/*.md           # long-term memory, git-tracked
+/workspace/_skills/<name>.md                          # standing instructions — shared via git
 /data/projects.json                                   # machine-local registry
 /data/runs/<run_id>/events.jsonl                      # append-only event log
 /data/runs/<run_id>/summary.md                        # human-readable outcome

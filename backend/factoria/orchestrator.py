@@ -82,7 +82,7 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
-from . import config, gitwork, runcheck, summary, worktree
+from . import config, gitwork, runcheck, skills, summary, worktree
 from .agent.adapter import AgentAdapter, AgentRun, RunConfig
 from .agent.claude import ClaudeAdapter, PermissionDenied, resolve_permission_mode
 from .agent.fake import FakeAdapter
@@ -108,6 +108,7 @@ from .models import (
     utcnow,
 )
 from .runcheck import NotRunnable
+from .skills import SkillError
 from .runevents import (
     AgentStreamEvent,
     NodeStatusEvent,
@@ -211,6 +212,18 @@ def model_for(node: Node, settings: ProjectSettings | None = None) -> str:
         default_model=settings.default_model if settings else None,
     ).model
     return resolved or ""
+
+
+def skill_for(node: Node) -> str:
+    """The skill this node wears, `""` when it wears none.
+
+    One reader, for `model_for`'s reason: the run record, the run check and the
+    spawn must agree about which standing instructions applied. No ladder — a
+    skill is a property of the node and of nothing above it.
+    """
+    if node.definition.type != "agent":
+        return ""
+    return str(node.definition.config.get("skill") or "").strip()
 
 
 def run_is_dangerous(factory: Factory) -> bool:
@@ -370,6 +383,12 @@ class Orchestrator:
                         # worth keeping — but a run that dies before that event
                         # still says what it was reaching for.
                         model=model_for(node, settings),
+                        # Frozen for the same reason as the rest, and worth
+                        # keeping for a stronger one: standing instructions
+                        # shape what an agent did more than the model id does,
+                        # and a run log that cannot say which applied cannot
+                        # explain its own output.
+                        skill=skill_for(node),
                     )
                     for node in factory.nodes
                 ],
@@ -1010,13 +1029,31 @@ class Orchestrator:
         node_run = state.run.node_run(node.id)
         assert node_run is not None
         codebase = self._codebase(node)
+        # The run check proved this readable, subprocesses ago; a file can go
+        # in between, which is the same window `_codebase` acknowledges below.
+        # **Failing is the point.** A skill is unconditional, so a run that
+        # quietly dropped its standing instructions would produce output that
+        # looks right and was made under rules nobody chose — the one failure
+        # mode nothing downstream can catch. Failing here costs a re-import.
+        wanted = skill_for(node)
+        appended: str | None = None
+        if wanted:
+            try:
+                appended = skills.body(wanted)
+            except SkillError as exc:
+                await self._set_node(
+                    state, node.id, "failed", f"skill {wanted!r} unavailable: {exc}"
+                )
+                return
         cwd = await self._worktree_for(state, node, codebase)
         adapter = adapter_for(node, state.settings)
         agent_run = adapter.create_run(
             prompt,
             cwd,
             RunConfig.from_node_config(
-                node.definition.config, default_model=state.settings.default_model
+                node.definition.config,
+                default_model=state.settings.default_model,
+                append_system_prompt=appended,
             ),
         )
         state.agent_run = agent_run

@@ -33,6 +33,8 @@ backend/     FastAPI app, uv-managed  (factoria.main:app)
              runlog.py  /data/runs, events.jsonl, the bus · runs_api.py  SSE
              scrub.py  token-shaped-string scrubbing · sshkeys.py  the git key
              settings_api.py  account, sign-in, ssh key
+             skills.py  the workspace's standing instructions, as files
+             skills_api.py  import, list, delete
              agent/    the CLI subprocess layer — the one runtime dependency
                adapter.py  the AgentAdapter seam · events.py  the event union
                claude.py  the real adapter · fake.py  the token-free one
@@ -60,6 +62,11 @@ with every reason if the graph cannot run, 409 if one is already in flight) ·
 `POST /api/runs/{id}/input` (the one-shot request) ·
 `POST /api/runs/{id}/cancel` · `GET /api/runs`, `GET /api/runs/{id}` ·
 `GET /api/runs/{id}/events` (SSE).
+
+Skills: `GET`/`POST /api/skills` · `GET`/`DELETE /api/skills/{name}`. An
+import carries the document as text the browser already read — there is no
+upload endpoint and nothing here fetches a URL. No `PUT`: the file in
+`_skills/` is the editor, so a change is an import with `overwrite`.
 
 Settings: `GET /api/agent/status` (account + the CLI's handshake) ·
 `GET`/`POST /api/agent/login`, `POST /api/agent/login/code`,
@@ -165,7 +172,7 @@ A PRD is read in the browser with `File.text()` and posted as text. There is no
 upload endpoint, nothing lands on disk, and no second path into the container
 takes a filename. The name travels alongside purely as a label — shown on the
 node, written into a `Factor-ia-Source:` commit trailer — and nothing ever opens
-it (`runs_api._label` reduces it to a printable basename).
+it (`runs_api.label` reduces it to a printable basename; a skill import reuses the same function for the same reason).
 
 ### What a pushing output does, and does not do
 

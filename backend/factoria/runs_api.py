@@ -116,7 +116,7 @@ async def submit_run_input(run_id: str, body: RunInput) -> Run:
             run_id,
             body.text,
             node_id=body.node_id,
-            filename=_label(body.filename),
+            filename=label(body.filename),
         )
     except RunConflict as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
@@ -138,9 +138,13 @@ async def submit_run_decision(run_id: str, body: RunDecision) -> Run:
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
 
 
-def _label(filename: str | None) -> str | None:
+def label(filename: str | None) -> str | None:
     """A submitted filename, reduced to something safe to display and to write
     into a commit trailer.
+
+    Public because `skills_api` imports it: a skill arrives the same way a PRD
+    does — contents in the body, the name alongside as a label — so it wants
+    the same cleaning, and a second copy would be a second set of rules.
 
     Nothing opens this — the file's *contents* arrived in the body and the name
     is only ever shown — but it is written into a commit message and rendered in

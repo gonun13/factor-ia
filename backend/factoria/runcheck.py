@@ -39,16 +39,22 @@ spent tokens is the expensive way to be told.
   by a `git commit` at the end of the run (`gitwork.identity`).
 - **The permission mode must be one the server hands out**, including the
   `bypassPermissions`-shaped gate (`agent/claude.resolve_permission_mode`).
+- **A named skill must still be readable.** A skill is unconditional once
+  attached, so a node whose skill was deleted or hand-edited into something
+  unparseable has to be refused rather than run without it — and the cheap
+  place to learn that is here, beside the stale-codebase check it is the exact
+  analogue of, not after the tokens are spent.
 """
 
 from __future__ import annotations
 
 from typing import Callable
 
-from . import config, gitwork
+from . import config, gitwork, skills
 from .agent.claude import PermissionDenied, resolve_permission_mode
 from .api import validate_graph
 from .discovery import discover_codebases
+from .paths import PathEscape
 from . import sshkeys
 from .models import (
     INPUT_KINDS,
@@ -133,6 +139,22 @@ def run_problems(
                 f"Agent “{label(node)}”: attached codebase {attached!r} is no "
                 "longer discovered under /workspace."
             )
+        # The same class of stale reference, one directory over. Reading the
+        # file is the check — there is nothing to inject for a test, which is
+        # why this is not routed through a callable the way `tree_state` is.
+        wanted = str(node.definition.config.get("skill") or "").strip()
+        if wanted:
+            try:
+                skills.get_skill(wanted)
+            except skills.SkillNotFound:
+                problems.append(
+                    f"Agent “{label(node)}”: skill {wanted!r} is no longer in "
+                    "/workspace/_skills — attach another, or clear the plate."
+                )
+            except (skills.SkillError, PathEscape) as exc:
+                problems.append(
+                    f"Agent “{label(node)}”: skill {wanted!r} cannot be read — {exc}"
+                )
 
     # "A factory starts with an input and ends with an output" — as two rules
     # about the *ends of the line*, which is the only way to state it that a
