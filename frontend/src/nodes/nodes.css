@@ -385,6 +385,13 @@
   box-shadow: var(--shadow);
 }
 
+/* Both corners at the bottom-left would sit on top of each other — React Flow
+   pins every panel to its corner and nothing else. So the minimap is pushed
+   clear of the controls column: 26px of button, then a gap. */
+.react-flow__minimap.react-flow__panel.bottom.left {
+  left: 34px;
+}
+
 .react-flow__minimap-svg {
   border-radius: 8px;
 }
@@ -401,7 +408,10 @@
 /* ---- the live half ------------------------------------------------------
    Everything below renders from `data.runtime`, which only exists while a run
    is in flight. A node that has never run is byte-for-byte the node you drew:
-   no reserved space, no empty panels, no "waiting" placeholder. */
+   no reserved space, no empty panels, no "waiting" placeholder — and a node
+   that *is* running is the same node, one pip and one word larger. The rest of
+   the live state is in the run pane (`index.css`, the run pane), which shares
+   the pip and the status word so the two surfaces speak with one vocabulary. */
 
 .node.live {
   border-color: color-mix(in srgb, currentColor 45%, var(--edge));
@@ -415,7 +425,9 @@
   border-color: color-mix(in srgb, var(--danger) 60%, var(--edge));
 }
 
-.node .status-word {
+/* Shared with the run pane's threads, which say the same word about the same
+   node — hence no `.node` in front of it. */
+.status-word {
   font-size: 0.6rem;
   text-transform: uppercase;
   letter-spacing: 0.08em;

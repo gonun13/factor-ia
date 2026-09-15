@@ -2,16 +2,21 @@
  * The chassis every node type shares.
  *
  * It renders from `data.definition` and from `data.runtime` — the two halves a
- * node has carried since stage 2, and the reason a run needs no second surface
- * to watch it on. When `runtime` is null the node is exactly what it was while
- * you drew it; when the orchestrator fills it in, the same node grows a pip, a
- * line of tool activity and the agent's own words, in place, without moving.
- * That is the "building and operating are the same surface" constraint being
- * mechanical rather than aspirational (DESIGN.md).
+ * node has carried since stage 2, and the reason a run needs no second screen to
+ * watch it on. When `runtime` is null the node is exactly what it was while you
+ * drew it; when the orchestrator fills it in, the same node lights up in place,
+ * without moving. That is the "building and operating are the same surface"
+ * constraint being mechanical rather than aspirational (DESIGN.md).
+ *
+ * What lights up is a pip and a status word, and only those. The agent's words,
+ * its tool and its checklist stream into the run pane beside the canvas
+ * (`screens/RunChat`), which has room for them — a 15rem chassis held about five
+ * lines, and a machine you have to squint at is not a machine you can watch.
  */
 
-import { useEffect, useRef, type ReactNode } from "react";
+import type { ReactNode } from "react";
 import { Handle, Position } from "@xyflow/react";
+import type { NodeData } from "../graph";
 import { hasOutcomePorts, nodeKind, type NodeData } from "../graph";
 import { type NodeRuntime } from "../types";
 import { useCanvas } from "../canvasContext";
@@ -124,7 +129,6 @@ export function NodeShell({
           onChange={(event) => patch(id, { label: event.target.value })}
         />
         {children}
-        {runtime && <Runtime runtime={runtime} />}
       </div>
       {/* **The ports.** A reviewer and a human node leave by one of two named
           handles, and the name is what lands in the belt's `source_handle` and
@@ -156,51 +160,6 @@ export function NodeShell({
       ) : (
         kind !== "output" && <Handle type="source" position={Position.Right} />
       )}
-    </div>
-  );
-}
-
-/** The live half. Everything here is assembled from the event stream. */
-function Runtime({ runtime }: { runtime: NodeRuntime }) {
-  const tail = useRef<HTMLPreElement>(null);
-  const text = runtime.text ?? "";
-
-  useEffect(() => {
-    // Follow the stream. Without this the node shows the first words of a
-    // reply forever, which reads as "stuck" rather than "working".
-    const element = tail.current;
-    if (element) element.scrollTop = element.scrollHeight;
-  }, [text]);
-
-  const done = runtime.todos?.filter((item) => item.status === "completed").length ?? 0;
-
-  return (
-    <div className="runtime" data-status={runtime.status}>
-      {runtime.detail && <span className="runtime-detail">{runtime.detail}</span>}
-      {runtime.tool && (
-        <span className="tool nodrag" data-state={runtime.tool.state}>
-          <b>{runtime.tool.name}</b>
-          {runtime.tool.target && <span className="target mono">{runtime.tool.target}</span>}
-        </span>
-      )}
-      {text && (
-        <pre className="stream nowheel" ref={tail}>
-          {text}
-        </pre>
-      )}
-      <span className="runtime-foot">
-        {runtime.todos && runtime.todos.length > 0 && (
-          <span title={runtime.todos.map((item) => `${item.status}: ${item.content}`).join("\n")}>
-            ☑ {done}/{runtime.todos.length}
-          </span>
-        )}
-        {runtime.toolCount ? (
-          <span>
-            {runtime.toolCount} {runtime.toolCount === 1 ? "tool" : "tools"}
-          </span>
-        ) : null}
-        {runtime.costUsd ? <span className="mono">${runtime.costUsd.toFixed(4)}</span> : null}
-      </span>
     </div>
   );
 }
