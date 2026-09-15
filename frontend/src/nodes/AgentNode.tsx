@@ -1,6 +1,6 @@
 import type { NodeProps } from "@xyflow/react";
 import type { FlowNode } from "../graph";
-import { useCanvas } from "../canvasContext";
+import { NO_OFFER, providerInForce, useCanvas } from "../canvasContext";
 import { NodeShell } from "./NodeShell";
 import { CodebaseGlyph, ModelGlyph, SkillGlyph } from "./Glyphs";
 
@@ -25,14 +25,23 @@ import { CodebaseGlyph, ModelGlyph, SkillGlyph } from "./Glyphs";
  * rather than just its name, because "what is in force here" is the question a
  * canvas is read to answer, and a name alone answers it only for whoever
  * imported it.
+ *
+ * **The kind is not a plate, and deliberately not editable here.** What an agent
+ * is for is decided when it is dropped — the palette offers a worker and a
+ * reviewer as two separate machines — and it shows on the node as its glyph and
+ * its eyebrow rather than as a control. Changing it would change the node's
+ * ports underneath belts already drawn from them, which is a different and
+ * worse operation than the one-field edits these plates do. A reviewer's lap
+ * cap is read from `config["max_laps"]` and is internal for now; it earns a
+ * plate when there is a reason to set it per node.
  */
 export function AgentNode({ id, data }: NodeProps<FlowNode>) {
   const {
     codebases,
     gitStates,
     patch,
-    models,
-    cliDefaultModel,
+    providers,
+    containerProvider,
     projectSettings,
     skills,
   } = useCanvas();
@@ -42,10 +51,27 @@ export function AgentNode({ id, data }: NodeProps<FlowNode>) {
   const git = attachedId ? gitStates[attachedId] : undefined;
   const artifact = data.runtime?.artifact ?? null;
   const nodeModel = (data.definition.config.model as string | undefined) ?? "";
+  // The provider that will actually drive *this* machine, and what it offers.
+  // Not the CLI's list: a node a fake runs is offered five Claude ids it will
+  // ignore, and the inherit option names a model the run never reports. The
+  // API answers per provider so the browser does not have to know that.
+  const provider = providerInForce(
+    data.definition.config.adapter as string | undefined,
+    projectSettings,
+    containerProvider,
+  );
+  const offer = providers[provider] ?? NO_OFFER;
+  const models = offer.models;
   // A model the CLI no longer offers. Only meaningful once there *is* a list:
   // an unreachable CLI must not make every node look broken.
+  // Never stale under a `fixed` provider: the id is not being refused, it is
+  // being ignored, and "the CLI no longer offers this" is the wrong sentence
+  // for a setting that is simply not consulted.
   const staleModel =
-    nodeModel !== "" && models.length > 0 && !models.some((m) => m.value === nodeModel);
+    !offer.fixed &&
+    nodeModel !== "" &&
+    models.length > 0 &&
+    !models.some((m) => m.value === nodeModel);
   // The inherit option names the model actually in force rather than the word
   // "default", so what this machine will run on is readable off the node. The
   // project's own choice is preferred to the CLI's, which is the order a run
@@ -57,10 +83,15 @@ export function AgentNode({ id, data }: NodeProps<FlowNode>) {
   // `staleModel`'s reason: an unreadable `_skills/` must not make every node
   // that wears a skill look broken.
   const staleSkill = nodeSkill !== "" && skills.length > 0 && chosenSkill === undefined;
-  const inheritedModel = projectSettings.default_model
-    ? (models.find((model) => model.value === projectSettings.default_model)?.label ??
-      projectSettings.default_model)
-    : (cliDefaultModel ?? "chosen by the CLI");
+  // A provider that reports its own id regardless (`fixed`) makes both rungs
+  // above it moot, so the project's choice is skipped rather than named — it
+  // is stored and real, but it is not what this machine will run on.
+  const inheritedModel = offer.fixed
+    ? (offer.default_model ?? "chosen by the provider")
+    : projectSettings.default_model
+      ? (models.find((model) => model.value === projectSettings.default_model)?.label ??
+        projectSettings.default_model)
+      : (offer.default_model ?? "chosen by the CLI");
 
   return (
     <NodeShell id={id} kind="agent" data={data}>
@@ -134,6 +165,8 @@ export function AgentNode({ id, data }: NodeProps<FlowNode>) {
           className="nodrag nowheel"
           value={nodeModel}
           aria-label="model override"
+          disabled={offer.fixed}
+          title={offer.fixed ? `${provider} reports its own model id` : undefined}
           onChange={(event) =>
             patch(id, {
               // The whole config, respread: `patchDefinition` replaces fields at

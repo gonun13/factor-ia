@@ -12,8 +12,8 @@
 
 import { useEffect, useRef, type ReactNode } from "react";
 import { Handle, Position } from "@xyflow/react";
-import { nodeKind, type NodeData } from "../graph";
-import { OUTCOME_NODE_TYPES, type NodeRuntime, type NodeType } from "../types";
+import { hasOutcomePorts, nodeKind, type NodeData } from "../graph";
+import { type NodeRuntime } from "../types";
 import { useCanvas } from "../canvasContext";
 import {
   AgentGlyph,
@@ -23,6 +23,7 @@ import {
   OutputGlyph,
   PrdGlyph,
   PushGlyph,
+  ReviewerGlyph,
 } from "./Glyphs";
 
 const GLYPHS = {
@@ -43,6 +44,7 @@ const GLYPHS = {
  */
 const KIND_GLYPHS: Record<string, () => ReactNode> = {
   prd: PrdGlyph,
+  reviewer: ReviewerGlyph,
   "commit-push": PushGlyph,
   "commit-merge": MergeGlyph,
 };
@@ -57,6 +59,8 @@ const TYPE_NAME = {
 const KIND_NAME: Record<string, string> = {
   request: "request",
   prd: "PRD",
+  worker: "agent",
+  reviewer: "reviewer",
   approval: "sign-off",
   commit: "commit",
   "commit-push": "commit & push",
@@ -98,6 +102,14 @@ export function NodeShell({
         </span>
         <span className="eyebrow">{name}</span>
         {live && <span className="status-word">{status.replace("_", " ")}</span>}
+        {/* Only above one. Every node that runs once is on lap 1, and a chip
+            saying so on every node in a factory with no loop in it would be
+            noise that means nothing. */}
+        {live && (runtime?.lap ?? 0) > 1 && (
+          <span className="lap" title={`lap ${runtime?.lap}`}>
+            lap {runtime?.lap}
+          </span>
+        )}
         <span className="pip" data-status={status} title={`status: ${status}`} />
       </div>
       <div className="node-body">
@@ -114,13 +126,17 @@ export function NodeShell({
         {children}
         {runtime && <Runtime runtime={runtime} />}
       </div>
-      {/* **The ports.** An agent and a human node leave by one of two named
+      {/* **The ports.** A reviewer and a human node leave by one of two named
           handles, and the name is what lands in the belt's `source_handle` and
-          decides where a failure goes (`types.EdgeOutcome`). Everything else
-          keeps the single unnamed handle it has always had — which is also what
-          keeps `source_handle: null` on every belt already on disk, and what
-          makes that null go on meaning success. */}
-      {OUTCOME_NODE_TYPES.includes(kind as NodeType) ? (
+          decides where a failure goes (`types.EdgeOutcome`). Everything else —
+          a worker included — keeps the single unnamed handle it has always had,
+          which is also what keeps `source_handle: null` on every belt already
+          on disk, and what makes that null go on meaning success.
+
+          A worker's one way out is the whole of what "worker" means, so this
+          asks the node rather than its type: both agent kinds are `type:
+          "agent"` and answer differently. */}
+      {hasOutcomePorts(data.definition) ? (
         <>
           <Handle
             id="success"

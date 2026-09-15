@@ -81,9 +81,11 @@ try {
   check("the inherit option names the CLI's real default model", (await page.locator("#project-model option").first().innerText()).trim(), `${cliDefault} (default)`);
 
   // ---- saving a default, and the node following it -------------------------
+  // The model is chosen with the provider still inheriting: a provider that
+  // reports its own id greys this select, and what is under test here is the
+  // labelling equality between the panel and the node.
   const models = await page.locator("#project-model option").allInnerTexts();
   if (models.length < 2) throw new Error("the CLI offered no models — is the container signed in?");
-  await page.locator("#project-provider").selectOption("fake");
   await page.locator("#project-model").selectOption({ index: 1 });
   // What the panel calls the model being saved. The node must end up naming the
   // same thing — that equality is the point of the whole labelling change.
@@ -92,10 +94,29 @@ try {
   await saveSettings.click();
   await page.waitForSelector(".slideover", { state: "detached" });
 
-  const chosen = (await api(`/api/projects/${PROJECT}`).then((r) => r.json())).settings;
-  check("the provider persisted", chosen.default_provider, "fake");
   check("the node's inherit option now names the project's model", (await inherited()).trim(), `${chosenLabel} (default)`);
   check("project settings leave the canvas's dirty pill exactly as it was", await page.locator(".savebar .pill").innerText(), pillBefore);
+
+  // ---- a provider that reports its own model id ---------------------------
+  // The list is per provider (`/api/agent/status` → `providers`), so choosing
+  // the fake has to change what both pickers say. The bug this covers is the
+  // quiet one: a project pinned to the fake went on offering five Claude ids
+  // and naming a default that no dry run would ever report.
+  await cog.click();
+  await page.waitForSelector(".slideover");
+  await page.locator("#project-provider").selectOption("fake");
+  const fakeOffer = (await api("/api/agent/status").then((r) => r.json())).providers.fake;
+  check("the model select greys out for a provider that ignores it", await page.locator("#project-model").isDisabled(), true);
+  check("…and names what that provider will actually report", (await page.locator("#project-model option").first().innerText()).trim(), `${fakeOffer.default_model} (default)`);
+  await saveSettings.click();
+  await page.waitForSelector(".slideover", { state: "detached" });
+
+  const chosen = (await api(`/api/projects/${PROJECT}`).then((r) => r.json())).settings;
+  check("the provider persisted", chosen.default_provider, "fake");
+  // The stored model id is still there and untouched — it is ignored, not lost.
+  check("the saved model survives a provider that ignores it", chosen.default_model !== null, true);
+  check("the node's model slot follows the provider, not the CLI", (await inherited()).trim(), `${fakeOffer.default_model} (default)`);
+  check("…and the node's own override greys out with it", await select.isDisabled(), true);
 
   // ---- closing ------------------------------------------------------------
   await cog.click();

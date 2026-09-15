@@ -3,10 +3,15 @@
  * operator actually loads.
  *
  * What it is checking is the half of stage 8 the backend tests cannot see: that
- * the node exists in the palette, that an agent and a human node each draw two
- * named source handles, that dragging from one lands the port in the saved file
+ * the node exists in the palette, that a node with two outcomes draws two named
+ * source handles, that dragging from one lands the port in the saved file
  * (`source_handle`), and that the decision form appears in the run panel when a
  * run parks — and says what it is asking.
+ *
+ * The agent assertion **inverted** in stage 9: an agent node used to draw two
+ * ports whatever it was for, and now only a `reviewer` does. A worker has one
+ * way out, which is the whole of what "worker" means, so it is checked here
+ * alongside the input node it now behaves like. `loop.mjs` covers the reviewer.
  *
  * Run it:  docker compose --profile uitest run --rm uitest node tests/gate.mjs
  *
@@ -43,15 +48,28 @@ const created = await api("/api/projects", {
 });
 if (!created.ok) throw new Error(`could not create the test project: ${await created.text()}`);
 
+// Dry-run the whole factory from the project, not from each node. Every agent
+// here is fake, and `default_provider` is the rung that says so once — the
+// per-node `adapter` key is for the other case, one fake machine among real
+// ones. Stated on the node it is invisible: two graph configs decide that a
+// branch full of scripted edits is not real work, and a run that reaches an
+// operator looks exactly like one that cost money.
+const configured = await api(`/api/projects/${PROJECT}`, {
+  method: "PATCH",
+  body: JSON.stringify({ settings: { default_provider: "fake", default_model: null } }),
+});
+if (!configured.ok) throw new Error(`could not pin the project to the fake provider: ${await configured.text()}`);
+check("the project drives its agents with the fake provider", (await configured.json()).settings.default_provider, "fake");
+
 // A line with a gate in it, saved through the API so the browser loads a graph
 // rather than draws one — what is under test here is the rendering and the
 // run panel, and dragging four nodes is `settings.mjs`'s kind of work.
 const graph = {
   nodes: [
     { id: "n-in", definition: { type: "input", label: "Request", config: { kind: "request" } } },
-    { id: "n-agent", definition: { type: "agent", label: "Agent", codebase_id: codebase, position: { x: 260, y: 0 }, config: { adapter: "fake" } } },
+    { id: "n-agent", definition: { type: "agent", label: "Agent", codebase_id: codebase, position: { x: 260, y: 0 }, config: {} } },
     { id: "n-gate", definition: { type: "human", label: "Sign-off", position: { x: 520, y: 0 }, config: { kind: "approval", prompt: "Does this look right?" } } },
-    { id: "n-fix", definition: { type: "agent", label: "Rework", codebase_id: codebase, position: { x: 760, y: 200 }, config: { adapter: "fake" } } },
+    { id: "n-fix", definition: { type: "agent", label: "Rework", codebase_id: codebase, position: { x: 760, y: 200 }, config: {} } },
     { id: "n-out", definition: { type: "output", label: "Commit", position: { x: 1020, y: 0 }, config: { kind: "commit" } } },
   ],
   edges: [
@@ -92,7 +110,7 @@ try {
       .first()  // this line has two agent nodes; one of them answers the question
       .locator(".react-flow__handle-right")
       .evaluateAll((els) => els.map((el) => el.getAttribute("data-handleid")).sort());
-  check("an agent node draws both ports", await ports(".node.type-agent"), ["fail", "success"]);
+  check("a worker agent keeps one unnamed way out", await ports(".node.type-agent"), [null]);
   check("a human node draws both ports", await ports(".node.type-human"), ["fail", "success"]);
   check("an input node keeps its single unnamed way out", await ports(".node.type-input"), [null]);
   check("an output node draws none", await ports(".node.type-output"), []);

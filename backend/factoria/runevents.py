@@ -69,6 +69,12 @@ class NodeStatusEvent(RunEventBase):
     node_id: str
     status: NodeStatus
     detail: str | None = None
+    #: Which lap of a loop this node is on, 1 for everything that runs once. On
+    #: the wire rather than derived in the browser by counting transitions: the
+    #: counter already exists on `NodeRun`, and a second implementation of it
+    #: that only a reconnecting tab exercises is the kind that drifts. Replays
+    #: from the log for free, which is what a tab that joined late needs.
+    lap: int = 0
 
 
 class RunInputEvent(RunEventBase):

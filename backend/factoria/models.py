@@ -86,13 +86,37 @@ for an edit or a redirection is a new word in `config["kind"]` rather than a
 sixth member of `NodeType`.
 """
 
+AgentKind = Literal["worker", "reviewer"]
+"""What an `agent` node is for.
+
+The third kind vocabulary, and the one that finally gives an agent a *job* as
+well as a codebase:
+
+- `worker` — does the thing it is asked to do. One way out, like an input node:
+  it produced its output, and there is nothing for it to have an opinion about.
+- `reviewer` — judges what it is given and says so in a verdict
+  (`verdict.py`). Two ways out, and its `fail` belt is the one belt in the
+  whole graph allowed to close a loop.
+
+**A kind, not a node type**, for the reason `InputKind` gives: a reviewer is
+still an agent — same adapter, same worktree, same skill — and making it a
+sixth `NodeType` would put the difference in the one place that is a file
+format change rather than a config key.
+
+`worker` is the default, and that is a statement about files already on disk:
+an agent node written before this existed has no `kind`, and what it has always
+done is work.
+"""
+
 DEFAULT_INPUT_KIND: InputKind = "request"
 DEFAULT_OUTPUT_KIND: OutputKind = "commit"
 DEFAULT_HUMAN_KIND: HumanKind = "approval"
+DEFAULT_AGENT_KIND: AgentKind = "worker"
 
 INPUT_KINDS: frozenset[str] = frozenset({"request", "prd"})
 OUTPUT_KINDS: frozenset[str] = frozenset({"commit", "commit-push", "commit-merge"})
 HUMAN_KINDS: frozenset[str] = frozenset({"approval"})
+AGENT_KINDS: frozenset[str] = frozenset({"worker", "reviewer"})
 
 #: `commit-push` and `commit-merge` need a remote to push to; `commit` does not.
 PUSHING_OUTPUT_KINDS: frozenset[str] = frozenset({"commit-push", "commit-merge"})
@@ -113,11 +137,6 @@ exactly what it meant before this existed.
 
 DEFAULT_EDGE_OUTCOME: EdgeOutcome = "success"
 EDGE_OUTCOMES: frozenset[str] = frozenset({"success", "fail"})
-
-#: The node types that split their outcome across two ports. Everything else
-#: has one unnamed source handle and only ever leaves by it: an input has
-#: nothing to fail at, and an output that fails has nowhere left to route.
-OUTCOME_NODE_TYPES: frozenset[str] = frozenset({"agent", "human"})
 
 Slug = Annotated[str, Field(pattern=r"^[a-z0-9][a-z0-9-]{0,63}$")]
 
@@ -243,8 +262,36 @@ def node_kind(node_or_definition: "Node | NodeDefinition") -> str:
             return DEFAULT_OUTPUT_KIND
         if definition.type == "human":
             return DEFAULT_HUMAN_KIND
+        if definition.type == "agent":
+            return DEFAULT_AGENT_KIND
         return ""
     return str(raw).strip()
+
+
+def has_outcome_ports(node_or_definition: "Node | NodeDefinition") -> bool:
+    """Whether this node splits its outcome across `success` and `fail` ports.
+
+    **A function of the node, not of its type.** This was a frozenset of type
+    names until agents grew kinds, and it could not stay one: a worker and a
+    reviewer are both `type == "agent"` and answer this differently. Everything
+    else keeps the answer it always had — an input has nothing to fail at, an
+    output that fails has nowhere left to route, and a human node is asked a
+    yes-or-no question and so has always had two ways out.
+
+    A worker's single way out is the whole of what "worker" means. The cost,
+    stated because it is real: a worker that crashes has no belt to route down
+    and ends the run, exactly as an output node that fails does.
+    """
+    definition = (
+        node_or_definition.definition
+        if isinstance(node_or_definition, Node)
+        else node_or_definition
+    )
+    if definition.type == "human":
+        return True
+    if definition.type == "agent":
+        return node_kind(definition) == "reviewer"
+    return False
 
 
 def node_remote(node_or_definition: "Node | NodeDefinition") -> str:
@@ -545,6 +592,19 @@ class NodeRun(Base):
     #: The name of the file a `prd` input node was given, for the log and the
     #: commit trailer. The *contents* are `output_text`; this is the label.
     filename: str | None = None
+    #: How many times this node has run. Above 1 only inside a loop — a
+    #: reviewer's fail belt sent the work back and the body ran again.
+    #:
+    #: **A counter, not a history.** The fields above are the *newest* lap's
+    #: (`output_text`, `detail`, `session_id`) except `cost_usd`, which is every
+    #: lap's. Nothing is lost by that: `events.jsonl` is append-only and never
+    #: rewritten (`runlog.py`), so each lap's full transcript is already durable
+    #: and addressable by `seq`. This field is what `run.json` needs to say
+    #: which lap the text above came from.
+    #:
+    #: Never reset, including when an outer loop un-settles this node — which is
+    #: what makes `_walk`'s termination argument a bound rather than a hope.
+    lap: int = 0
 
 
 class RunWorktree(Base):

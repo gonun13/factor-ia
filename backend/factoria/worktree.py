@@ -9,19 +9,44 @@ nodes attached to the same codebase in one factory therefore share one worktree
 and build on each other's work, which is what a line of machines is supposed to
 do; a *second run* gets a fresh one.
 
-**Where they live: `/workspace/_runs/<run-id>/<codebase>/`.** Three reasons,
-and the first is the one that decides it:
+**Where they live: `/workspace/_runs/<run-id>/<codebase>/`.** That is two
+separate questions, and it helps to keep them apart.
+
+*Why under `/workspace` at all:*
 
 1. The adapter refuses to spawn with a cwd outside `/workspace` (`claude.py`,
    and `paths.is_inside_workspace` behind it). A worktree under `/data` — the
    other plausible home — would have to relax that check, and a containment
    check with an exception in it is not one.
-2. `_runs/` is underscore-prefixed, so discovery already excludes it
-   (`discovery.py`) and it can never be offered as a codebase to attach, the
-   same way `_factories/` cannot.
-3. It is a bind mount, so a **kept** worktree from a failed run is inspectable
+2. It is a bind mount, so a **kept** worktree from a failed run is inspectable
    from the host with the operator's own tools. Inside a named volume it would
    be a post-mortem nobody can read.
+3. `_runs/` is underscore-prefixed, so discovery cannot offer it as a codebase
+   to attach, the same way `_factories/` cannot. This one is belt and braces
+   rather than a deciding reason: `discover_codebases` scans a single level and
+   does not recurse, so a worktree nested inside a project would be skipped on
+   depth alone.
+
+*Why one shared directory rather than `<codebase>/_runs/…` inside each
+project:* nesting would put the worktree **inside the dev's checkout**, which
+is the one thing `DESIGN.md` promises never happens (*"The agent never touches
+the dev's working tree"*). It would show as untracked in their `git status`
+unless we wrote to their `.gitignore` — mutating their repo to tidy up after
+ourselves; `git clean -fdx`, which devs type without thinking, would delete
+live worktrees mid-run; and everything that recurses — their builds, their
+test discovery, and *the agent's own search* when a node works at the repo
+root — would walk a full copy of the tree per concurrent run.
+
+Out-of-tree also keeps a run's whole footprint in one directory. A run owns as
+many worktrees as it has codebases (`RunWorkspaces`), so nesting would scatter
+one run across N projects; here `summary.py` can tell the operator to remove
+all of it with a single `rm -rf _runs/<run-id>`, on the failure path, which is
+exactly where a one-liner earns its keep.
+
+The cost is real but small: because a worktree does not sit beside its repo, a
+host-side `git worktree list` reports it as *prunable* and a host-side
+`worktree remove` cannot find it — so `summary.py` spells out both the removal
+and the prune rather than leaving it as a surprise.
 
 **Cleanup policy**, stated here because it is a policy and not an
 implementation detail:
@@ -49,8 +74,9 @@ from . import gitwork
 from .models import Codebase, RunWorktree, RunStatus
 from .paths import is_inside_workspace, safe_name, workspace_root
 
-#: Underscore-prefixed so discovery skips it, plural so it reads as a directory
-#: of runs rather than as a run.
+#: Underscore-prefixed to match `_factories/` and to keep discovery's exclusion
+#: rule doing the work belt-and-braces (see the module docstring); plural so it
+#: reads as a directory of runs rather than as a run.
 RUNS_DIRNAME = "_runs"
 
 #: `DESIGN.md`, Assumptions: *"Branch names are derived from the run:

@@ -25,8 +25,26 @@ from factoria.store import Store
 from .conftest import make_git_repo
 
 
-def agent(node_id: str, *, fails: bool = False, codebase_id: str = "project-a") -> Node:
-    config = {"fake_script": "failure"} if fails else {}
+def agent(
+    node_id: str,
+    *,
+    fails: bool = False,
+    reviewer: bool = False,
+    codebase_id: str = "project-a",
+    **config,
+) -> Node:
+    """An agent node. `fails=True` makes it a **reviewer** whose process dies.
+
+    Stage 9 gave agents kinds, and only a reviewer has a fail port at all — a
+    worker has one way out, so a worker that fails ends the run and has nothing
+    to route. Every test below that draws a fail belt therefore needs its source
+    to be a reviewer, which is what this does. What is being tested is unchanged:
+    a machine that failed, and where the belt out of it goes.
+    """
+    if fails:
+        config = {"fake_script": "failure", **config}
+    if fails or reviewer:
+        config = {"kind": "reviewer", **config}
     return Node(
         id=node_id,
         definition=NodeDefinition(

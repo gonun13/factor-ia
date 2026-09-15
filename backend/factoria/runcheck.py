@@ -64,13 +64,16 @@ from .models import (
     Edge,
     Factory,
     Node,
+    AGENT_KINDS,
+    DEFAULT_EDGE_OUTCOME,
     EDGE_OUTCOMES,
     HUMAN_KINDS,
-    OUTCOME_NODE_TYPES,
     edge_outcome,
+    has_outcome_ports,
     node_kind,
     node_remote,
 )
+from . import verdict
 
 
 class NotRunnable(Exception):
@@ -126,6 +129,7 @@ def run_problems(
         )
     problems += _kind_problems(nodes, label)
     problems += _outcome_problems(nodes, edges, label)
+    problems += _duplicate_belt_problems(nodes, edges, label)
 
     for node in by_type.get("agent", []):
         attached = node.definition.codebase_id
@@ -205,13 +209,25 @@ def run_problems(
 
     # Cycle detection is the one blocker the client does not check, because the
     # client never has to walk the graph. The orchestrator does, and a cycle is
-    # how a walk becomes an infinite one. Stage 8 made that walk edge-driven —
-    # it follows outcomes rather than a precomputed order — which is the half of
-    # loops that is now done. The other half is a typed back-edge and an
-    # iteration cap, and until both exist this stays exactly as strict as it was
-    # (`DESIGN.md`, Later).
-    if topological_order(nodes, edges) is None:
-        problems.append("The belts form a loop — a run walks the graph once, top to bottom.")
+    # how a walk becomes an infinite one.
+    #
+    # **One belt may close a loop, and exactly one: a reviewer's fail belt.**
+    # That is the typed back-edge `DESIGN.md` promised, and `back_edges` is the
+    # only thing that decides which belts qualify — shared with
+    # `orchestrator._walk`, so what this refuses and what the walk resets can
+    # never drift. Dropping those belts and requiring the rest to be acyclic is
+    # the whole rule: removing edges cannot create a cycle, so a graph whose
+    # only cycles run through a reviewer's fail port is accepted and every
+    # other cycle is refused exactly as strictly as before.
+    back = back_edges(nodes, edges)
+    forward = [edge for edge in edges if edge.id not in back]
+    if topological_order(nodes, forward) is None:
+        problems.append(
+            "The belts form a loop — a run walks the graph once, top to bottom. "
+            "The one belt that may close a loop is a reviewer’s fail belt, which "
+            "sends the work back for another lap."
+        )
+    problems += _loop_problems(nodes, back, label)
 
     problems += _git_problems(by_type.get("agent", []), known_codebases, tree_state)
     problems += _remote_problems(
@@ -258,11 +274,77 @@ def _outcome_problems(
                 f"The belt out of “{label(source)}” leaves by {outcome!r}, which is "
                 f"not a port this version knows ({', '.join(sorted(EDGE_OUTCOMES))})."
             )
-        elif source.definition.type not in OUTCOME_NODE_TYPES:
-            problems.append(
-                f"“{label(source)}” is a {source.definition.type} node, which has one "
-                f"way out — its belt cannot leave by {outcome!r}."
-            )
+        elif not has_outcome_ports(source):
+            if source.definition.type == "agent" and outcome == DEFAULT_EDGE_OUTCOME:
+                # **A worker's `success` belt is not a problem.** Every agent
+                # had two ports until agents had kinds, so a factory drawn back
+                # then wrote `success` onto belts that are now a worker's single
+                # way out — and that belt still means exactly what it meant, and
+                # is still the only place it could go. Refusing it would break
+                # files to no end. `fail` is the one that genuinely has nowhere
+                # to route, and it is refused below.
+                continue
+            # A worker gets its own sentence. Every other node here has one way
+            # out because of what it *is*, so the only fix is to remove the
+            # belt; a worker has one because of a kind the operator can change
+            # on the node, and a refusal that did not say so would read as a
+            # dead end.
+            if source.definition.type == "agent":
+                problems.append(
+                    f"“{label(source)}” is a worker agent, which has one way out — its "
+                    f"belt cannot leave by {outcome!r}. A machine that judges what it is "
+                    "given is a Reviewer: drop one from the palette in its place, or "
+                    "remove the belt."
+                )
+            else:
+                problems.append(
+                    f"“{label(source)}” is a {source.definition.type} node, which has one "
+                    f"way out — its belt cannot leave by {outcome!r}."
+                )
+    return problems
+
+
+def _duplicate_belt_problems(
+    nodes: list[Node], edges: list[Edge], label: Callable[[Node], str]
+) -> list[str]:
+    """Two belts between the same machines, carrying the same outcome.
+
+    A second belt from A to B on the same port delivers nothing a first one did
+    not, and both are taken — so the node downstream is handed its predecessor's
+    output **twice**, which reads on screen as the agent having said everything
+    it said a second time. Nothing refused this before, and drawing one became
+    easy the moment agents grew kinds: a belt drawn from an agent's old
+    `success` handle and a belt drawn after that node became a worker, from its
+    one unnamed handle, are different handles saying the same word.
+
+    Deliberately keyed on the **outcome**, not merely on the pair. Two belts
+    from a reviewer to the same machine, one off each port, are how a graph says
+    "whatever happens, go here", and are left alone. So is ordinary fan-in: two
+    belts into one node from *different* sources are the normal case — a worker
+    fed by the request and by a reviewer's back-edge is a loop, not a mistake.
+
+    Checked here rather than at save time under the rule `validate_graph` states:
+    that one refuses graphs which could not be *loaded back*, and this one loads
+    perfectly well. Refusing to run it names both belts instead of stranding the
+    operator with a file they cannot save.
+    """
+    by_id = {node.id: node for node in nodes}
+    seen: dict[tuple[str, str, str], str] = {}
+    problems: list[str] = []
+    for edge in edges:
+        source = by_id.get(edge.source)
+        if source is None or edge.target not in by_id:
+            continue
+        key = (edge.source, edge.target, edge_outcome(edge))
+        first = seen.setdefault(key, edge.id)
+        if first == edge.id:
+            continue
+        target = by_id[edge.target]
+        problems.append(
+            f"Two belts run from “{label(source)}” to “{label(target)}” carrying "
+            f"the same outcome, so “{label(target)}” would be handed the same "
+            "thing twice. Remove one of them."
+        )
     return problems
 
 
@@ -294,6 +376,19 @@ def _kind_problems(nodes: list[Node], label: Callable[[Node], str]) -> list[str]
                 f"Output “{label(node)}” is of kind {node_kind(node)!r}, which this "
                 f"version does not know how to produce ({', '.join(sorted(OUTPUT_KINDS))})."
             )
+        elif kind == "agent":
+            if node_kind(node) not in AGENT_KINDS:
+                problems.append(
+                    f"Agent “{label(node)}” is of kind {node_kind(node)!r}, which this "
+                    f"version does not know how to run ({', '.join(sorted(AGENT_KINDS))})."
+                )
+            elif node_kind(node) == "reviewer":
+                # Only read on a reviewer. A `max_laps` left behind on a node
+                # flipped back to worker is ignored rather than refused: config
+                # is freeform, and a stale key is not a graph anybody has to fix.
+                problem = verdict.max_laps_problem(node, label(node))
+                if problem:
+                    problems.append(problem)
     return problems
 
 
@@ -439,6 +534,105 @@ def _permission_problems(agents: list[Node], label: Callable[[Node], str]) -> li
             )
         except PermissionDenied as error:
             problems.append(f"Agent “{label(node)}”: {error}")
+    return problems
+
+
+def back_edges(nodes: list[Node], edges: list[Edge]) -> dict[str, list[str]]:
+    """Every belt that closes a loop, mapped to the loop it closes.
+
+    A belt qualifies when it is a **reviewer's `fail` belt** and its target can
+    reach its source — i.e. it points back up the line it came down. A
+    reviewer's fail belt that runs *forward*, to a human node that escalates
+    say, closes nothing and is not one of these; it is an ordinary belt.
+
+    The value is the **loop body**: every node on some path from the belt's
+    target back to its source, inclusive — `descendants(target) ∩
+    ancestors(source)`. Those are the nodes that run again on the next lap, and
+    the `run check` and `orchestrator._walk` read this one function so that what
+    is refused here and what is reset there cannot drift apart.
+
+    Ancestry is computed over **all** edges, back-edges included. That is not an
+    oversight: the question "can the target reach the source" is about the graph
+    the operator drew, and a second back-edge inside the body is part of it.
+    """
+    by_id = {node.id: node for node in nodes}
+    successors: dict[str, list[str]] = {node.id: [] for node in nodes}
+    predecessors: dict[str, list[str]] = {node.id: [] for node in nodes}
+    for edge in edges:
+        if edge.source in successors and edge.target in predecessors:
+            successors[edge.source].append(edge.target)
+            predecessors[edge.target].append(edge.source)
+
+    def reach(start: str, graph: dict[str, list[str]]) -> set[str]:
+        seen: set[str] = set()
+        stack = [start]
+        while stack:
+            current = stack.pop()
+            if current in seen:
+                continue
+            seen.add(current)
+            stack.extend(graph[current])
+        return seen
+
+    found: dict[str, list[str]] = {}
+    for edge in edges:
+        source = by_id.get(edge.source)
+        if source is None or edge.target not in by_id:
+            continue
+        if edge_outcome(edge) != "fail" or not has_outcome_ports(source):
+            continue
+        if source.definition.type != "agent":
+            continue  # a human node's fail belt is a decision, not a lap
+        body = reach(edge.target, successors) & reach(edge.source, predecessors)
+        if edge.source not in body:
+            continue  # points forward; closes nothing
+        # File order, so a run log and a refusal list the body the same way twice.
+        found[edge.id] = [node.id for node in nodes if node.id in body]
+    return found
+
+
+def _loop_problems(
+    nodes: list[Node], back: dict[str, list[str]], label: Callable[[Node], str]
+) -> list[str]:
+    """A machine inside a loop that must not run twice.
+
+    Only one so far, and it is the one that would cost real money: an **output**
+    node commits, pushes, or fast-forwards a remote branch, so a loop that
+    enclosed one would do that again on every lap. The walk's own rule is that
+    only the loop body ever runs twice, which makes this refusal both necessary
+    and sufficient — everything outside the body is already safe.
+
+    A **human** node inside a loop is deliberately *not* refused: it is asked
+    again on every lap, which is the entire point of putting a person in a loop.
+    The canvas raises a notice about it so nobody is surprised.
+    """
+    if not back:
+        return []
+    by_id = {node.id: node for node in nodes}
+    problems: list[str] = []
+    reported: set[str] = set()
+    for body in back.values():
+        for node_id in body:
+            node = by_id.get(node_id)
+            if node is None or node.definition.type != "output" or node_id in reported:
+                continue
+            reported.add(node_id)
+            # Name the reviewer that closes the loop: "inside a loop" is not
+            # actionable on a canvas with two of them.
+            closer = next(
+                (
+                    by_id[other].definition.label or other
+                    for other in body
+                    if by_id.get(other) is not None
+                    and node_kind(by_id[other]) == "reviewer"
+                ),
+                "a reviewer",
+            )
+            problems.append(
+                f"“{label(node)}” is inside the loop that “{closer}” closes, so it "
+                "would commit on every lap. Move it onto the reviewer’s success "
+                "belt, below the loop."
+            )
     return problems
 
 

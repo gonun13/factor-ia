@@ -29,6 +29,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from . import config, sshkeys
 from .agent import cli, login
+from .agent.fake import FAKE_MODEL
 from .scrub import scrub_text
 
 router = APIRouter(prefix="/api")
@@ -42,6 +43,56 @@ class CodeSubmission(BaseModel):
     code: str = Field(min_length=1, max_length=4096)
 
 
+class ModelOffer(BaseModel):
+    """What one provider can be asked to run on — everything a model picker
+    needs, and nothing about whether the CLI is healthy.
+
+    It exists because there is more than one provider and only one of them is a
+    CLI. A picker fed `handshake.models` offers five Claude ids for a node a
+    fake will drive, and labels its inherit option with a model that run will
+    never report — which is not a rendering bug the browser can fix, because
+    nothing on that side knows what an adapter honours.
+
+    `fixed` is that knowledge, stated once here rather than as a
+    `provider === "fake"` test in every picker: the provider reports its own id
+    whatever it is handed, so a control offering a choice is lying. What the UI
+    does about it — grey it, say so — stays the UI's.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    models: list[cli.Model] = Field(default_factory=list)
+    #: None when the provider could not be asked. Never a hardcoded fallback,
+    #: for `cli.Handshake.default_model`'s reason.
+    default_model: str | None = None
+    default_model_label: str | None = None
+    fixed: bool = False
+
+
+def _fake_offer() -> ModelOffer:
+    """The fake's own answer, read from the fake rather than written here.
+
+    One model, which is also its default, and `fixed`: `FakeRun` keeps only the
+    session id off a `RunConfig` and reports `FAKE_MODEL` whatever a node asked
+    for (`agent/fake.py`). A list of one is the honest shape — there is exactly
+    one thing a dry run can report — and it keeps the id in the single file
+    that defines it instead of copying it into the browser.
+    """
+    return ModelOffer(
+        models=[
+            cli.Model(
+                value=FAKE_MODEL,
+                label=FAKE_MODEL,
+                detail="What a dry run reports. Scripted, and it spends nothing.",
+                resolved=FAKE_MODEL,
+            )
+        ],
+        default_model=FAKE_MODEL,
+        default_model_label=FAKE_MODEL,
+        fixed=True,
+    )
+
+
 class AgentStatus(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -52,6 +103,11 @@ class AgentStatus(BaseModel):
     #: other way to learn, and the settings panel names it rather than saying
     #: "the container default" and leaving the operator to guess which.
     default_provider: str
+    #: What each provider offers, keyed by the name a node's `adapter` and a
+    #: project's `default_provider` are spelled with. Every provider that
+    #: exists is on every response, so a picker walks the ladder and reads one
+    #: entry rather than asking again when the answer changes.
+    providers: dict[str, ModelOffer] = Field(default_factory=dict)
 
 
 def _scrubbed(account: cli.AccountStatus) -> cli.AccountStatus:
@@ -75,6 +131,18 @@ async def agent_status() -> AgentStatus:
         account=account,
         handshake=handshake,
         default_provider="fake" if name == "fake" else "claude",
+        # `handshake` stays the CLI's own answer — the settings screen reads it
+        # to say whether the CLI is reachable, which is not a question about
+        # models. This is that same answer shaped for the pickers, alongside
+        # the provider the CLI knows nothing about.
+        providers={
+            "claude": ModelOffer(
+                models=handshake.models,
+                default_model=handshake.default_model,
+                default_model_label=handshake.default_model_label,
+            ),
+            "fake": _fake_offer(),
+        },
     )
 
 

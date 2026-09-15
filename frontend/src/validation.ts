@@ -10,14 +10,58 @@
  * orchestrator will enforce the same set server-side before it starts a run.
  */
 
-import { nodeKind, type FlowEdge, type FlowNode } from "./graph";
+import { hasOutcomePorts, nodeKind, type FlowEdge, type FlowNode } from "./graph";
 import {
+  DEFAULT_EDGE_OUTCOME,
+  DEFAULT_MAX_LAPS,
   EDGE_OUTCOMES,
-  OUTCOME_NODE_TYPES,
+  MAX_LAPS_LIMIT,
   PUSHING_OUTPUT_KINDS,
   type Codebase,
   type CodebaseGit,
 } from "./types";
+
+/**
+ * The nodes a back-edge sends round again: everything on a path from `target`
+ * back to `source`, inclusive.
+ *
+ * A second implementation of `runcheck.back_edges`, which is a cost worth
+ * naming. It is here because the canvas has to answer "is this node inside a
+ * loop" while the belt is still being drawn, and shipping the graph to the
+ * server on every edit to ask would be worse. Both are small, both are tested,
+ * and only the server's decides whether a run starts.
+ */
+function loopBody(
+  nodes: FlowNode[],
+  edges: FlowEdge[],
+  source: string,
+  target: string,
+): Set<string> {
+  const forward = new Map<string, string[]>();
+  const backward = new Map<string, string[]>();
+  for (const node of nodes) {
+    forward.set(node.id, []);
+    backward.set(node.id, []);
+  }
+  for (const edge of edges) {
+    forward.get(edge.source)?.push(edge.target);
+    backward.get(edge.target)?.push(edge.source);
+  }
+  const reach = (start: string, graph: Map<string, string[]>) => {
+    const seen = new Set<string>();
+    const stack = [start];
+    while (stack.length) {
+      const current = stack.pop()!;
+      if (seen.has(current)) continue;
+      seen.add(current);
+      stack.push(...(graph.get(current) ?? []));
+    }
+    return seen;
+  };
+  const down = reach(target, forward);
+  const up = reach(source, backward);
+  return new Set([...down].filter((id) => up.has(id)));
+}
 
 export type Problem = {
   /** Shown in the Run tooltip and next to the button. */
@@ -222,10 +266,101 @@ export function runProblems(
         message: `The belt out of “${label(source)}” leaves by “${edge.sourceHandle}”, which is not a port this version knows.`,
         nodeIds: [source.id],
       });
-    } else if (!(OUTCOME_NODE_TYPES as string[]).includes(type)) {
+    } else if (!hasOutcomePorts(source.data.definition)) {
+      // A worker's `success` belt is not a problem: every agent had two ports
+      // until agents had kinds, so a factory drawn back then wrote `success`
+      // onto belts that are now a worker's single way out — and that belt still
+      // means what it meant and still has nowhere else to go. `fail` is the one
+      // that genuinely has nothing to route to.
+      if (type === "agent" && edge.sourceHandle === DEFAULT_EDGE_OUTCOME) continue;
       problems.push({
-        message: `“${label(source)}” is a ${type} node, which has one way out — its belt cannot leave by “${edge.sourceHandle}”.`,
+        message:
+          type === "agent"
+            ? `“${label(source)}” is a worker agent, which has one way out — its belt cannot leave by “${edge.sourceHandle}”. A machine that judges what it is given is a Reviewer: drop one from the palette in its place, or remove the belt.`
+            : `“${label(source)}” is a ${type} node, which has one way out — its belt cannot leave by “${edge.sourceHandle}”.`,
         nodeIds: [source.id],
+      });
+    }
+  }
+
+  // Two belts between the same machines carrying the same outcome. Both are
+  // taken, so the node below is handed its predecessor's output twice — the
+  // agent's report, verbatim, repeated. Easy to draw by accident once an agent
+  // has kinds: a belt off an agent's old `success` handle and one off the same
+  // node's single unnamed handle, after it became a worker, are different
+  // handle names saying the same word, so React Flow's own duplicate check does
+  // not catch them. Keyed on the outcome, so a reviewer wiring both its ports
+  // to one machine — and ordinary fan-in from two different sources — are left
+  // alone.
+  const belts = new Map<string, string>();
+  for (const edge of edges) {
+    const source = byId.get(edge.source);
+    const target = byId.get(edge.target);
+    if (!source || !target) continue;
+    const key = `${edge.source}\u0000${edge.target}\u0000${edge.sourceHandle ?? DEFAULT_EDGE_OUTCOME}`;
+    if (belts.has(key)) {
+      problems.push({
+        message: `Two belts run from “${label(source)}” to “${label(target)}” carrying the same outcome, so “${label(target)}” would be handed the same thing twice. Remove one of them.`,
+        nodeIds: [source.id, target.id],
+      });
+    } else {
+      belts.set(key, edge.id);
+    }
+  }
+
+  // ---- loops ---------------------------------------------------------------
+  //
+  // **A change of stance, and only half of one.** The client still does not
+  // detect cycles in order to *forbid* them: the reason `runcheck.py` gives —
+  // the client never has to walk the graph — is as true as it ever was, and the
+  // server is still the thing that refuses a cycle nothing may close.
+  //
+  // What the canvas can now usefully answer is a different question: which
+  // nodes are *inside* a loop. That is worth the same reachability pass,
+  // because the two things it tells you are both things to know before you
+  // press Run rather than after.
+  for (const edge of edges) {
+    const source = byId.get(edge.source);
+    if (!source || edge.sourceHandle !== "fail") continue;
+    if (!hasOutcomePorts(source.data.definition)) continue;
+    if (source.data.definition.type !== "agent") continue;
+    const body = loopBody(nodes, edges, edge.source, edge.target);
+    if (!body.has(edge.source)) continue; // runs forward; closes nothing
+
+    for (const node of nodes) {
+      if (!body.has(node.id)) continue;
+      if (node.data.definition.type === "output") {
+        problems.push({
+          message: `“${label(node)}” is inside the loop that “${label(source)}” closes, so it would commit on every lap. Move it onto the reviewer’s success belt, below the loop.`,
+          nodeIds: [node.id],
+        });
+      } else if (node.data.definition.type === "human") {
+        problems.push({
+          message: `“${label(node)}” is inside a loop — it is asked again on every lap.`,
+          nodeIds: [node.id],
+          severity: "notice",
+        });
+      }
+    }
+  }
+
+  // A cap this version will not run — the same bounds and the same sentence as
+  // `verdict.max_laps_problem`.
+  for (const node of nodes) {
+    const definition = node.data.definition;
+    if (definition.type !== "agent" || nodeKind(definition) !== "reviewer") continue;
+    const raw = definition.config?.max_laps;
+    if (raw === undefined || raw === null || raw === "") continue;
+    const value = typeof raw === "number" ? raw : parseInt(String(raw), 10);
+    if (!Number.isFinite(value)) {
+      problems.push({
+        message: `Reviewer “${label(node)}” asks for “${String(raw)}” laps, which is not a number — leave it blank for ${DEFAULT_MAX_LAPS}.`,
+        nodeIds: [node.id],
+      });
+    } else if (value < 1 || value > MAX_LAPS_LIMIT) {
+      problems.push({
+        message: `Reviewer “${label(node)}” asks for ${value} laps — a reviewer runs at least once and at most ${MAX_LAPS_LIMIT}. Leave it blank for ${DEFAULT_MAX_LAPS}.`,
+        nodeIds: [node.id],
       });
     }
   }

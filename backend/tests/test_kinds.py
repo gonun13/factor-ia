@@ -384,3 +384,28 @@ def test_a_kind_this_version_does_not_know_is_refused_by_name(repo: Path) -> Non
     problems = _problems(factory, repo)
     assert any("'voice-memo'" in problem for problem in problems), problems
     assert any("'commit-deploy'" in problem for problem in problems), problems
+
+
+# ---- agent kinds -----------------------------------------------------------
+
+
+def test_an_agent_with_no_kind_on_disk_is_a_worker():
+    """What an agent has always done is work, so that is what a file written
+    before kinds existed must keep meaning."""
+    from factoria.models import node_kind
+
+    assert node_kind(NodeDefinition(type="agent")) == "worker"
+    assert node_kind(NodeDefinition(type="agent", config={"kind": "reviewer"})) == "reviewer"
+
+
+def test_only_a_reviewer_and_a_human_node_have_two_ways_out():
+    """The question is about the node, not its type: a worker and a reviewer are
+    both agents and answer it differently."""
+    from factoria.models import has_outcome_ports
+
+    assert has_outcome_ports(NodeDefinition(type="agent", config={"kind": "reviewer"}))
+    assert has_outcome_ports(NodeDefinition(type="human"))
+    assert not has_outcome_ports(NodeDefinition(type="agent"))
+    assert not has_outcome_ports(NodeDefinition(type="agent", config={"kind": "worker"}))
+    assert not has_outcome_ports(NodeDefinition(type="input"))
+    assert not has_outcome_ports(NodeDefinition(type="output"))

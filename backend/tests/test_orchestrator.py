@@ -85,7 +85,15 @@ def test_a_whole_run_ends_succeeded_and_visits_every_node(
     assert run.node_run("n-agent").session_id
 
 
-def test_the_events_replay_the_same_story(orch: Orchestrator, factory: Factory) -> None:
+def test_the_events_replay_the_same_story(
+    test_store: Store, orch: Orchestrator, factory: Factory
+) -> None:
+    # Priced on purpose: `run.cost` is only emitted for a non-zero delta, and
+    # the fake bills nothing unless asked (see `agent/fake.py`). The story this
+    # log has to tell includes the money, so this run has to spend some.
+    factory.nodes[1].definition.config["fake_cost"] = 0.0123
+    test_store.save_factory(factory)
+
     async def go():
         run = await orch.start("demo", "main")
         await orch.submit_input(run.id, "tidy the readme")
@@ -144,9 +152,14 @@ def test_a_failing_agent_fails_the_run_and_leaves_the_rest_pending(
 
 
 def test_cost_is_summed_from_deltas_not_from_the_cumulative_number(
-    orch: Orchestrator, factory: Factory
+    test_store: Store, orch: Orchestrator, factory: Factory
 ) -> None:
     """Stage 4's note: `turn.end.total_cost_usd` accumulates for the process."""
+    # The fake bills nothing by default, so that a dry run never puts money it
+    # did not spend into the project's readout. This test is the one place that
+    # needs a turn with a price on it, and says so on the node.
+    factory.nodes[1].definition.config["fake_cost"] = 0.0123
+    test_store.save_factory(factory)
 
     async def go():
         run = await orch.start("demo", "main")

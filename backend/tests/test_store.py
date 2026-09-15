@@ -321,3 +321,25 @@ def test_a_port_survives_a_save_and_is_readable_in_the_file(
 
     assert '"source_handle": "fail"' in test_store.factory_path("demo", "main").read_text()
     assert Store().get_factory("demo", "main").edges[0].source_handle == "fail"
+
+
+def test_a_lap_counter_round_trips_without_a_schema_bump(data_dir: Path) -> None:
+    """A loop is a counter on a record, not a new file format — the same bargain
+    `source_handle` took when ports arrived."""
+    from factoria.models import NodeRun, Run, SCHEMA_VERSION
+    from factoria.runlog import RunStore
+
+    run = Run(
+        id="run-lap",
+        project_id="demo",
+        factory_id="main",
+        node_runs=[NodeRun(node_id="n-work", type="agent", kind="worker", lap=3)],
+    )
+    store = RunStore()
+    store.write(run)
+    read = store.read("run-lap")
+
+    assert read is not None
+    assert read.schema_version == SCHEMA_VERSION == 1
+    assert read.node_runs[0].lap == 3
+    assert read.node_runs[0].kind == "worker"

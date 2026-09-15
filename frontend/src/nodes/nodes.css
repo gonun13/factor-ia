@@ -295,6 +295,23 @@
   opacity: 0.75;
 }
 
+/* The return conveyor. A loop's belt runs the other way round the canvas, but
+   the tread on it still crawls *towards the target* — material moves from the
+   reviewer back to the machine it is being sent back to, which is the whole
+   point of the loop. No `animation-direction` here: `returnPath` in
+   `BeltEdge.tsx` is authored from source to target like any other belt, so the
+   shared `belt` keyframe already crawls the right way, the same way the
+   arrowhead points. Reversing it a second time sends the tread against the
+   arrow. */
+.belt-back .belt-tread {
+  stroke-dasharray: 5 9;
+}
+
+.belt-back .belt-casing {
+  stroke-dasharray: none;
+  opacity: 0.85;
+}
+
 @keyframes belt {
   to {
     stroke-dashoffset: -14;
@@ -404,6 +421,20 @@
   letter-spacing: 0.08em;
   color: var(--ink-faint);
 }
+
+/* Only ever drawn above lap 1 (`NodeShell`), so it is a signal that something
+   unusual is happening rather than a permanent fixture on every node. */
+.node .lap {
+  font-size: 0.6rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  padding: 0.05rem 0.3rem;
+  border-radius: 999px;
+  color: var(--ink);
+  background: color-mix(in srgb, var(--danger) 18%, transparent);
+  border: 1px solid color-mix(in srgb, var(--danger) 35%, transparent);
+}
+
 
 .runtime {
   display: grid;

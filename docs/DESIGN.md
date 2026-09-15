@@ -144,11 +144,15 @@ Roughly in the order the design anticipates them:
 - ~~**Human-in-the-middle nodes**~~ — *done (stage 8).* A `human` node stops the
   line and routes on approve/reject. Edits and redirection mid-run are still
   later; what it takes today is a verdict and a note.
-- **Loops** — iterate until tests pass. Conditional edges arrived with the
-  human node: every `agent` and `human` node has a `success` and a `fail` port,
-  and the walk follows them. What loops still need is a back-edge the cycle
-  check accepts and an iteration cap, without which a mis-drawn graph runs
-  forever.
+- ~~**Loops**~~ — *done (stage 9).* An `agent` node now has a **kind**: a
+  `worker` does the job and has one way out, a `reviewer` judges what it is
+  given and must end its reply with a fenced JSON verdict. A reviewer's `fail`
+  belt is the one belt the cycle check accepts as closing a loop, and the
+  iteration cap lives on the reviewer (`config["max_laps"]`, default 3). A
+  missing verdict is a broken contract rather than a rejection: it ends the run
+  instead of sending the work back, so a reviewer that cannot follow the format
+  surfaces as itself rather than as three wasted laps. Iterating against *tests*
+  still waits on execution nodes; iterating against a judgement does not.
 - **Shell/test execution nodes**, which is when the **dind sidecar** arrives.
 - **GitHub / GitLab integration** — open the PR, don't just leave the branch.
 - **Parallel fan-out** across agent nodes.

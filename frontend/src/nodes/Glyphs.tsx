@@ -30,6 +30,24 @@ export function AgentGlyph() {
   );
 }
 
+/**
+ * Reviewer: the worker's gear, seen through a loupe.
+ *
+ * Deliberately the same gear as `AgentGlyph` rather than a new shape — the two
+ * kinds are the same machine doing a different job, and a glyph that shared
+ * nothing would read as a different type of node.
+ */
+export function ReviewerGlyph() {
+  return (
+    <svg viewBox="0 0 16 16" aria-hidden>
+      <circle cx="6.8" cy="6.8" r="4.4" {...stroke} />
+      <path d="m10.1 10.1 4 4" {...stroke} />
+      <circle cx="6.8" cy="6.8" r="1.5" {...stroke} />
+      <path d="M6.8 1.3v1.1M6.8 11.2v1.1M11.2 6.8h1.1M1.3 6.8h1.1" {...stroke} />
+    </svg>
+  );
+}
+
 /** Commit: a node on a branch. */
 export function OutputGlyph() {
   return (

@@ -16,4 +16,11 @@ export const nodeTypes: NodeTypes = {
 
 export const edgeTypes: EdgeTypes = { [BELT_EDGE]: BeltEdge };
 
-export { AgentGlyph, InputGlyph, OutputGlyph, CodebaseGlyph, HumanGlyph } from "./Glyphs";
+export {
+  AgentGlyph,
+  InputGlyph,
+  OutputGlyph,
+  CodebaseGlyph,
+  HumanGlyph,
+  ReviewerGlyph,
+} from "./Glyphs";

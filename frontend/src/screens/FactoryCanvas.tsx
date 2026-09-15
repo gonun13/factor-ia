@@ -57,6 +57,7 @@ import {
   OutputGlyph,
   PrdGlyph,
   PushGlyph,
+  ReviewerGlyph,
   SettingsGlyph,
 } from "../nodes/Glyphs";
 import { ProjectSettingsPanel } from "./ProjectSettingsPanel";
@@ -94,7 +95,8 @@ const PALETTE: {
 }[] = [
   { type: "input", kind: "request", label: "Request", hint: "the task, submitted once", Glyph: InputGlyph },
   { type: "input", kind: "prd", label: "PRD", hint: "a PRD.md, handed over whole", Glyph: PrdGlyph },
-  { type: "agent", kind: "", label: "Agent", hint: "operates on a codebase", Glyph: AgentGlyph },
+  { type: "agent", kind: "worker", label: "Agent", hint: "operates on a codebase", Glyph: AgentGlyph },
+  { type: "agent", kind: "reviewer", label: "Reviewer", hint: "judges the work; can send it back", Glyph: ReviewerGlyph },
   { type: "human", kind: "approval", label: "Sign-off", hint: "stops the line for a person", Glyph: HumanGlyph },
   { type: "output", kind: "commit", label: "Commit", hint: "a branch you can diff", Glyph: OutputGlyph },
   { type: "output", kind: "commit-push", label: "Commit & push", hint: "branch, then up to the remote", Glyph: PushGlyph },
@@ -335,8 +337,7 @@ function CanvasInner({ projectId, onBack }: { projectId: string; onBack: () => v
       gitStates,
       invalid,
       patch,
-      models: agent?.handshake.models ?? [],
-      cliDefaultModel: agent?.handshake.default_model ?? null,
+      providers: agent?.providers ?? {},
       containerProvider: agent?.default_provider ?? "claude",
       projectSettings: project?.settings ?? {
         default_provider: null,
@@ -500,8 +501,7 @@ function CanvasInner({ projectId, onBack }: { projectId: string; onBack: () => v
       {settingsOpen && project && (
         <ProjectSettingsPanel
           project={project}
-          models={agent?.handshake.models ?? []}
-          cliDefaultModel={agent?.handshake.default_model ?? null}
+          providers={agent?.providers ?? {}}
           containerProvider={agent?.default_provider ?? "claude"}
           onSaved={setProject}
           onClose={() => {

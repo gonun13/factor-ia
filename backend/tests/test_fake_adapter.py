@@ -48,14 +48,27 @@ def test_success_script_covers_the_union_and_ends_completed() -> None:
     assert all(event.type in EVENT_TYPES for event in events)
 
 
-def test_success_script_carries_usage_and_cost_like_the_real_one() -> None:
+def test_a_scripted_turn_costs_nothing_unless_it_is_asked_to() -> None:
+    """The default that keeps a dry run out of the project's money readout.
+
+    `Run.total_cost_usd` sums `turn.end` without knowing a script from a
+    session, so a fake with the real one's numbers in it bills for nothing.
+    """
     end = next(e for e in drain(FakeAdapter("success").create_run("x", "/w")) if e.type == "turn.end")
+    assert end.total_cost_usd == 0.0
+    # Still a real turn in every other respect — the usage is not the money.
+    assert end.usage.input_tokens > 0
+
+
+def test_success_script_carries_usage_and_cost_like_the_real_one() -> None:
+    run = FakeAdapter("success", cost_usd=0.0123).create_run("x", "/w")
+    end = next(e for e in drain(run) if e.type == "turn.end")
     assert end.usage.input_tokens > 0
     assert end.total_cost_usd > 0
 
 
 def test_failure_script_reports_a_failed_tool_then_a_failed_turn() -> None:
-    events = drain(FakeAdapter("failure").create_run("x", "/w"))
+    events = drain(FakeAdapter("failure", cost_usd=0.0041).create_run("x", "/w"))
     tool_end = next(e for e in events if e.type == "tool.end")
     assert tool_end.is_error is True
     # Cost still lands on a failed run — the case an orchestrator forgets.

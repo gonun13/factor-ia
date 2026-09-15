@@ -113,16 +113,42 @@ plus `factory-ref`, which is in the union with no UI and no execution so that
 nesting is a later UI change rather than a file-format change. `human` was in
 the union on the same terms until stage 8 gave it both.
 
-**An `agent` and a `human` node leave by one of two ports**, `success` or
+**A `reviewer` and a `human` node leave by one of two ports**, `success` or
 `fail` (`models.EdgeOutcome`), carried on the belt's `source_handle` — a field
 React Flow already set and the factory file already round-tripped, so outcome
 routing arrived without moving `schema_version`. `null` means success, which is
-what every belt drawn before ports existed says. The orchestrator's walk follows
-those ports rather than a precomputed topological order, so a failure with a
-belt drawn for it is an outcome the graph handles and the run can still succeed;
-a failure with nothing on that port ends the run, as it always did. Cycles are
-still refused: loops need an iteration cap, which is the piece that is not
-built.
+what every belt drawn before ports existed says. Whether a node has two ports is
+`models.has_outcome_ports`, a question about the **node** rather than its type:
+a worker and a reviewer are both `type: "agent"` and answer it differently. The
+orchestrator's walk follows those ports rather than a precomputed topological
+order, so a failure with a belt drawn for it is an outcome the graph handles and
+the run can still succeed; a failure with nothing on that port ends the run, as
+it always did.
+
+**A reviewer's fail belt may close a loop, and nothing else may.**
+`runcheck.back_edges` decides which belts qualify — a reviewer's `fail` belt
+whose target can reach its source — and the cycle check drops exactly those
+before demanding the rest be acyclic. The same function gives `_walk` the
+**loop body** it resets, so what is refused and what is re-run cannot drift.
+Three consequences worth knowing:
+
+- **Only nodes on the loop body ever run twice.** The reset set is the body plus
+  anything below it that was settled without being reached; a node that actually
+  ran and is not on the body keeps its result. That is what stops an output node
+  drawn in parallel from committing on every lap, and `runcheck` refuses an
+  output node *on* the body, which completes the pair.
+- **The next lap works in the same worktree.** `_worktree_for` is per-run and
+  shared, so a worker sent round again lands in the directory holding its own
+  previous edits. Without that, "fix the two things the reviewer named" would
+  mean nothing — it is the least obvious load-bearing fact in the feature.
+- **The back-edge stays `taken` across the reset**, which is how the reviewer's
+  reason reaches the next lap: `_incoming_text` then hands the worker both the
+  original request and the critique.
+
+The cap is `config["max_laps"]` on the reviewer, bounded by `verdict.py`, and
+`NodeRun.lap` is never reset — so the number of laps a run can take is a number
+rather than a hope. A crash, a cancel, a spent cap or a missing verdict is a
+`halt`: no belt carries it, so none of them can retry their way round the loop.
 
 **The two ends of the line carry a `kind`, and a kind is not a type.** It lives
 in the node's freeform `definition.config["kind"]`, read by `models.node_kind`

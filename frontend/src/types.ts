@@ -22,11 +22,26 @@ export type NodeType = "input" | "agent" | "output" | "human" | "factory-ref";
 export type InputKind = "request" | "prd";
 export type OutputKind = "commit" | "commit-push" | "commit-merge";
 export type HumanKind = "approval";
-export type NodeKind = InputKind | OutputKind | HumanKind;
+/**
+ * What an agent node is *for* — `models.AgentKind`.
+ *
+ * A `worker` does the job and has one way out. A `reviewer` judges what it is
+ * given, must end its reply with a verdict, and its `fail` belt is the one belt
+ * allowed to close a loop. `worker` is the default, which is a statement about
+ * files already on disk: an agent drawn before this existed has no kind, and
+ * what an agent has always done is work.
+ */
+export type AgentKind = "worker" | "reviewer";
+export type NodeKind = InputKind | OutputKind | HumanKind | AgentKind;
 
 export const DEFAULT_INPUT_KIND: InputKind = "request";
 export const DEFAULT_OUTPUT_KIND: OutputKind = "commit";
 export const DEFAULT_HUMAN_KIND: HumanKind = "approval";
+export const DEFAULT_AGENT_KIND: AgentKind = "worker";
+
+/** A reviewer's lap cap, and the bounds the server enforces — `verdict.py`. */
+export const DEFAULT_MAX_LAPS = 3;
+export const MAX_LAPS_LIMIT = 10;
 
 /**
  * Which of a node's two outcomes a belt carries away — `models.EdgeOutcome`.
@@ -41,10 +56,6 @@ export const DEFAULT_HUMAN_KIND: HumanKind = "approval";
 export type EdgeOutcome = "success" | "fail";
 export const DEFAULT_EDGE_OUTCOME: EdgeOutcome = "success";
 export const EDGE_OUTCOMES: EdgeOutcome[] = ["success", "fail"];
-
-/** The node types that split their outcome across two ports. An input has
- * nothing to fail at; an output that fails has nowhere left to route. */
-export const OUTCOME_NODE_TYPES: NodeType[] = ["agent", "human"];
 
 /** `commit-push` and `commit-merge` put a ref on a remote; `commit` does not. */
 export const PUSHING_OUTPUT_KINDS: OutputKind[] = ["commit-push", "commit-merge"];
@@ -150,6 +161,12 @@ export type NodeRuntime = {
   /** The model the provider says it chose, off `session.init`. Not what we
    * asked for — the two differ whenever we asked for nothing. */
   model?: string;
+  /** Which lap of a loop this node is on. 1 for everything that runs once, so
+   * the chip only shows above that. Comes down on `node.status` rather than
+   * being counted here — the counter lives on the server's `NodeRun`, and a
+   * second implementation of it that only a reconnecting tab exercises is the
+   * kind that drifts. */
+  lap?: number;
 };
 
 /** Something durable that now exists outside `/data` — a branch in the
@@ -273,9 +290,23 @@ export type Handshake = {
   detail: string;
 };
 
+/** What one provider can be asked to run on. Not the same question as whether
+ * the CLI is healthy — see `handshake` for that. `fixed` means the provider
+ * reports its own model id whatever it is handed (the fake does), so a picker
+ * must offer no choice rather than one that will be ignored. */
+export type ModelOffer = {
+  models: AgentModel[];
+  default_model: string | null;
+  default_model_label: string | null;
+  fixed: boolean;
+};
+
 export type AgentStatus = {
   account: AccountStatus;
   handshake: Handshake;
+  /** Every provider that exists, keyed by the name a node's `adapter` and a
+   * project's `default_provider` are spelled with. */
+  providers: Record<string, ModelOffer>;
   /** What a run uses when neither the node nor the project names a provider.
    * An environment fact on the container (`FACTOR_IA_ADAPTER`), which the
    * browser has no other way to learn. */
@@ -404,7 +435,13 @@ export type AgentEvent = { session_id: string; timestamp: string } & (
  * `seq` is the SSE `id:`, and the whole reconnection contract. */
 export type RunEvent = { seq: number; run_id: string; timestamp: string } & (
   | { type: "run.status"; status: OverallRunStatus; detail: string | null }
-  | { type: "node.status"; node_id: string; status: RunStatus; detail: string | null }
+  | {
+      type: "node.status";
+      node_id: string;
+      status: RunStatus;
+      detail: string | null;
+      lap?: number;
+    }
   | {
       type: "run.input";
       node_id: string;

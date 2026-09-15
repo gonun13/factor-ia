@@ -280,7 +280,7 @@ def test_a_run_that_changed_nothing_fails_rather_than_ticking_green(
     from factoria.agent.fake import FakeAdapter
 
     original = orch_module.adapter_for
-    orch_module.adapter_for = lambda node, settings=None: FakeAdapter(
+    orch_module.adapter_for = lambda node, settings=None, *, lap=1: FakeAdapter(
         script="success", delay_s=0, write_files=False
     )
     try:
@@ -584,6 +584,66 @@ def test_a_node_wearing_no_skill_appends_nothing(
     monkeypatch.setattr(FakeAdapter, "create_run", capture)
     run_to_completion(orch)
     assert seen == [None]
+
+
+def test_the_verdict_contract_reaches_a_reviewer_and_only_a_reviewer(
+    orch: Orchestrator, test_store: Store, factory: Factory, monkeypatch
+) -> None:
+    """Composed on this side of the seam, so no adapter learns what a reviewer
+    is — but it has to actually arrive, or the node is asked for a verdict it
+    was never told to write."""
+    seen: list[str | None] = []
+    original = FakeAdapter.create_run
+
+    def capture(self, prompt, cwd, config=None):
+        seen.append(config.append_system_prompt if config else None)
+        return original(self, prompt, cwd, config)
+
+    monkeypatch.setattr(FakeAdapter, "create_run", capture)
+
+    run_to_completion(orch)
+    assert seen == [None], "a worker's prompt gained something"
+
+    seen.clear()
+    loaded = test_store.get_factory("demo", "main")
+    for node in loaded.nodes:
+        if node.definition.type == "agent":
+            node.definition.config["kind"] = "reviewer"
+            node.definition.config["fake_script"] = "verdict-pass"
+    test_store.save_factory(loaded)
+
+    run_to_completion(orch)
+    assert seen and seen[0] is not None
+    assert "verdict" in seen[0]
+
+
+def test_a_reviewer_wearing_a_skill_gets_both_and_the_contract_last(
+    orch: Orchestrator, test_store: Store, factory: Factory, monkeypatch
+) -> None:
+    """A skill must not be able to read as overriding the contract, so the thing
+    the agent was told most recently is the thing it may not negotiate."""
+    skills.create_skill(SKILL)
+    wear_skill(test_store, factory, "repo-recon")
+    loaded = test_store.get_factory("demo", "main")
+    for node in loaded.nodes:
+        if node.definition.type == "agent":
+            node.definition.config["kind"] = "reviewer"
+            node.definition.config["fake_script"] = "verdict-pass"
+    test_store.save_factory(loaded)
+
+    seen: list[str | None] = []
+    original = FakeAdapter.create_run
+
+    def capture(self, prompt, cwd, config=None):
+        seen.append(config.append_system_prompt if config else None)
+        return original(self, prompt, cwd, config)
+
+    monkeypatch.setattr(FakeAdapter, "create_run", capture)
+    run_to_completion(orch)
+
+    assert seen and seen[0] is not None
+    assert "Read before touching." in seen[0]
+    assert seen[0].index("Read before touching.") < seen[0].index("Your verdict")
 
 
 def test_the_run_record_names_the_skill_that_applied(

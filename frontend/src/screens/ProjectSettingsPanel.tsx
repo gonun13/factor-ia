@@ -25,7 +25,8 @@
 import { useEffect, useRef, useState, type ReactElement } from "react";
 import { api } from "../api";
 import { SettingsGlyph } from "../nodes/Glyphs";
-import type { AgentModel, Project, ProjectSettings } from "../types";
+import { NO_OFFER, type ProviderName } from "../canvasContext";
+import type { ModelOffer, Project, ProjectSettings } from "../types";
 
 /** The adapters that exist. There are two, and that is the whole set. */
 const PROVIDERS: Record<"claude" | "fake", { label: string; hint: string }> = {
@@ -51,16 +52,14 @@ const inheritLabel = (name: string) => `${name} (default)`;
 
 export function ProjectSettingsPanel({
   project,
-  models,
-  cliDefaultModel,
+  providers,
   containerProvider,
   onSaved,
   onClose,
 }: {
   project: Project;
-  models: AgentModel[];
-  cliDefaultModel: string | null;
-  containerProvider: "claude" | "fake";
+  providers: Record<string, ModelOffer>;
+  containerProvider: ProviderName;
   onSaved: (project: Project) => void;
   onClose: () => void;
 }): ReactElement {
@@ -79,12 +78,27 @@ export function ProjectSettingsPanel({
   // A model the CLI no longer offers. Kept and shown rather than reset — see
   // the module docstring. Only meaningful once we actually have a list to
   // check against; an unreachable CLI must not make a good id look broken.
+  // What the provider this project has chosen actually offers. The list is
+  // per provider, not the CLI's: a project pinned to the fake was being shown
+  // five Claude ids and told its default was one of them.
+  const offer = providers[provider || containerProvider] ?? NO_OFFER;
+  const models = offer.models;
   const stale = model !== "" && models.length > 0 && !models.some((m) => m.value === model);
+  // `fixed` means the provider reports its own id whatever it is handed
+  // (`ModelOffer`, and `FakeAdapter` in `agent/fake.py`), so this select
+  // decides nothing. Greyed rather than hidden — a stored id stays stored and
+  // applies again the moment the provider changes, and a control that vanishes
+  // looks like a lost setting.
+  const modelIgnored = offer.fixed;
   // What each select falls back to, named. The CLI's default model is reported
   // as a resolved id rather than a list entry, so it is shown as the id — that
   // is what `session.init` will say a run used.
   const inheritedProvider = PROVIDERS[containerProvider].label;
-  const inheritedModel = cliDefaultModel ?? "chosen by the CLI";
+  // The id this provider says it will report. Under a fake that is
+  // `fake-model-1` rather than the CLI's default — an option reading
+  // "claude-sonnet-5 (default)" beside a fake provider is the same
+  // misstatement the greyed select exists to stop.
+  const inheritedModel = offer.default_model ?? "chosen by the provider";
 
   useEffect(() => firstField.current?.focus(), []);
 
@@ -195,14 +209,15 @@ export function ProjectSettingsPanel({
               <span className="eyebrow">Default model</span>
             </div>
             <label htmlFor="project-model" className="muted" id="project-model-hint">
-              Read from the CLI's own handshake — never a model this project
-              picked for you.
+              {modelIgnored
+                ? "Not used — this provider reports its own model id."
+                : "Read from the CLI's own handshake — never a model this project picked for you."}
             </label>
             <select
               id="project-model"
               aria-describedby="project-model-hint"
               value={model}
-              disabled={models.length === 0}
+              disabled={modelIgnored || models.length === 0}
               onChange={(event) => setModel(event.target.value)}
             >
               <option value="">{inheritLabel(inheritedModel)}</option>
@@ -213,13 +228,19 @@ export function ProjectSettingsPanel({
                 </option>
               ))}
             </select>
-            {models.length === 0 && (
+            {modelIgnored && model !== "" && (
+              <span className="muted">
+                {model} is kept and will apply again when this project runs on
+                Claude.
+              </span>
+            )}
+            {!modelIgnored && models.length === 0 && (
               <span className="bad">
                 The claude CLI could not be asked for its model list — check
                 Settings.
               </span>
             )}
-            {stale && (
+            {!modelIgnored && stale && (
               <span className="bad">
                 This CLI no longer offers that model. It is kept as written and
                 will be refused at run time rather than quietly replaced.

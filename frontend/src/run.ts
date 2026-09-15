@@ -127,12 +127,32 @@ export function reduceRunEvent(state: RunState, event: RunEvent): RunState {
       const decisions = state.decisions[event.node_id] && event.status !== "waiting_input"
         ? withoutNode(state.decisions, event.node_id)
         : state.decisions;
+      // **A node sent round again by a loop starts empty.** `pending` after a
+      // node has already run means `_reset_loop` reopened it for another lap,
+      // and everything assembled here belongs to the lap that just ended — the
+      // streamed text, the tool chip, the todos. Carrying them over would show
+      // lap one's transcript under lap two's header, which is the one way this
+      // surface can lie about what a machine is doing right now. The artifact
+      // is dropped with them: the worktree event is re-emitted only if a new
+      // worktree is cut, and this node is reusing the warm one.
+      const reopened =
+        event.status === "pending" && (state.runtimes[event.node_id]?.status ?? "pending") !== "pending";
       return {
         ...state,
         decisions,
         runtimes: withNode(state.runtimes, event.node_id, {
           status: event.status,
           detail: event.detail,
+          lap: event.lap,
+          ...(reopened
+            ? {
+                text: undefined,
+                tool: null,
+                toolCount: undefined,
+                todos: undefined,
+                artifact: null,
+              }
+            : {}),
         }),
       };
     }
