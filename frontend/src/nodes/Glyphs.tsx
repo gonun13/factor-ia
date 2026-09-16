@@ -70,6 +70,17 @@ export function HumanGlyph() {
   );
 }
 
+/** Memory: a spool, because what it holds is wound up and read back later. */
+export function MemoryGlyph() {
+  return (
+    <svg viewBox="0 0 16 16" aria-hidden>
+      <ellipse cx="8" cy="4" rx="5.2" ry="2.2" {...stroke} />
+      <path d="M2.8 4v8a5.2 2.2 0 0 0 10.4 0V4" {...stroke} />
+      <path d="M2.8 8a5.2 2.2 0 0 0 10.4 0" {...stroke} />
+    </svg>
+  );
+}
+
 /** PRD: a document with a title rule and lines of requirement. */
 export function PrdGlyph() {
   return (

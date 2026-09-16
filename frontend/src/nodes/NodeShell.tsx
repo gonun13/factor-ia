@@ -22,6 +22,7 @@ import {
   AgentGlyph,
   HumanGlyph,
   InputGlyph,
+  MemoryGlyph,
   MergeGlyph,
   OutputGlyph,
   PrdGlyph,
@@ -33,6 +34,7 @@ const GLYPHS = {
   input: InputGlyph,
   agent: AgentGlyph,
   human: HumanGlyph,
+  memory: MemoryGlyph,
   output: OutputGlyph,
 } as const;
 
@@ -56,6 +58,7 @@ const TYPE_NAME = {
   input: "input",
   agent: "agent",
   human: "human",
+  memory: "memory",
   output: "output",
 } as const;
 

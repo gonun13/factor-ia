@@ -60,6 +60,7 @@ import {
   AgentGlyph,
   HumanGlyph,
   InputGlyph,
+  MemoryGlyph,
   MergeGlyph,
   OutputGlyph,
   PrdGlyph,
@@ -88,7 +89,7 @@ const DND_TYPE = "application/factoria-node";
 /**
  * What you can drag onto the line.
  *
- * Seven entries over four node types: the extras are *kinds*, which the
+ * Nine entries over five node types: the extras are *kinds*, which the
  * palette flattens on purpose. An operator choosing between "commit" and
  * "commit & merge" is making the most consequential decision on this screen,
  * and burying it in a dropdown on a node they have already placed is how it
@@ -106,6 +107,7 @@ const PALETTE: {
   { type: "agent", kind: "worker", label: "Agent", hint: "operates on a codebase", Glyph: AgentGlyph },
   { type: "agent", kind: "reviewer", label: "Reviewer", hint: "judges the work; can send it back", Glyph: ReviewerGlyph },
   { type: "human", kind: "approval", label: "Sign-off", hint: "stops the line for a person", Glyph: HumanGlyph },
+  { type: "memory", kind: "", label: "Memory", hint: "parks work for a later machine to read", Glyph: MemoryGlyph },
   { type: "output", kind: "commit", label: "Commit", hint: "a branch you can diff", Glyph: OutputGlyph },
   { type: "output", kind: "commit-push", label: "Commit & push", hint: "branch, then up to the remote", Glyph: PushGlyph },
   { type: "output", kind: "commit-merge", label: "Commit & merge", hint: "fast-forwards the base branch", Glyph: MergeGlyph },
@@ -538,6 +540,7 @@ function CanvasInner({ projectId, onBack }: { projectId: string; onBack: () => v
 const NODE_COLOUR: Record<string, string> = {
   input: "#f4b942",
   agent: "#5aa9ff",
+  memory: "#c79bff",
   output: "#6ee7a8",
 };
 

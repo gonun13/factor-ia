@@ -16,6 +16,7 @@
 
   --input: #f4b942;
   --agent: #5aa9ff;
+  --memory: #c79bff;
   --output: #6ee7a8;
   --codebase: #b79cff;
   --danger: #ff8f8f;
@@ -537,6 +538,13 @@ button:focus-visible {
 
 .type-agent {
   color: var(--agent);
+}
+
+/* Off the agent/output axis on purpose: a memory is neither a machine that does
+   work nor a thing the run produces, and colouring it like either would say it
+   is. Matches `NODE_COLOUR.memory` in FactoryCanvas, which the minimap reads. */
+.type-memory {
+  color: var(--memory);
 }
 
 .type-output {

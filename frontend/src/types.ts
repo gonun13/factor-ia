@@ -8,7 +8,13 @@
  * surface" mechanical rather than a matter of discipline (DESIGN.md).
  */
 
-export type NodeType = "input" | "agent" | "output" | "human" | "factory-ref";
+export type NodeType =
+  | "input"
+  | "agent"
+  | "output"
+  | "human"
+  | "memory"
+  | "factory-ref";
 
 /**
  * What an input node asks for, and what an output node does with the branch.
@@ -390,6 +396,27 @@ export type RunWorktree = {
   push_detail: string;
 };
 
+/**
+ * One memory node's document — where it is, what went into it, and whether it
+ * survived the run.
+ *
+ * `kept` is the cleanup policy's answer written down rather than re-derived: a
+ * memory is scratch for one run and goes with its worktrees, except on a failed
+ * run, where what the agents believed they knew is the post-mortem.
+ */
+export type RunMemory = {
+  node_id: string;
+  slug: string;
+  label: string;
+  path: string;
+  /** One per source node that wrote into it, not per write — a second lap of
+   * the same writer replaces its section rather than adding one. */
+  sections: number;
+  bytes: number;
+  truncated: boolean;
+  kept: boolean;
+};
+
 export type Run = {
   schema_version: number;
   id: string;
@@ -407,6 +434,9 @@ export type Run = {
    * dangerous wherever it appears (DESIGN.md §6). */
   dangerous: boolean;
   worktrees: RunWorktree[];
+  /** One per memory node that ran. Empty on every factory that has none, which
+   * is what makes it additive — `models.RunMemory`. */
+  memory: RunMemory[];
   created_at: string;
   started_at: string | null;
   ended_at: string | null;

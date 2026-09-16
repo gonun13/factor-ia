@@ -163,6 +163,35 @@ export function nodeKind(definition: NodeDefinition): string {
 }
 
 /**
+ * What a memory node is filed as — `memory.memory_slug`.
+ *
+ * The same ladder as the server's, mirrored rather than imported for the same
+ * reason every other rule in this file is: the canvas has to be able to say
+ * "these two memories would write to one file" before a save, and it cannot
+ * ask the server what a name will come out as without a round trip per
+ * keystroke. If the two ever disagree, the server is right and this is the bug.
+ */
+export function memorySlug(definition: NodeDefinition): string {
+  const named = definition.config?.slug;
+  const candidates = [typeof named === "string" ? named : "", definition.label];
+  for (const candidate of candidates) {
+    const slug = slugify(candidate);
+    if (slug) return slug;
+  }
+  return "";
+}
+
+function slugify(name: string): string {
+  return name
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 64)
+    .replace(/^-+|-+$/g, "");
+}
+
+/**
  * Whether this node splits its outcome across `success` and `fail` ports.
  *
  * **A question about the node, not its type**, which is why it is a function
@@ -193,6 +222,7 @@ export const DEFAULT_LABELS: Record<string, string> = {
   worker: "Agent",
   reviewer: "Reviewer",
   approval: "Sign-off",
+  memory: "Memory",
   commit: "Commit",
   "commit-push": "Commit & push",
   "commit-merge": "Commit & merge",

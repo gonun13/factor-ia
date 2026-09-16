@@ -10,7 +10,13 @@
  * orchestrator will enforce the same set server-side before it starts a run.
  */
 
-import { hasOutcomePorts, nodeKind, type FlowEdge, type FlowNode } from "./graph";
+import {
+  hasOutcomePorts,
+  memorySlug,
+  nodeKind,
+  type FlowEdge,
+  type FlowNode,
+} from "./graph";
 import {
   DEFAULT_EDGE_OUTCOME,
   DEFAULT_MAX_LAPS,
@@ -178,10 +184,86 @@ export function runProblems(
 
   const hasIncoming = new Set(edges.map((e) => e.target));
   const hasOutgoing = new Set(edges.map((e) => e.source));
+  // A memory node's two halves are named separately below, because "not on the
+  // line" is true of it and useless: what a memory is missing is a writer or a
+  // reader, and those are different mistakes with different fixes.
+  const unwritten = nodes.filter(
+    (n) => n.data.definition.type === "memory" && !hasIncoming.has(n.id),
+  );
+  for (const node of unwritten) {
+    problems.push({
+      message: `“${label(node)}” is a memory with nothing feeding it — draw a belt into it from the machine whose work it should store.`,
+      nodeIds: [node.id],
+    });
+  }
+  const unread = nodes.filter(
+    (n) => n.data.definition.type === "memory" && !hasOutgoing.has(n.id),
+  );
+  for (const node of unread) {
+    problems.push({
+      message: `“${label(node)}” is a memory nothing reads — draw a belt out of it to the machine that will use it. A memory nobody was told about saves no work.`,
+      nodeIds: [node.id],
+    });
+  }
+
+  // Who may write to a memory and who may read one — `runcheck._memory_problems`.
+  // Mirrored here rather than left to the server because these are mistakes made
+  // with a mouse, and finding out on the Run button which belt was wrong is a
+  // worse way to learn a rule than seeing it as you draw it.
+  const memories = nodes.filter((n) => n.data.definition.type === "memory");
+  const nodeById = new Map(nodes.map((n) => [n.id, n]));
+  for (const edge of edges) {
+    const source = nodeById.get(edge.source);
+    const target = nodeById.get(edge.target);
+    if (target?.data.definition.type === "memory" && source && source.data.definition.type !== "agent") {
+      problems.push({
+        message: `“${label(target)}” is fed by “${label(source)}”, which is a ${source.data.definition.type} node — a memory stores a machine’s work, so only an agent may write to one.`,
+        nodeIds: [target.id, source.id],
+      });
+    }
+    if (source?.data.definition.type === "memory" && target && target.data.definition.type !== "agent") {
+      problems.push({
+        message: `“${label(source)}” feeds “${label(target)}”, which is a ${target.data.definition.type} node — a memory hands out a reference for a machine to read, so only an agent may read one.`,
+        nodeIds: [source.id, target.id],
+      });
+    }
+  }
+
+  // An agent holding references and no task. The one that would not look
+  // broken: the server would hand it the run's raw request and run it anyway.
+  if (memories.length > 0) {
+    const memoryIds = new Set(memories.map((n) => n.id));
+    for (const node of nodes) {
+      if (node.data.definition.type !== "agent") continue;
+      const feeders = edges.filter((e) => e.target === node.id).map((e) => e.source);
+      if (feeders.length > 0 && feeders.every((id) => memoryIds.has(id))) {
+        problems.push({
+          message: `“${label(node)}” is fed only by memory, so it would be handed references and no work to do — give it a belt from the machine whose task it is continuing.`,
+          nodeIds: [node.id],
+        });
+      }
+    }
+  }
+
+  // Two memories on one name would write to one file and overwrite each other.
+  const bySlug = new Map<string, FlowNode[]>();
+  for (const node of memories) {
+    const slug = memorySlug(node.data.definition);
+    bySlug.set(slug, [...(bySlug.get(slug) ?? []), node]);
+  }
+  for (const [slug, sharing] of bySlug) {
+    if (sharing.length < 2) continue;
+    problems.push({
+      message: `${sharing.map((n) => `“${label(n)}”`).join(", ")} all come out as “${slug}”, so they would write to one file and overwrite each other. Rename one, or give it a name of its own.`,
+      nodeIds: sharing.map((n) => n.id),
+    });
+  }
+
   const orphans = nodes.filter((n) => {
     const type = n.data.definition.type;
     if (type === "input") return !hasOutgoing.has(n.id);
     if (type === "output") return !hasIncoming.has(n.id);
+    if (type === "memory") return false; // said above, in its own words
     return !hasIncoming.has(n.id) || !hasOutgoing.has(n.id);
   });
   if (orphans.length > 0) {
@@ -337,6 +419,17 @@ export function runProblems(
       } else if (node.data.definition.type === "human") {
         problems.push({
           message: `“${label(node)}” is inside a loop — it is asked again on every lap.`,
+          nodeIds: [node.id],
+          severity: "notice",
+        });
+      } else if (node.data.definition.type === "memory") {
+        // A notice, not a blocker: unlike an output node, which would commit on
+        // every lap, a memory in a loop is the shape people actually want — the
+        // writer's section is corrected rather than added to. Said out loud
+        // anyway, because "rewritten" and "accumulated" are both plausible
+        // readings of a box called Memory and only one of them is true.
+        problems.push({
+          message: `“${label(node)}” is inside the loop that “${label(source)}” closes, so each machine’s section is rewritten on every lap rather than added to.`,
           nodeIds: [node.id],
           severity: "notice",
         });
