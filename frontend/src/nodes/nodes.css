@@ -262,6 +262,45 @@
   color: var(--input);
 }
 
+/* **What is in the memory, including nothing.** In the memory colour and not in
+   a status colour: this says a shelf has something on it, not that a machine is
+   doing well — the node has no status, and a green line here would be the
+   canvas quietly promoting storage to a station on the line. */
+.filed-line {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.7rem;
+  color: var(--memory);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Faint and outlined, so "empty" is legible as a fact rather than as a warning
+   — it is the ordinary state of every memory on a canvas nobody has run yet. */
+.filed-line.is-empty {
+  color: var(--ink-faint);
+}
+
+/* A square, where a status pip is a circle. Same reason as the colour. */
+.filed-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 1px;
+  background: var(--memory);
+  flex: 0 0 auto;
+}
+
+.filed-line.is-empty .filed-dot {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--edge-strong);
+}
+
+.filed-cut {
+  color: var(--input);
+}
+
 /* The run's own branch, once it exists. */
 .slot .worktree-line {
   font-size: 0.68rem;
@@ -292,6 +331,26 @@
 
 .react-flow__edge.selected .belt-casing {
   stroke: var(--agent);
+}
+
+/* A wire to a memory. **Everything a belt is, this is not.** No casing, no
+   tread, no direction of travel: nothing moves down it and nothing waits on
+   it. It says where an answer is filed and which document a machine may read,
+   and the line runs exactly as it would if the memory were not there.
+
+   Thin, dashed and dimmed on purpose. An operator scanning a canvas is looking
+   for the line — what runs, in what order — and a wire that competed with a
+   belt for that attention would be saying something false about what it does. */
+.wire {
+  stroke: color-mix(in srgb, var(--memory) 65%, transparent);
+  stroke-width: 1.5;
+  stroke-dasharray: 3 5;
+  fill: none;
+}
+
+.react-flow__edge.selected .wire {
+  stroke: var(--memory);
+  stroke-width: 2;
 }
 
 /* The fail belt. Same casing — it is still a belt and material still moves

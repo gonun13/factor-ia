@@ -48,7 +48,9 @@ from . import events as ev
 from .adapter import RunConfig
 from .events import AgentEvent
 
-Script = Literal["success", "failure", "streaming", "verdict-pass", "verdict-fail"]
+Script = Literal[
+    "success", "failure", "streaming", "echo", "silent", "verdict-pass", "verdict-fail"
+]
 
 #: What the fake reports as the model. Deliberately not a real model id — a
 #: reader of an event log should never have to wonder whether a run was real.
@@ -219,8 +221,56 @@ def _verdict_script(word: str, reason: str):
     return script
 
 
+def echo_script(session_id: str, cwd: str, prompt: str, cost: float) -> Iterable[AgentEvent]:
+    """Say back the whole prompt, and nothing else.
+
+    What it is for: the prompt is the one thing a node *receives*, and until
+    something echoed it there was no way to assert what a machine downstream of
+    another was actually handed. A memory node's pointer block is exactly that
+    kind of claim — it is only true if it arrives — so this is the script the
+    node reading a memory wears.
+    """
+    yield _init(session_id, cwd)
+    yield ev.TextDelta(session_id=session_id, text=prompt)
+    yield ev.TurnEnd(
+        session_id=session_id,
+        model=FAKE_MODEL,
+        usage=ev.Usage(input_tokens=10, output_tokens=10),
+        total_cost_usd=cost,
+        duration_ms=10,
+        num_turns=1,
+    )
+    yield ev.Exit(session_id=session_id, cause="completed", code=0)
+
+
+def silent_script(session_id: str, cwd: str, prompt: str, cost: float) -> Iterable[AgentEvent]:
+    """A turn that completes and says nothing.
+
+    Not a failure — `cause` is `completed` and the node succeeds. It is the
+    shape of an agent that did its work with tools and never wrote a summary,
+    and it is the only way to hand a downstream node an empty belt without
+    failing the run first. What that is for: a memory with nothing to remember
+    must be a case a test can reach.
+    """
+    yield _init(session_id, cwd)
+    yield ev.TurnEnd(
+        session_id=session_id,
+        model=FAKE_MODEL,
+        usage=ev.Usage(input_tokens=10, output_tokens=0),
+        total_cost_usd=cost,
+        duration_ms=10,
+        num_turns=1,
+    )
+    yield ev.Exit(session_id=session_id, cause="completed", code=0)
+
+
 SCRIPTS: dict[str, Callable[[str, str, str, float], Iterable[AgentEvent]]] = {
     "success": success_script,
+    #: Completes without producing any text. The empty belt, without a failure.
+    "silent": silent_script,
+    # Says back what it was given, so a test can assert what a node received
+    # rather than only what it produced.
+    "echo": echo_script,
     "failure": failure_script,
     "streaming": streaming_script,
     # The two a loop is built out of. `verdict-fail` sends the work back;
@@ -288,6 +338,12 @@ class FakeRun:
         #: Every path the run actually wrote. Asserted on by the tests that
         #: prove the edits landed in the worktree and nowhere else.
         self.written: list[str] = []
+        #: The seam, as this run was given it. A fake that drops a field the
+        #: real adapter acts on is a fake the real adapter then fails against,
+        #: so everything on `RunConfig` that changes what the agent can see is
+        #: recorded here for a test to assert.
+        self.append_system_prompt = run_config.append_system_prompt
+        self.add_dirs = list(run_config.add_dirs)
 
     def __aiter__(self) -> AsyncIterator[AgentEvent]:
         return self._iterate()

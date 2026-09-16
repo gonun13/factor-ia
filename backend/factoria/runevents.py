@@ -28,8 +28,9 @@ Seven envelope types, not one with optional fields:
   because a transcript that shows a run taking the fail belt without showing
   who sent it there is unreadable.
 - `agent`      — an adapter event, verbatim, on a node.
-- `run.artifact` — a worktree was created, or a commit was made. The one event
-  that still means something after the process that wrote it is gone.
+- `run.artifact` — a worktree was created, a commit was made, or a memory was
+  written. The one event that still means something after the process that
+  wrote it is gone.
 - `run.cost`   — a **delta**, never the adapter's cumulative number. Stage 4
   recorded that `turn.end.total_cost_usd` accumulates for the process; a
   consumer that treats it as per-turn double-counts, so the orchestrator
@@ -146,9 +147,16 @@ class RunArtifactEvent(RunEventBase):
     #: operator actually wanted. A `merge` artifact is emitted *in addition to*
     #: the `push` one, because the branch really did go up as its own ref and a
     #: refused merge must not erase that from the log.
-    kind: Literal["worktree", "commit", "push", "merge"]
-    codebase_id: str
-    branch: str
+    #: `memory` joins the union on the same test the docstring sets: a memory
+    #: document is durable for the run and, when the run fails, outlives the
+    #: process that wrote it — which is the case an operator reads the log to
+    #: understand. It is the first kind with no codebase and no branch behind
+    #: it, which is why the two fields below have defaults now.
+    kind: Literal["worktree", "commit", "push", "merge", "memory"]
+    #: Defaulted rather than required since `memory`. Widening a default is
+    #: additive: every `events.jsonl` line ever written still parses.
+    codebase_id: str = ""
+    branch: str = ""
     path: str = ""
     #: The branch the worktree was cut from — `worktree.base_ref`'s answer, so
     #: usually the remote's copy of the base branch rather than whatever the
@@ -159,6 +167,15 @@ class RunArtifactEvent(RunEventBase):
     commit_sha: str | None = None
     file_count: int = 0
     detail: str = ""
+    #: Set on `memory`: the document's body in bytes, and whether the budget
+    #: cut it. Carried as numbers rather than left inside `detail`, because the
+    #: canvas puts them on the memory node itself — and a client that had to
+    #: parse a sentence to draw a node is a client that draws it wrong the day
+    #: the sentence changes. `truncated` travels with the size for the reason
+    #: the document's own frontmatter carries it: a size that might be a
+    #: ceiling and might be the whole thing is a number a reader trusts wrongly.
+    bytes: int = 0
+    truncated: bool = False
     #: Set on `push` / `merge`: the remote name, and — for a merge — the branch
     #: on it that was fast-forwarded.
     remote: str = ""

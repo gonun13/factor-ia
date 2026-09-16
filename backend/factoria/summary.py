@@ -147,6 +147,30 @@ def render(run: Run) -> str:
             lines.append("- Worktree removed; the branch is what survives.")
         lines.append("")
 
+    # Named separately from "What came out", because a memory is deliberately
+    # *not* part of the deliverable: it is scratch the run used to avoid doing
+    # work twice. It earns a place here anyway on a failed run, where what the
+    # agents believed they knew is the first thing the post-mortem asks — and
+    # that is worth nothing if finding the directory is step one.
+    if run.memory:
+        lines += ["## What it remembered", ""]
+        for record in run.memory:
+            size = f"{record.bytes / 1000:.1f} kB"
+            note = " · **truncated**" if record.truncated else ""
+            lines.append(
+                f"- **{record.label or record.slug}** (`{record.slug}`) — "
+                f"{record.sections} section(s), {size}{note}"
+            )
+            if record.kept:
+                lines.append(f"  - Kept at `{record.path}` (the container's view).")
+        if not any(record.kept for record in run.memory):
+            lines.append("")
+            lines.append(
+                "Removed with the run's worktrees — a memory is scratch for one "
+                "run, not a record of it."
+            )
+        lines.append("")
+
     lines += ["## The line", "", "| machine | kind | status | detail |", "|---|---|---|---|"]
     for node_run in run.node_runs:
         detail = (node_run.detail or "").replace("|", "\\|").replace("\n", " ")

@@ -54,7 +54,7 @@ from . import config, gitwork, skills, worktree
 from .agent.claude import PermissionDenied, resolve_permission_mode
 from .api import validate_graph
 from .discovery import discover_codebases
-from .paths import PathEscape
+from .paths import PathEscape, is_safe_name
 from . import sshkeys
 from .models import (
     INPUT_KINDS,
@@ -70,7 +70,9 @@ from .models import (
     HUMAN_KINDS,
     edge_outcome,
     has_outcome_ports,
+    ATTACHED_TYPES,
     node_kind,
+    split_edges,
     node_remote,
 )
 from . import verdict
@@ -97,11 +99,19 @@ def run_problems(
     building one — the git checks are real subprocesses, and most of what they
     guard has nothing to do with git.
     """
-    nodes, edges = factory.nodes, factory.edges
+    nodes = factory.nodes
     if not nodes:
         return ["The factory is empty — it has nothing to run."]
 
-    problems = list(validate_graph(nodes, edges))
+    # **Belts, not every edge.** Everything below this line was written before
+    # memory existed and means *the line*: what runs next, what starts it, what
+    # ends it, what may close a loop. A wire attaches a memory and does none of
+    # those, so a rule handed the whole list would say an agent whose only
+    # outgoing edge files a memory is on the line, and let a factory run that
+    # ends nowhere. `_wire_problems` is the only thing that reads `wires`.
+    edges, wires = split_edges(nodes, factory.edges)
+
+    problems = list(validate_graph(nodes, factory.edges))
     known_codebases = {
         codebase.id: codebase
         for codebase in (codebases if codebases is not None else discover_codebases())
@@ -130,6 +140,7 @@ def run_problems(
     problems += _kind_problems(nodes, label)
     problems += _outcome_problems(nodes, edges, label)
     problems += _duplicate_belt_problems(nodes, edges, label)
+    problems += _wire_problems(nodes, edges, wires, label)
 
     for node in by_type.get("agent", []):
         attached = node.definition.codebase_id
@@ -176,6 +187,11 @@ def run_problems(
     outgoing = {edge.source for edge in edges}
     for node in nodes:
         kind = node.definition.type
+        # A memory is attached to the line, never on it: it has no belts by
+        # construction, so every rule here would refuse it for being exactly
+        # what it is. `_wire_problems` asks the questions that apply to it.
+        if kind in ATTACHED_TYPES:
+            continue
         if kind == "input":
             off_line = node.id not in outgoing
         elif kind == "output":
@@ -302,6 +318,158 @@ def _outcome_problems(
                     f"way out — its belt cannot leave by {outcome!r}."
                 )
     return problems
+
+
+def _wire_problems(
+    nodes: list[Node],
+    belts: list[Edge],
+    wires: list[Edge],
+    label: Callable[[Node], str],
+) -> list[str]:
+    """What a memory may be attached to, and what it may be called.
+
+    A wire is not a belt: it files an agent's answer, or hands one a document to
+    read. It never decides what runs next, which is what makes every rule here
+    a rule about *wiring* rather than about the line.
+
+    Note what is **not** here any more. A memory no longer needs a belt in and a
+    belt out, because it is not on the line at all — the ends-of-line rules skip
+    it, and an agent whose only edges are wires is caught as off the line by the
+    ordinary orphan rule, which is the truth about it. Nor is there anything
+    about a memory's outcome port: a wire has no outcome to carry.
+    """
+    from . import memory
+
+    problems: list[str] = []
+    by_id = {node.id: node for node in nodes}
+    memories = [node for node in nodes if node.definition.type == "memory"]
+    if not memories:
+        return problems
+
+    writers: dict[str, list[Node]] = {node.id: [] for node in memories}
+    readers: dict[str, list[Node]] = {node.id: [] for node in memories}
+
+    for wire in wires:
+        source, target = by_id.get(wire.source), by_id.get(wire.target)
+        if source is None or target is None:
+            continue  # `validate_graph` already refused a dangling edge
+        # **A wire runs between an agent and a memory, in one direction or the
+        # other.** Memory to memory is the case worth naming: nothing would copy
+        # one into the other, because nothing *runs* at either end.
+        if source.definition.type == "memory" and target.definition.type == "memory":
+            problems.append(
+                f"“{label(source)}” is wired to “{label(target)}” and both are "
+                "memories — a memory is written by a machine and read by one, so "
+                "there is nothing at either end of this to do it."
+            )
+            continue
+        if target.definition.type == "memory":
+            if source.definition.type != "agent":
+                problems.append(
+                    f"“{label(target)}” is written to by “{label(source)}”, which "
+                    f"is a {source.definition.type} node — what shapes a memory is "
+                    "the contract given to the machine writing it, so only an "
+                    "agent may write one."
+                )
+            else:
+                writers[target.id].append(source)
+            if edge_outcome(wire) != DEFAULT_EDGE_OUTCOME:
+                problems.append(
+                    f"the wire from “{label(source)}” to “{label(target)}” leaves "
+                    "by an outcome port — a memory is filed whatever the machine's "
+                    "outcome, so a wire carries no outcome."
+                )
+        elif source.definition.type == "memory":
+            if target.definition.type != "agent":
+                problems.append(
+                    f"“{label(source)}” is read by “{label(target)}”, which is a "
+                    f"{target.definition.type} node — a memory hands out a "
+                    "reference for a machine to read, so only an agent may read one."
+                )
+            else:
+                readers[source.id].append(target)
+
+    # **A reader must have a writer above it on the line.** This is the one rule
+    # that has to exist *because* wires carry no ordering. A memory is filled by
+    # the machine that writes it, and that only happens if the line reaches that
+    # machine first — so a reader with no writer anywhere upstream is wiring
+    # that can never do anything, and would look at run time exactly like a
+    # memory that simply had not been written yet.
+    above = _ancestors(nodes, belts)
+    for node in memories:
+        for reader in readers[node.id]:
+            if not writers[node.id]:
+                problems.append(
+                    f"“{label(reader)}” reads “{label(node)}”, which nothing writes "
+                    "to — wire the machine whose work it should hold into it."
+                )
+                break
+            if not any(
+                writer.id in above.get(reader.id, set()) for writer in writers[node.id]
+            ):
+                names = ", ".join(f"“{label(w)}”" for w in writers[node.id])
+                problems.append(
+                    f"“{label(reader)}” reads “{label(node)}”, but {names} is not "
+                    "above it on the line — the memory would still be empty when "
+                    "it got there. A wire says where work is filed; the belts "
+                    "decide what has happened yet."
+                )
+
+    # A memory nothing reads is wiring that costs a write and saves nothing.
+    for node in memories:
+        if not readers[node.id]:
+            problems.append(
+                f"nothing reads “{label(node)}” — wire it to the machine that "
+                "should use it, or delete it. A memory nobody was told about "
+                "saves no work."
+            )
+
+    # Two memories on one name would write to one file and overwrite each other
+    # a lap at a time, and nothing downstream would notice.
+    slugs: dict[str, list[Node]] = {}
+    for node in memories:
+        slugs.setdefault(memory.memory_slug(node), []).append(node)
+    for slug, sharing in slugs.items():
+        if len(sharing) > 1:
+            names = ", ".join(f"“{label(node)}”" for node in sharing)
+            problems.append(
+                f"{names} all come out as “{slug}”, so they would write to one "
+                "file and overwrite each other. Rename one."
+            )
+        if not is_safe_name(slug):
+            problems.append(
+                f"“{label(sharing[0])}” comes out as {slug!r}, which is not a "
+                "usable file name — rename it."
+            )
+
+    return problems
+
+
+def _ancestors(nodes: list[Node], belts: list[Edge]) -> dict[str, set[str]]:
+    """Every node that can run before each node, over the belts.
+
+    Over **all** belts, back-edges included, for the same reason
+    `back_edges` computes ancestry that way: a node inside a loop really can be
+    preceded by the one below it, and a memory written on lap 1 really is there
+    on lap 2.
+    """
+    forward: dict[str, list[str]] = {node.id: [] for node in nodes}
+    for belt in belts:
+        if belt.source in forward:
+            forward[belt.source].append(belt.target)
+
+    above: dict[str, set[str]] = {node.id: set() for node in nodes}
+    for node in nodes:
+        stack, seen = [node.id], set()
+        while stack:
+            current = stack.pop()
+            for nxt in forward.get(current, ()):
+                if nxt in seen:
+                    continue
+                seen.add(nxt)
+                above.setdefault(nxt, set()).add(node.id)
+                stack.append(nxt)
+    return above
 
 
 def _duplicate_belt_problems(

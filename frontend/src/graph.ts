@@ -49,6 +49,28 @@ export type FlowNode = Node<NodeData>;
 export type FlowEdge = Edge;
 
 export const BELT_EDGE = "belt";
+/**
+ * A memory attachment. **Not a belt**, and the distinction is the whole of the
+ * memory design: a belt decides what runs next, a wire says where an answer is
+ * filed and which document a machine may read. Mirrors `models.split_edges` —
+ * an edge is a wire because of what it touches, which every reader can see,
+ * rather than because of a field somebody set.
+ */
+export const WIRE_EDGE = "wire";
+
+/** Node types attached to the line rather than standing on it. `models.ATTACHED_TYPES`. */
+export const ATTACHED_TYPES = new Set<string>(["memory"]);
+
+export function isWire(
+  edge: { source: string; target: string },
+  definitions: Map<string, NodeDefinition>,
+): boolean {
+  for (const id of [edge.source, edge.target]) {
+    const definition = definitions.get(id);
+    if (definition && ATTACHED_TYPES.has(definition.type)) return true;
+  }
+  return false;
+}
 
 export function toFlowNode(node: GraphNode): FlowNode {
   return {
@@ -81,6 +103,19 @@ export function toFlowNode(node: GraphNode): FlowNode {
  * have is untouched, and nothing here invents a port.
  */
 export function toFlowEdge(edge: GraphEdge, sources?: Map<string, NodeDefinition>): FlowEdge {
+  // A wire first, because none of a belt's normalisation applies to it: it has
+  // no outcome port to be orphaned from, and nothing travels it.
+  if (sources && isWire(edge, sources)) {
+    return {
+      id: edge.id,
+      source: edge.source,
+      target: edge.target,
+      sourceHandle: null,
+      targetHandle: edge.target_handle,
+      type: WIRE_EDGE,
+      data: { kind: edge.payload.kind, outcome: DEFAULT_EDGE_OUTCOME },
+    };
+  }
   const definition = sources?.get(edge.source);
   const orphaned =
     definition !== undefined &&
@@ -163,6 +198,35 @@ export function nodeKind(definition: NodeDefinition): string {
 }
 
 /**
+ * What a memory node is filed as — `memory.memory_slug`.
+ *
+ * Its label, slugified, and nothing else: the node has no name of its own to
+ * fall back to, because the name a person can see is the name on disk. The
+ * server ends the same ladder at the node id, which the canvas cannot
+ * usefully show, so an unnamed memory comes out as `""` here and the empty
+ * string is what the duplicate check groups on.
+ *
+ * Mirrored from the server rather than imported for the same reason every
+ * other rule in this file is: the canvas has to be able to say "these two
+ * memories would write to one file" before a save, and it cannot ask the
+ * server what a name will come out as without a round trip per keystroke. If
+ * the two ever disagree, the server is right and this is the bug.
+ */
+export function memorySlug(definition: NodeDefinition): string {
+  return slugify(definition.label);
+}
+
+function slugify(name: string): string {
+  return name
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 64)
+    .replace(/^-+|-+$/g, "");
+}
+
+/**
  * Whether this node splits its outcome across `success` and `fail` ports.
  *
  * **A question about the node, not its type**, which is why it is a function
@@ -193,15 +257,37 @@ export const DEFAULT_LABELS: Record<string, string> = {
   worker: "Agent",
   reviewer: "Reviewer",
   approval: "Sign-off",
+  memory: "Memory",
   commit: "Commit",
   "commit-push": "Commit & push",
   "commit-merge": "Commit & merge",
 };
 
+/**
+ * A default label that is not already on the canvas: "Memory", then "Memory 2".
+ *
+ * Only memories are numbered, because a memory is the only node whose label is
+ * load-bearing — it is the filename, and two that agree are refused before a
+ * run starts. Two agents both called "Agent" are fine and common, and
+ * numbering them would be noise on every drop.
+ */
+function unusedLabel(label: string, taken: FlowNode[]): string {
+  const used = new Set(taken.map((node) => node.data.definition.label.trim()));
+  if (!used.has(label)) return label;
+  // From 2, so the second one reads as the second one. No cap: a canvas with
+  // enough memories to exhaust this has a bigger problem than its labels.
+  for (let n = 2; ; n += 1) {
+    const candidate = `${label} ${n}`;
+    if (!used.has(candidate)) return candidate;
+  }
+}
+
 export function newNode(
   type: NodeType,
   position: { x: number; y: number },
   kind?: string,
+  /** What is already on the canvas, so a memory can be numbered past it. */
+  existing: FlowNode[] = [],
 ): FlowNode {
   // Written into `config` even when it is the default, so a factory file says
   // out loud what its output node does. "This one only commits" is exactly the
@@ -218,6 +304,10 @@ export function newNode(
           : type === "agent"
             ? DEFAULT_AGENT_KIND
             : "");
+  const defaultLabel = DEFAULT_LABELS[resolved] ?? DEFAULT_LABELS[type] ?? type;
+  // Against the other memories only: an agent called "Memory" collides with
+  // nothing, because only memories are filed on disk under their labels.
+  const memoryLabel = type === "memory" ? defaultLabel : "";
   return {
     id: localId("n"),
     type,
@@ -226,7 +316,12 @@ export function newNode(
     data: {
       definition: {
         type,
-        label: DEFAULT_LABELS[resolved] ?? DEFAULT_LABELS[type] ?? type,
+        label: memoryLabel
+          ? unusedLabel(
+              memoryLabel,
+              existing.filter((node) => node.data.definition.type === "memory"),
+            )
+          : defaultLabel,
         position,
         codebase_id: null,
         config: resolved ? { kind: resolved } : {},

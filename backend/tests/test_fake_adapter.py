@@ -148,3 +148,23 @@ def test_the_fake_ignores_an_appended_system_prompt() -> None:
         RunConfig(append_system_prompt="# standing instructions\n"),
     )
     assert types_of(drain(run))[-1] == "exit"
+
+
+def test_the_fake_records_the_seam_it_was_given() -> None:
+    """A fake that drops a field the real adapter acts on is a fake the real
+    adapter then fails against."""
+    run = FakeAdapter().create_run(
+        "do the thing",
+        ".",
+        RunConfig(add_dirs=["/workspace/_runs/r/_memory/index"], append_system_prompt="be brief"),
+    )
+    assert run.add_dirs == ["/workspace/_runs/r/_memory/index"]
+    assert run.append_system_prompt == "be brief"
+
+
+def test_the_echo_script_says_back_the_whole_prompt() -> None:
+    """What makes a claim about what a node *received* assertable."""
+    events = drain(FakeAdapter("echo").create_run("## Memory available — Index", "/workspace/demo"))
+    text = "".join(e.text for e in events if e.type == "text.delta")
+    assert text == "## Memory available — Index"
+    assert events[-1].cause == "completed"

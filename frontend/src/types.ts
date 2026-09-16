@@ -8,7 +8,13 @@
  * surface" mechanical rather than a matter of discipline (DESIGN.md).
  */
 
-export type NodeType = "input" | "agent" | "output" | "human" | "factory-ref";
+export type NodeType =
+  | "input"
+  | "agent"
+  | "output"
+  | "human"
+  | "memory"
+  | "factory-ref";
 
 /**
  * What an input node asks for, and what an output node does with the branch.
@@ -170,21 +176,29 @@ export type NodeRuntime = {
 };
 
 /** Something durable that now exists outside `/data` — a branch in the
- * operator's own repository. Still true after the run ends, which is why it is
- * its own event and not a line of streamed text. */
+ * operator's own repository, or a memory document on disk. Still true after
+ * the run ends, which is why it is its own event and not a line of streamed
+ * text. */
 export type RunArtifact = {
-  kind: "worktree" | "commit" | "push" | "merge";
+  kind: "worktree" | "commit" | "push" | "merge" | "memory";
   codebaseId: string;
   branch: string;
   path: string;
   baseBranch: string | null;
   baseCommit: string;
   commitSha: string | null;
+  /** Files in the commit — or, on a `memory`, sections in the document. */
   fileCount: number;
   detail: string;
   /** Set on `push` / `merge`: the remote, and the branch it fast-forwarded. */
   remote?: string;
   mergedInto?: string | null;
+  /** Set on `memory`: the document's body, and whether the budget cut it.
+   * `truncated` travels with the size for the reason the frontmatter carries
+   * it — a size that might be a ceiling and might be the whole thing is a
+   * number a reader would trust wrongly. */
+  bytes?: number;
+  truncated?: boolean;
 };
 
 export type ToolActivity = {
@@ -390,6 +404,27 @@ export type RunWorktree = {
   push_detail: string;
 };
 
+/**
+ * One memory node's document — where it is, what went into it, and whether it
+ * survived the run.
+ *
+ * `kept` is the cleanup policy's answer written down rather than re-derived: a
+ * memory is scratch for one run and goes with its worktrees, except on a failed
+ * run, where what the agents believed they knew is the post-mortem.
+ */
+export type RunMemory = {
+  node_id: string;
+  slug: string;
+  label: string;
+  path: string;
+  /** One per source node that wrote into it, not per write — a second lap of
+   * the same writer replaces its section rather than adding one. */
+  sections: number;
+  bytes: number;
+  truncated: boolean;
+  kept: boolean;
+};
+
 export type Run = {
   schema_version: number;
   id: string;
@@ -407,6 +442,9 @@ export type Run = {
    * dangerous wherever it appears (DESIGN.md §6). */
   dangerous: boolean;
   worktrees: RunWorktree[];
+  /** One per memory node that ran. Empty on every factory that has none, which
+   * is what makes it additive — `models.RunMemory`. */
+  memory: RunMemory[];
   created_at: string;
   started_at: string | null;
   ended_at: string | null;
@@ -464,7 +502,7 @@ export type RunEvent = { seq: number; run_id: string; timestamp: string } & (
   | {
       type: "run.artifact";
       node_id: string;
-      kind: "worktree" | "commit" | "push" | "merge";
+      kind: "worktree" | "commit" | "push" | "merge" | "memory";
       codebase_id: string;
       branch: string;
       path: string;
@@ -475,6 +513,8 @@ export type RunEvent = { seq: number; run_id: string; timestamp: string } & (
       detail: string;
       remote: string;
       merged_into: string | null;
+      bytes: number;
+      truncated: boolean;
     }
   | { type: "run.cost"; node_id: string; delta_usd: number; total_usd: number }
 );

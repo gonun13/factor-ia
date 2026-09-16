@@ -53,6 +53,16 @@ class RunConfig(BaseModel):
     #: every adapter, `FakeAdapter` included, know where skills live and how to
     #: parse one.
     append_system_prompt: str | None = None
+    #: Directories the agent may read and write outside its cwd — the run
+    #: memories this node's belts were drawn from (`memory.py`).
+    #:
+    #: **Orchestrator policy, never node config**, for the same reason
+    #: `append_system_prompt` carries a body and not a name: resolving what a
+    #: node is allowed to reach is a decision about the workspace, and a node
+    #: that could name its own directory would be the hole the cwd boundary
+    #: exists to close. `from_node_config` therefore takes this as an argument
+    #: and never reads it out of `config`.
+    add_dirs: list[str] = Field(default_factory=list)
 
     @classmethod
     def from_node_config(
@@ -61,6 +71,7 @@ class RunConfig(BaseModel):
         *,
         default_model: str | None = None,
         append_system_prompt: str | None = None,
+        add_dirs: list[str] | None = None,
     ) -> "RunConfig":
         """Build from an agent node's freeform `config` dict, ignoring the rest.
 
@@ -90,6 +101,8 @@ class RunConfig(BaseModel):
         # is somehow all frontmatter must not produce an empty flag.
         if append_system_prompt:
             known["append_system_prompt"] = append_system_prompt
+        if add_dirs:
+            known["add_dirs"] = list(add_dirs)
         return cls(**known)
 
 

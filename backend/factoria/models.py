@@ -34,11 +34,29 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 # Bumped when the on-disk shape changes incompatibly. Present from the first
 # file written, because adding a version field to files that lack one is the
 # migration this avoids.
+#
+# Widening `NodeType` is deliberately **not** a bump. The number is stamped on
+# every `Factory` at save, so bumping would mark factories containing no node of
+# the new type as v2 — a claim about their shape that is not true, and the first
+# thing a future migration would have to special-case. The real cost of a new
+# member is that an *older* Factor-ia cannot load the file at all (a pydantic
+# `Literal` under `extra="forbid"`), and a version number that reader never
+# checks cannot help it. Nothing in this repo reads this field; it is here for
+# the migration that changes a field's *meaning*, which is the one a reader
+# cannot detect for itself.
 SCHEMA_VERSION = 1
 
-NodeType = Literal["input", "agent", "output", "human", "factory-ref"]
-"""`input`/`agent`/`output` are live. `human` and `factory-ref` exist in the
-union with no UI and no execution support — see module docstring."""
+NodeType = Literal["input", "agent", "output", "human", "memory", "factory-ref"]
+"""`input`/`agent`/`output`/`human`/`memory` are live. `factory-ref` exists in
+the union with no UI and no execution support — see module docstring.
+
+`memory` is the one member added since this file was written, and it is a
+member rather than a kind for the reason the kind vocabularies below give in
+reverse: a kind is how one node *type* varies, and the orchestrator dispatches
+on `definition.type` (`orchestrator._run_node`). A node that parks a machine's
+output in a document and hands the next machine a pointer to it does not do an
+agent's work, an output's work, or a human's, so it has nowhere to be a kind
+*of*. See `memory.py`."""
 
 PayloadKind = Literal["text"]
 """Open question 4: freeform text for v1. A typed artifact (diff / file set /
@@ -396,6 +414,54 @@ class Edge(Base):
     payload: EdgePayload = Field(default_factory=EdgePayload)
 
 
+#: Node types that are attached to the line rather than standing on it.
+#:
+#: **The distinction the whole memory design rests on.** A belt is control flow:
+#: it decides what runs next, and a node on the end of one can gate the run or
+#: stop it. A wire is not — it says where data is filed and where it is read,
+#: and a memory on the end of one is storage the line reaches past. Storage is
+#: never the reason something runs, and never the reason something stops.
+#:
+#: Kept as a set of *types* rather than a flag on the edge because it must be
+#: impossible to disagree with: an edge is a wire because of what it touches,
+#: which every reader can see, and not because of a field somebody set.
+ATTACHED_TYPES: frozenset[str] = frozenset({"memory"})
+
+
+def is_wire(edge: "Edge", by_id: dict[str, "Node"]) -> bool:
+    """Whether this edge attaches a memory rather than carrying the line.
+
+    An edge with an end this factory does not contain is **not** a wire: a
+    dangling edge is a broken belt, and calling it a wire would hide it from
+    every rule that would otherwise refuse it.
+    """
+    for node_id in (edge.source, edge.target):
+        node = by_id.get(node_id)
+        if node is not None and node.definition.type in ATTACHED_TYPES:
+            return True
+    return False
+
+
+def split_edges(
+    nodes: list["Node"], edges: list["Edge"]
+) -> tuple[list["Edge"], list["Edge"]]:
+    """`(belts, wires)` — the line, and what is attached to it.
+
+    One function, so the walk, the run check and the canvas cannot come to
+    different conclusions about what drives a run. Every rule that was written
+    about "edges" before memory existed means *belts*, and passing it the whole
+    list is the bug this exists to make hard: an agent whose only outgoing edge
+    files a memory is not on the line, and a graph that counted that edge would
+    say it was.
+    """
+    by_id = {node.id: node for node in nodes}
+    belts: list["Edge"] = []
+    wires: list["Edge"] = []
+    for edge in edges:
+        (wires if is_wire(edge, by_id) else belts).append(edge)
+    return belts, wires
+
+
 class Port(Base):
     """A factory's declared input or output.
 
@@ -658,6 +724,35 @@ class RunWorktree(Base):
     push_detail: str = ""
 
 
+class RunMemory(Base):
+    """One memory node's document: where it is, what went into it, whether it
+    survived the run.
+
+    Persisted with the run for the same reason `RunWorktree` is: on a failed
+    run the file is *kept* on disk for the operator to read, and `run.json` is
+    where its path is written down. `kept` is the cleanup policy's answer,
+    recorded rather than re-derived (`worktree.RunWorkspaces.cleanup`).
+
+    A rendering of `memory.MemoryDoc`, which is the live record. If the two ever
+    disagree the doc is right and this is the bug.
+    """
+
+    node_id: str
+    slug: str
+    label: str = ""
+    #: `<workspace>/_runs/<run-id>/_memory/<slug>/<slug>.md`, absolute.
+    path: str
+    #: One per source node that wrote into it — not per write. A second lap of
+    #: the same writer replaces its section rather than adding one.
+    sections: int = 0
+    bytes: int = 0
+    #: True when a budget was hit and the document says so in its frontmatter.
+    #: The honesty field: a reader that cannot tell a complete memory from a cut
+    #: one will trust the gap.
+    truncated: bool = False
+    kept: bool = False
+
+
 class Run(Base):
     """One execution of a factory. `/data/runs/<run_id>/run.json`."""
 
@@ -682,6 +777,10 @@ class Run(Base):
     dangerous: bool = False
     #: One per codebase the run touched. v1 attaches one.
     worktrees: list[RunWorktree] = Field(default_factory=list)
+    #: One per memory node that ran. Empty on every run of every factory that
+    #: has none, which is what makes this additive: a `run.json` written before
+    #: this field existed loads with the default and means what it always did.
+    memory: list[RunMemory] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=utcnow)
     started_at: datetime | None = None
     ended_at: datetime | None = None
