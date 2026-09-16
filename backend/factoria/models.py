@@ -34,11 +34,29 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 # Bumped when the on-disk shape changes incompatibly. Present from the first
 # file written, because adding a version field to files that lack one is the
 # migration this avoids.
+#
+# Widening `NodeType` is deliberately **not** a bump. The number is stamped on
+# every `Factory` at save, so bumping would mark factories containing no node of
+# the new type as v2 — a claim about their shape that is not true, and the first
+# thing a future migration would have to special-case. The real cost of a new
+# member is that an *older* Factor-ia cannot load the file at all (a pydantic
+# `Literal` under `extra="forbid"`), and a version number that reader never
+# checks cannot help it. Nothing in this repo reads this field; it is here for
+# the migration that changes a field's *meaning*, which is the one a reader
+# cannot detect for itself.
 SCHEMA_VERSION = 1
 
-NodeType = Literal["input", "agent", "output", "human", "factory-ref"]
-"""`input`/`agent`/`output` are live. `human` and `factory-ref` exist in the
-union with no UI and no execution support — see module docstring."""
+NodeType = Literal["input", "agent", "output", "human", "memory", "factory-ref"]
+"""`input`/`agent`/`output`/`human`/`memory` are live. `factory-ref` exists in
+the union with no UI and no execution support — see module docstring.
+
+`memory` is the one member added since this file was written, and it is a
+member rather than a kind for the reason the kind vocabularies below give in
+reverse: a kind is how one node *type* varies, and the orchestrator dispatches
+on `definition.type` (`orchestrator._run_node`). A node that parks a machine's
+output in a document and hands the next machine a pointer to it does not do an
+agent's work, an output's work, or a human's, so it has nowhere to be a kind
+*of*. See `memory.py`."""
 
 PayloadKind = Literal["text"]
 """Open question 4: freeform text for v1. A typed artifact (diff / file set /
@@ -658,6 +676,35 @@ class RunWorktree(Base):
     push_detail: str = ""
 
 
+class RunMemory(Base):
+    """One memory node's document: where it is, what went into it, whether it
+    survived the run.
+
+    Persisted with the run for the same reason `RunWorktree` is: on a failed
+    run the file is *kept* on disk for the operator to read, and `run.json` is
+    where its path is written down. `kept` is the cleanup policy's answer,
+    recorded rather than re-derived (`worktree.RunWorkspaces.cleanup`).
+
+    A rendering of `memory.MemoryDoc`, which is the live record. If the two ever
+    disagree the doc is right and this is the bug.
+    """
+
+    node_id: str
+    slug: str
+    label: str = ""
+    #: `<workspace>/_runs/<run-id>/_memory/<slug>/<slug>.md`, absolute.
+    path: str
+    #: One per source node that wrote into it — not per write. A second lap of
+    #: the same writer replaces its section rather than adding one.
+    sections: int = 0
+    bytes: int = 0
+    #: True when a budget was hit and the document says so in its frontmatter.
+    #: The honesty field: a reader that cannot tell a complete memory from a cut
+    #: one will trust the gap.
+    truncated: bool = False
+    kept: bool = False
+
+
 class Run(Base):
     """One execution of a factory. `/data/runs/<run_id>/run.json`."""
 
@@ -682,6 +729,10 @@ class Run(Base):
     dangerous: bool = False
     #: One per codebase the run touched. v1 attaches one.
     worktrees: list[RunWorktree] = Field(default_factory=list)
+    #: One per memory node that ran. Empty on every run of every factory that
+    #: has none, which is what makes this additive: a `run.json` written before
+    #: this field existed loads with the default and means what it always did.
+    memory: list[RunMemory] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=utcnow)
     started_at: datetime | None = None
     ended_at: datetime | None = None

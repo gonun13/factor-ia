@@ -60,11 +60,16 @@ moves `refs/remotes/*` and nothing else.
 **Cleanup policy**, stated here because it is a policy and not an
 implementation detail:
 
-| run outcome | worktree | branch |
-|---|---|---|
-| `succeeded` | removed | **kept** — it is the deliverable, and the whole point of the run |
-| `failed` | **kept** at `_runs/<run-id>/…`, path reported in `summary.md` | kept |
-| `cancelled` | removed — an explicit discard is what cancel *means* | kept |
+| run outcome | worktree | memory | branch |
+|---|---|---|---|
+| `succeeded` | removed | removed | **kept** — it is the deliverable, and the whole point of the run |
+| `failed` | **kept** at `_runs/<run-id>/…`, path reported in `summary.md` | **kept** | kept |
+| `cancelled` | removed — an explicit discard is what cancel *means* | removed | kept |
+
+A run's memory (`memory.py`, `_runs/<run-id>/_memory/`) follows the worktree
+column exactly, and for the same reason: it is scratch for the run, it is worth
+nothing once the run succeeded, and it is worth everything when the run failed
+and somebody has to work out what the agents thought they knew.
 
 Branches are never deleted, by anything, ever: `gitwork` has no code path that
 deletes a ref (it refuses `-d`/`-D`/`--delete`). A cancelled run therefore
@@ -76,6 +81,7 @@ reproducible, and deleting a branch can lose a commit.
 
 from __future__ import annotations
 
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -105,22 +111,45 @@ def branch_name(factory_id: str, run_id: str) -> str:
     return f"{BRANCH_PREFIX}/{factory_id}/{run_id}"
 
 
+#: A run's own scratch, beside its worktrees rather than inside one. The
+#: separation is the point: an agent writes into its worktree and everything
+#: there is a candidate for the commit, so a document that is deliberately *not*
+#: part of the deliverable has to live somewhere a `git add` cannot reach.
+#: Underscore-prefixed so it can never collide with a codebase id, which
+#: `paths.safe_name` also permits to start with one but discovery never does.
+MEMORY_DIRNAME = "_memory"
+
+
+def run_dir(run_id: str, root: Path | None = None) -> Path:
+    """`<workspace>/_runs/<run-id>/` — everything one run owns, under one path.
+
+    The containment check lives here rather than in each caller so it is
+    exhaustive rather than hopeful, and so `summary.md` can honestly tell an
+    operator that `rm -rf _runs/<run-id>` is the whole footprint.
+    """
+    path = runs_root(root) / safe_name(run_id, "run id")
+    if not is_inside_workspace(path, root):
+        raise WorktreeError(f"run directory escapes the workspace: {path}")
+    return path
+
+
 def worktree_path(run_id: str, codebase_id: str, root: Path | None = None) -> Path:
     """`<workspace>/_runs/<run-id>/<codebase>/`, every segment validated.
 
     Both ids are minted or vouched for upstream — run ids by this process,
     codebase ids by discovery — so this is belt and braces. It is also the only
     place a worktree path is spelled, which is what lets the containment
-    assertion below be exhaustive rather than hopeful.
+    assertion in `run_dir` be exhaustive rather than hopeful.
     """
-    path = (
-        runs_root(root)
-        / safe_name(run_id, "run id")
-        / safe_name(codebase_id, "codebase id")
-    )
-    if not is_inside_workspace(path.parent.parent, root):
-        raise WorktreeError(f"worktree root escapes the workspace: {path}")
-    return path
+    return run_dir(run_id, root) / safe_name(codebase_id, "codebase id")
+
+
+def memory_dir(run_id: str, root: Path | None = None) -> Path:
+    """`<workspace>/_runs/<run-id>/_memory/` — the run's memory documents.
+
+    Never inside a worktree. See `MEMORY_DIRNAME`.
+    """
+    return run_dir(run_id, root) / MEMORY_DIRNAME
 
 
 #: Branch names we will never cut a new run from. A codebase left checked out
@@ -290,6 +319,20 @@ class RunWorkspaces:
 
     # ---- lifecycle ---------------------------------------------------------
 
+    def ensure_memory_dir(self, slug: str) -> Path:
+        """`_memory/<slug>/`, created if it is not there. Idempotent.
+
+        One directory per memory rather than one for the whole run, because the
+        agent is granted it with `--add-dir` and that flag grants a *directory*.
+        A shared `_memory/` would let any node in the run read every memory in
+        it regardless of what the operator wired, which would make the belts on
+        the canvas advisory. Per-slug makes the belt real at the filesystem
+        level for the cost of one `mkdir`.
+        """
+        path = memory_dir(self.run_id, self.root) / safe_name(slug, "memory slug")
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
     def ensure(self, codebase: Codebase) -> RunWorktree:
         """The worktree for this codebase in this run, creating it if needed.
 
@@ -435,10 +478,26 @@ class RunWorkspaces:
                 made.kept = True
                 kept.append(made)
         if not keep:
-            # The per-run directory is ours and is now empty; the `_runs` root
-            # stays so its purpose is discoverable from the host.
+            # A run's memory goes with its worktrees, by the same policy and for
+            # the same reason (module docstring). Whole-tree, because a memory
+            # is a directory of documents and an interrupted write can leave a
+            # `.tmp` beside one.
             try:
-                path = worktree_path(self.run_id, "x", self.root).parent
+                shutil.rmtree(memory_dir(self.run_id, self.root), ignore_errors=True)
+            except Exception:  # noqa: BLE001 — see docstring
+                pass
+            # The per-run directory is ours and should now be empty; the `_runs`
+            # root stays so its purpose is discoverable from the host.
+            #
+            # The emptiness guard is the safety property and it stays: something
+            # this function does not know about should be left where an operator
+            # can see it, not deleted. What it is *not* is a way to discover
+            # leftovers — it fails silently by design — so every directory this
+            # run creates has to be accounted for above. `_memory/` was not, and
+            # for as long as it was not, one memory node kept every run
+            # directory on the machine alive forever.
+            try:
+                path = run_dir(self.run_id, self.root)
                 if path.is_dir() and not any(path.iterdir()):
                     path.rmdir()
             except Exception:  # noqa: BLE001
