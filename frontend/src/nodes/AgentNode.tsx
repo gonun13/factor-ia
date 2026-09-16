@@ -21,10 +21,12 @@ import { CodebaseGlyph, ModelGlyph, SkillGlyph } from "./Glyphs";
  *
  * The skill is the third plate, and the one that says the most about what this
  * machine will do: it names the standing instructions appended to the agent's
- * system prompt on every spawn. The plate shows the chosen skill's description
- * rather than just its name, because "what is in force here" is the question a
- * canvas is read to answer, and a name alone answers it only for whoever
- * imported it.
+ * system prompt on every spawn. The plate carries the chosen skill's
+ * description as well as its name, because "what is in force here" is the
+ * question a canvas is read to answer, and a name alone answers it only for
+ * whoever imported it — but it carries it as a tooltip off the plate, so the
+ * sentence costs the machine no height and the canvas stays a canvas of
+ * chassis rather than of paragraphs.
  *
  * **The kind is not a plate, and deliberately not editable here.** What an agent
  * is for is decided when it is dropped — the palette offers a worker and a
@@ -214,6 +216,9 @@ export function AgentNode({ id, data }: NodeProps<FlowNode>) {
           className="nodrag nowheel"
           value={nodeSkill}
           aria-label="skill"
+          // The tooltip is the plate's description, so say so: a sentence that
+          // only appears on hover is no sentence at all to a screen reader.
+          aria-describedby={chosenSkill ? `skill-what-${id}` : undefined}
           onChange={(event) =>
             patch(id, {
               // The whole config respread and `undefined` on clear, exactly as
@@ -235,7 +240,11 @@ export function AgentNode({ id, data }: NodeProps<FlowNode>) {
             </option>
           ))}
         </select>
-        {chosenSkill && <span className="skill-what">{chosenSkill.description}</span>}
+        {chosenSkill && (
+          <span className="skill-what" id={`skill-what-${id}`} role="tooltip">
+            {chosenSkill.description}
+          </span>
+        )}
         {staleSkill && <span className="warn">No longer in _skills/.</span>}
       </div>
     </NodeShell>
