@@ -17,7 +17,13 @@ There are three, and two of them are lists.
 
 ## The canvas
 
-A palette on the side, machines on the sheet, belts between them. Drag a
+A palette in the top-left corner, machines on the sheet, belts between them.
+The palette is a one-row bar of five categories — **Input**, **Output**,
+**Agents**, **Human**, **Storage** — each carrying its node type's glyph in its
+node type's colour, and each dropping its machines over the canvas two across. A
+category is a folder, not a kind picker: every kind is still its own entry,
+chosen before a node is placed, so nobody drops a generic output and discovers
+later that it merges. Drag a
 **Request**, an **Agent** and a **Commit** out of the palette; drag
 handle-to-handle to belt them together; pick a codebase on the agent.
 

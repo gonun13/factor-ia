@@ -27,6 +27,20 @@ function check(label, actual, expected) {
   else passed += 1;
 }
 
+/**
+ * Open a palette group and hand back its menu.
+ *
+ * The palette is a bar of collapsed groups now, so a test reaching for an entry
+ * has to open the group holding it first. Idempotent on purpose: a group left
+ * open is not toggled shut, which is what lets a test click the same entry
+ * twice.
+ */
+async function openPalette(page, group) {
+  const trigger = page.locator(`.palette-group-trigger[data-group="${group}"]`);
+  if ((await trigger.getAttribute("aria-expanded")) !== "true") await trigger.click();
+  return page.locator(`#palette-menu-${group}`);
+}
+
 const api = (path, init) =>
   fetch(`${BASE}${path}`, {
     ...init,
@@ -78,10 +92,23 @@ try {
   await page.waitForSelector(".node.type-agent");
 
   // ---- the palette --------------------------------------------------------
+  const agentsMenu = await openPalette(page, "agents");
   check(
-    "the reviewer is in the palette, not buried in a dropdown",
-    await page.locator(".palette-item", { hasText: "Reviewer" }).count(),
+    "the reviewer is its own palette entry, not a kind picked on a placed agent",
+    await agentsMenu.locator(".palette-item", { hasText: "Reviewer" }).count(),
     1,
+  );
+  // The same invariant one category over, where it costs the most: filing the
+  // palette must stay a filing decision, never a kind picker. Three commits are
+  // three things you choose between before placing anything — a single "Output"
+  // configured afterwards is how the merging one gets picked by accident.
+  const outputMenu = await openPalette(page, "output");
+  check(
+    "the commit kinds are three separate entries",
+    await outputMenu
+      .locator(".palette-item .label")
+      .evaluateAll((els) => els.map((el) => el.textContent).sort()),
+    ["Commit", "Commit & merge", "Commit & push"],
   );
 
   // ---- the ports, which are what make a loop drawable ---------------------

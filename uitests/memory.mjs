@@ -26,6 +26,20 @@ function check(label, actual, expected) {
   else passed += 1;
 }
 
+/**
+ * Open a palette group and hand back its menu.
+ *
+ * The palette is a bar of collapsed groups now, so a test reaching for an entry
+ * has to open the group holding it first. Idempotent on purpose: a group left
+ * open is not toggled shut, which is what lets a test click the same entry
+ * twice.
+ */
+async function openPalette(page, group) {
+  const trigger = page.locator(`.palette-group-trigger[data-group="${group}"]`);
+  if ((await trigger.getAttribute("aria-expanded")) !== "true") await trigger.click();
+  return page.locator(`#palette-menu-${group}`);
+}
+
 const api = (path, init) =>
   fetch(`${BASE}${path}`, {
     ...init,
@@ -88,8 +102,10 @@ try {
 
   // ---- the machine --------------------------------------------------------
   check(
-    "Memory is in the palette",
-    await page.locator(".palette-item", { hasText: "Memory" }).count(),
+    "Memory is in the palette, under Storage",
+    await (await openPalette(page, "storage"))
+      .locator(".palette-item", { hasText: "Memory" })
+      .count(),
     1,
   );
   check(
@@ -137,7 +153,10 @@ try {
   // two and met that refusal would be fixing something the canvas could have
   // never done. Dropped against "Codebase index", which is a memory but not a
   // "Memory", so the first one here is still the unnumbered one.
-  const palette = page.locator(".palette-item", { hasText: "Memory" });
+  // Clicking a machine deliberately leaves its category open, which is what
+  // makes dropping two in a row a two-click gesture, not a four-click one.
+  const storage = await openPalette(page, "storage");
+  const palette = storage.locator(".palette-item", { hasText: "Memory" });
   await palette.click();
   await palette.click();
   const labels = await page.locator(".node.type-memory .node-title").evaluateAll((nodes) =>

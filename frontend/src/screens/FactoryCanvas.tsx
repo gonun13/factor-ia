@@ -87,31 +87,102 @@ import type {
 const DND_TYPE = "application/factoria-node";
 
 /**
- * What you can drag onto the line.
+ * What you can drag onto the line, filed under the five node types.
  *
- * Nine entries over five node types: the extras are *kinds*, which the
- * palette flattens on purpose. An operator choosing between "commit" and
- * "commit & merge" is making the most consequential decision on this screen,
- * and burying it in a dropdown on a node they have already placed is how it
- * gets made by accident. The drag payload therefore carries both halves.
+ * Nine entries over five types: the extras are *kinds*, and every one of them
+ * is still its own palette entry. That is what the filing must not cost. An
+ * operator choosing between "commit" and "commit & merge" is making the most
+ * consequential decision on this screen, and it stays a choice made *before*
+ * placing anything, from a row of siblings. The shape to keep out is the other
+ * one: a generic "Output" you drop first and then configure from a `<select>`
+ * on the node itself, which is how the wrong one gets picked by accident. A
+ * category here is a folder, never a kind picker. The drag payload therefore
+ * still carries both halves.
+ *
+ * `type` is the node type, and it is what colours the trigger's glyph — the
+ * same glyph and the same colour the machine wears on the sheet and in the
+ * minimap, so what an operator learns while picking is what identifies the
+ * thing afterwards. Human is a category rather than a tail on the agents: it is
+ * the one machine the line cannot execute by itself.
  */
-const PALETTE: {
+type PaletteItem = {
   type: NodeType;
   kind: string;
   label: string;
   hint: string;
   Glyph: () => ReactElement;
+};
+
+const PALETTE_GROUPS: {
+  id: string;
+  label: string;
+  type: NodeType;
+  Glyph: () => ReactElement;
+  items: PaletteItem[];
 }[] = [
-  { type: "input", kind: "request", label: "Request", hint: "the task, submitted once", Glyph: InputGlyph },
-  { type: "input", kind: "prd", label: "PRD", hint: "a PRD.md, handed over whole", Glyph: PrdGlyph },
-  { type: "agent", kind: "worker", label: "Agent", hint: "operates on a codebase", Glyph: AgentGlyph },
-  { type: "agent", kind: "reviewer", label: "Reviewer", hint: "judges the work; can send it back", Glyph: ReviewerGlyph },
-  { type: "human", kind: "approval", label: "Sign-off", hint: "stops the line for a person", Glyph: HumanGlyph },
-  { type: "memory", kind: "", label: "Memory", hint: "parks work for a later machine to read", Glyph: MemoryGlyph },
-  { type: "output", kind: "commit", label: "Commit", hint: "a branch you can diff", Glyph: OutputGlyph },
-  { type: "output", kind: "commit-push", label: "Commit & push", hint: "branch, then up to the remote", Glyph: PushGlyph },
-  { type: "output", kind: "commit-merge", label: "Commit & merge", hint: "fast-forwards the base branch", Glyph: MergeGlyph },
+  {
+    id: "input",
+    label: "Input",
+    type: "input",
+    Glyph: InputGlyph,
+    items: [
+      { type: "input", kind: "request", label: "Request", hint: "the task, submitted once", Glyph: InputGlyph },
+      { type: "input", kind: "prd", label: "PRD", hint: "a PRD.md, handed over whole", Glyph: PrdGlyph },
+    ],
+  },
+  {
+    id: "output",
+    label: "Output",
+    type: "output",
+    Glyph: OutputGlyph,
+    items: [
+      { type: "output", kind: "commit", label: "Commit", hint: "a branch you can diff", Glyph: OutputGlyph },
+      { type: "output", kind: "commit-push", label: "Commit & push", hint: "branch, then up to the remote", Glyph: PushGlyph },
+      { type: "output", kind: "commit-merge", label: "Commit & merge", hint: "fast-forwards the base branch", Glyph: MergeGlyph },
+    ],
+  },
+  {
+    id: "agents",
+    label: "Agents",
+    type: "agent",
+    Glyph: AgentGlyph,
+    items: [
+      { type: "agent", kind: "worker", label: "Agent", hint: "operates on a codebase", Glyph: AgentGlyph },
+      { type: "agent", kind: "reviewer", label: "Reviewer", hint: "judges the work; can send it back", Glyph: ReviewerGlyph },
+    ],
+  },
+  {
+    id: "human",
+    label: "Human",
+    type: "human",
+    Glyph: HumanGlyph,
+    items: [
+      { type: "human", kind: "approval", label: "Sign-off", hint: "stops the line for a person", Glyph: HumanGlyph },
+    ],
+  },
+  {
+    id: "storage",
+    label: "Storage",
+    type: "memory",
+    Glyph: MemoryGlyph,
+    items: [
+      { type: "memory", kind: "", label: "Memory", hint: "parks work for a later machine to read", Glyph: MemoryGlyph },
+    ],
+  },
 ];
+
+/**
+ * Shown once, at the foot of whichever category is open.
+ *
+ * It used to sit under the flat list, where it was always on screen. Only one
+ * menu opens at a time, so putting it in each of them repeats the markup and
+ * never the pixels — and keeps the collapsed bar a single row tall, which is
+ * the whole point of the bar.
+ */
+const PALETTE_NOTE =
+  "Drag onto the line, or click to drop one in the middle. A factory starts " +
+  "with an input and ends with an output; belts carry work between machines, " +
+  "and a codebase is a property of an agent, not a belt. Select and press \u232B to remove.";
 
 export function FactoryCanvas({ projectId, onBack }: { projectId: string; onBack: () => void }) {
   return (
@@ -131,6 +202,8 @@ function CanvasInner({ projectId, onBack }: { projectId: string; onBack: () => v
   const [gitStates, setGitStates] = useState<Record<string, CodebaseGit>>({});
   const [agent, setAgent] = useState<AgentStatus | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  /** Which palette category is showing its machines; one at a time, or none. */
+  const [openGroup, setOpenGroup] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [savedAt, setSavedAt] = useState<string | null>(null);
@@ -138,6 +211,8 @@ function CanvasInner({ projectId, onBack }: { projectId: string; onBack: () => v
   const baseline = useRef<string>("");
   /** So closing the settings panel puts focus back where it came from. */
   const cogRef = useRef<HTMLButtonElement>(null);
+  /** The whole palette, so a pointer landing outside it can close the menu. */
+  const paletteRef = useRef<HTMLDivElement>(null);
   const { screenToFlowPosition, fitView } = useReactFlow<FlowNode, FlowEdge>();
 
   useEffect(() => {
@@ -290,6 +365,34 @@ function CanvasInner({ projectId, onBack }: { projectId: string; onBack: () => v
       }),
     );
   }, [run.runtimes, setNodes]);
+
+  /**
+   * Escape, or a pointer anywhere else, closes the open category.
+   *
+   * `pointerdown` rather than `click`: pressing on the sheet to pan it never
+   * produces a click, and a menu left hanging over the canvas through a pan is
+   * exactly the obstruction the bar exists to remove. Escape puts focus back on
+   * the trigger, the way the settings panel returns it to the cog.
+   */
+  useEffect(() => {
+    if (openGroup === null) return;
+    const onPointerDown = (event: PointerEvent) => {
+      if (!paletteRef.current?.contains(event.target as Node)) setOpenGroup(null);
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      paletteRef.current
+        ?.querySelector<HTMLButtonElement>(`[data-group="${openGroup}"]`)
+        ?.focus();
+      setOpenGroup(null);
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [openGroup]);
 
   const onConnect = useCallback(
     (connection: Connection) =>
@@ -457,47 +560,90 @@ function CanvasInner({ projectId, onBack }: { projectId: string; onBack: () => v
                 nodeColor={(node: FlowNode) => NODE_COLOUR[node.data.definition.type] ?? "#3a4558"}
               />
 
+              {/* A bar, not the column it was: collapsed it is one row in the
+                  corner, and the sheet keeps its left edge. */}
               <Panel position="top-left">
-                <div className="panel palette">
+                <div className="panel palette" ref={paletteRef}>
                   <span className="eyebrow">Machines</span>
-                  {PALETTE.map(({ type, kind, label, hint, Glyph }) => (
-                    <button
-                      key={`${type}:${kind}`}
-                      className={`palette-item type-${type}${kind ? ` kind-${kind}` : ""}`}
-                      draggable
-                      onDragStart={(event) => {
-                        event.dataTransfer.setData(DND_TYPE, `${type}:${kind}`);
-                        event.dataTransfer.effectAllowed = "copy";
-                      }}
-                      onClick={(event) => {
-                        const box = event.currentTarget
-                          .closest(".canvas-wrap")
-                          ?.getBoundingClientRect();
-                        addNode(
-                          type,
-                          kind,
-                          (box?.left ?? 0) + (box?.width ?? 800) / 2,
-                          (box?.top ?? 0) + (box?.height ?? 600) / 2,
-                        );
-                      }}
-                    >
-                      <span className="glyph">
-                        <Glyph />
-                      </span>
-                      <span>
-                        <span className="label" style={{ display: "block", color: "var(--ink)" }}>
-                          {label}
-                        </span>
-                        <span className="hint">{hint}</span>
-                      </span>
-                    </button>
-                  ))}
-                  <p className="palette-note">
-                    Drag onto the line, or click to drop one in the middle. A
-                    factory starts with an input and ends with an output; belts
-                    carry work between machines, and a codebase is a property of
-                    an agent, not a belt. Select and press ⌫ to remove.
-                  </p>
+                  <div className="palette-groups">
+                    {PALETTE_GROUPS.map((group) => {
+                      const open = openGroup === group.id;
+                      return (
+                        <div className="palette-group" key={group.id}>
+                          <button
+                            className="palette-group-trigger"
+                            data-group={group.id}
+                            aria-expanded={open}
+                            aria-controls={`palette-menu-${group.id}`}
+                            onClick={() => setOpenGroup(open ? null : group.id)}
+                          >
+                            {/* The colour rides on the glyph, never the button:
+                                a `type-*` class here would repaint the label
+                                too, and five differently-coloured words read as
+                                five states rather than five categories. */}
+                            <span className={`glyph type-${group.type}`}>
+                              <group.Glyph />
+                            </span>
+                            {group.label}
+                            <span className="caret" aria-hidden="true">
+                              ▾
+                            </span>
+                          </button>
+                          {open && (
+                            // `nowheel`/`nopan`: the machines float over the
+                            // sheet, and scrolling them must not zoom the graph
+                            // behind them.
+                            <div
+                              className="palette-menu panel nowheel nopan"
+                              id={`palette-menu-${group.id}`}
+                            >
+                              <div className="palette-grid">
+                                {group.items.map(({ type, kind, label, hint, Glyph }) => (
+                                  <button
+                                    key={`${type}:${kind}`}
+                                    className={`palette-item type-${type}${kind ? ` kind-${kind}` : ""}`}
+                                    draggable
+                                    onDragStart={(event) => {
+                                      event.dataTransfer.setData(DND_TYPE, `${type}:${kind}`);
+                                      event.dataTransfer.effectAllowed = "copy";
+                                    }}
+                                    // On `dragend`, never `dragstart`: unmounting
+                                    // the drag source mid-gesture cancels the drag
+                                    // in Chromium, so the menu has to outlive the
+                                    // drag it started. A *click* leaves it open —
+                                    // the pointer has not gone anywhere, and that
+                                    // is the path an operator dropping three
+                                    // memories in a row is on.
+                                    onDragEnd={() => setOpenGroup(null)}
+                                    onClick={(event) => {
+                                      const box = event.currentTarget
+                                        .closest(".canvas-wrap")
+                                        ?.getBoundingClientRect();
+                                      addNode(
+                                        type,
+                                        kind,
+                                        (box?.left ?? 0) + (box?.width ?? 800) / 2,
+                                        (box?.top ?? 0) + (box?.height ?? 600) / 2,
+                                      );
+                                    }}
+                                  >
+                                    <span className="glyph">
+                                      <Glyph />
+                                    </span>
+                                    <span className="palette-item-text">
+                                      <span className="label">{label}</span>
+                                      <span className="hint">{hint}</span>
+                                    </span>
+                                  </button>
+                                ))}
+                              </div>
+                              <p className="palette-note">{PALETTE_NOTE}</p>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
                 </div>
               </Panel>
             </ReactFlow>
@@ -542,6 +688,10 @@ const NODE_COLOUR: Record<string, string> = {
   input: "#f4b942",
   agent: "#5aa9ff",
   memory: "#c79bff",
+  // Was falling through to the generic slate, which put the one node a person
+  // has to attend to on the minimap as unremarkable grey. Keep in step with
+  // `--human` in index.css.
+  human: "#f58fb5",
   output: "#6ee7a8",
 };
 

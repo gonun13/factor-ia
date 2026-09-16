@@ -32,6 +32,20 @@ function check(label, actual, expected) {
   else passed += 1;
 }
 
+/**
+ * Open a palette group and hand back its menu.
+ *
+ * The palette is a bar of collapsed groups now, so a test reaching for an entry
+ * has to open the group holding it first. Idempotent on purpose: a group left
+ * open is not toggled shut, which is what lets a test click the same entry
+ * twice.
+ */
+async function openPalette(page, group) {
+  const trigger = page.locator(`.palette-group-trigger[data-group="${group}"]`);
+  if ((await trigger.getAttribute("aria-expanded")) !== "true") await trigger.click();
+  return page.locator(`#palette-menu-${group}`);
+}
+
 const api = (path, init) =>
   fetch(`${BASE}${path}`, {
     ...init,
@@ -98,7 +112,10 @@ try {
   await page.waitForSelector(".node.type-human");
 
   // ---- the node, and the palette it comes from ----------------------------
-  check("the palette offers a human node", await page.getByRole("button", { name: /^Sign-off/ }).count(), 1);
+  // Its own category, not a tail on the agents: this is the one machine the
+  // line cannot execute by itself.
+  const humanMenu = await openPalette(page, "human");
+  check("the palette offers a human node", await humanMenu.getByRole("button", { name: /^Sign-off/ }).count(), 1);
   check("the human node renders with its own chassis", await page.locator(".node.type-human").count(), 1);
   check("…and says what kind it is", (await page.locator(".node.type-human .eyebrow").innerText()).toLowerCase(), "sign-off");
   check("…and carries the question as an editable field", await page.locator('.node.type-human input[aria-label="what to ask the operator"]').inputValue(), "Does this look right?");

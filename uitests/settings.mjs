@@ -24,6 +24,20 @@ function check(label, actual, expected) {
   else passed += 1;
 }
 
+/**
+ * Open a palette group and hand back its menu.
+ *
+ * The palette is a bar of collapsed groups now, so a test reaching for an entry
+ * has to open the group holding it first. Idempotent on purpose: a group left
+ * open is not toggled shut, which is what lets a test click the same entry
+ * twice.
+ */
+async function openPalette(page, group) {
+  const trigger = page.locator(`.palette-group-trigger[data-group="${group}"]`);
+  if ((await trigger.getAttribute("aria-expanded")) !== "true") await trigger.click();
+  return page.locator(`#palette-menu-${group}`);
+}
+
 // The Origin check in `security.py` covers every mutating request, so a bare
 // fetch from node has to name one the server accepts.
 const api = (path, init) =>
@@ -48,8 +62,11 @@ try {
 
   await page.goto(`${BASE}/#/p/${PROJECT}`, { waitUntil: "networkidle" });
   // A fresh project's factory is empty, so drop an agent from the palette —
-  // the model slot is what this file is about.
-  await page.getByRole("button", { name: /^Agent/ }).click();
+  // the model slot is what this file is about. Scoped to the open menu because
+  // the group's own trigger is called "Agents", which /^Agent/ also matches.
+  await (await openPalette(page, "agents"))
+    .getByRole("button", { name: /^Agent/ })
+    .click();
   await page.waitForSelector(".slot.model");
 
   const slot = page.locator(".slot.model");
