@@ -110,12 +110,50 @@ try {
   );
   check("the three belts are still belts", await page.locator(".belt-casing").count(), 3);
 
-  // The name it is filed as, derived from the label rather than invented.
+  // **One name, and it is the one on the chassis.** A memory has no
+  // configuration: the label is the filename and is what the reader sees in
+  // the pointer, so a second field here would only be a way for the name a
+  // person reads and the name on disk to disagree. The run assertion at the
+  // bottom of this file is what ties this label to `codebase-index` on disk.
   check(
-    "the name it will be filed as is shown, not left to be guessed",
-    await page.locator(".node.type-memory .slot input").getAttribute("placeholder"),
-    "codebase-index",
+    "the label is the whole of it",
+    await page.locator(".node.type-memory .node-title").inputValue(),
+    "Codebase index",
   );
+  check("it has nothing to configure", await page.locator(".node.type-memory .slot").count(), 0);
+
+  // **Empty is a thing to say, not a thing to leave out.** A node that only
+  // ever spoke up when it held something would leave a reader deciding between
+  // "nothing was filed" and "the canvas does not show that" — and the second
+  // reading is what sends someone to the filesystem to find out.
+  check(
+    "a memory nothing has been filed in says so",
+    await page.locator(".node.type-memory .filed-line").innerText(),
+    "empty",
+  );
+
+  // **The names have to be unique, so the palette makes them unique.** Two
+  // memories on one name are refused before a run starts; a person who dropped
+  // two and met that refusal would be fixing something the canvas could have
+  // never done. Dropped against "Codebase index", which is a memory but not a
+  // "Memory", so the first one here is still the unnumbered one.
+  const palette = page.locator(".palette-item", { hasText: "Memory" });
+  await palette.click();
+  await palette.click();
+  const labels = await page.locator(".node.type-memory .node-title").evaluateAll((nodes) =>
+    nodes.map((node) => node.value).sort(),
+  );
+  check("a second Memory is numbered past the first", labels, [
+    "Codebase index",
+    "Memory",
+    "Memory 2",
+  ]);
+  check("…and the canvas is not refusing them", await page.locator(".problem.blocker").count(), 0);
+
+  // Back to the saved graph: those two were never saved, and nothing below
+  // this line expects them.
+  await page.reload({ waitUntil: "networkidle" });
+  await page.waitForSelector(".node.type-memory");
 
   check("nothing blocks this factory", await page.locator(".problem.blocker").count(), 0);
 
@@ -164,6 +202,23 @@ try {
   await page.waitForSelector('.runbox[data-run-status="succeeded"]', { timeout: 120_000 });
   // A memory has no status, because it never runs. A pip on it would be the
   // canvas claiming storage is a station on the line.
+  // **What is in it, on it.** The one question worth asking of a shelf, and
+  // one a run otherwise answers only in a file nobody on this screen has a
+  // path to. Shown without ever becoming a status — see the next check.
+  // Shape, not the number: the size is whatever the fake writer had to say,
+  // and pinning it here would make this test fail on a reworded fixture.
+  check(
+    "…and the same line names what was filed once something is",
+    /^1 section · \d+(\.\d)? [kM]?B$/.test(
+      await page.locator(".node.type-memory .filed-line").innerText(),
+    ),
+    true,
+  );
+  check(
+    "…and the footer says so as storage, not as a worktree",
+    await page.locator(".branchline .memory").innerText(),
+    "▣ filed 1 section",
+  );
   check(
     "the memory never gets a status of its own",
     await page.locator(".node.type-memory").getAttribute("data-status"),

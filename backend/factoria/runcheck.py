@@ -434,13 +434,12 @@ def _wire_problems(
             names = ", ".join(f"“{label(node)}”" for node in sharing)
             problems.append(
                 f"{names} all come out as “{slug}”, so they would write to one "
-                "file and overwrite each other. Rename one, or give it a name of "
-                "its own."
+                "file and overwrite each other. Rename one."
             )
         if not is_safe_name(slug):
             problems.append(
                 f"“{label(sharing[0])}” comes out as {slug!r}, which is not a "
-                "usable file name — rename it, or give it a name of its own."
+                "usable file name — rename it."
             )
 
     return problems

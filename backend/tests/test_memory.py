@@ -101,16 +101,20 @@ def test_an_unusable_slug_is_refused_before_it_reaches_the_filesystem(tmp_path):
         memory.memory_path("run-1", "../escape", tmp_path)
 
 
-def test_the_slug_falls_back_from_config_to_label_to_something_usable():
-    def node(config, label=""):
-        return Node(
-            id="n-mem-1",
-            definition=NodeDefinition(type="memory", label=label, config=config),
-        )
+def test_the_slug_is_the_label_and_falls_back_to_the_node_id():
+    def node(label="", config=None):
+        return NodeDefinition(type="memory", label=label, config=config or {})
 
-    assert memory.memory_slug(node({"slug": "plan-notes"}, "Codebase Index")) == "plan-notes"
-    assert memory.memory_slug(node({}, "Codebase Index")) == "codebase-index"
-    assert memory.memory_slug(node({}, "")) == "n-mem-1"
+    def on_canvas(label="", config=None):
+        return Node(id="n-mem-1", definition=node(label, config))
+
+    assert memory.memory_slug(on_canvas("Codebase Index")) == "codebase-index"
+    assert memory.memory_slug(on_canvas("")) == "n-mem-1"
+    # A memory has no configuration. A `slug` key left in an older factory
+    # file is inert rather than a second name competing with the label.
+    assert memory.memory_slug(on_canvas("Codebase Index", {"slug": "plan-notes"})) == (
+        "codebase-index"
+    )
 
 
 # ---- the section table ------------------------------------------------------

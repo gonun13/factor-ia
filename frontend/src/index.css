@@ -649,6 +649,12 @@ button:focus-visible {
   color: var(--agent);
 }
 
+/* In the memory colour, matching the node it belongs to and matching nothing
+   the run's outcome is drawn in — a filed memory is not a result. */
+.runbox .branchline .memory {
+  color: var(--memory);
+}
+
 /* Anything bypassPermissions-shaped is rendered as dangerous whenever it is
    active (DESIGN.md, Non-functional requirements). */
 .runbox .branchline .danger {

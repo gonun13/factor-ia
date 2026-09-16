@@ -182,10 +182,19 @@ def test_the_memory_is_recorded_on_the_run_and_in_the_log(
     assert record.bytes > 0 and record.truncated is False
 
     events = [e for e in RunLog(run.id).read(0) if e.get("type") == "run.artifact"]
-    assert any(e["kind"] == "memory" and e["path"] == record.path for e in events)
+    filed = next(e for e in events if e["kind"] == "memory")
+    assert filed["path"] == record.path
+    # The size and the cut, as numbers. The canvas draws them on the memory
+    # node itself, and a client that had to parse `detail` to do it would draw
+    # the node wrong the day that sentence changes.
+    assert (filed["file_count"], filed["bytes"], filed["truncated"]) == (
+        record.sections,
+        record.bytes,
+        False,
+    )
 
 
-def test_a_slug_on_the_node_names_the_file(
+def test_the_label_names_the_file(
     test_store: Store, orch: Orchestrator, repo: Path
 ) -> None:
     save(
@@ -193,7 +202,7 @@ def test_a_slug_on_the_node_names_the_file(
         [
             node("n-in", "input"),
             agent("n-write"),
-            mem("n-mem", "Codebase index", slug="plan-notes"),
+            mem("n-mem", "Plan notes"),
             agent("n-read", fake_script="echo"),
             node("n-out", "output"),
         ],

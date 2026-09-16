@@ -188,7 +188,7 @@ def test_two_memories_that_land_on_one_name_are_refused(repo: Path) -> None:
     assert any("codebase-index" in p for p in found), found
 
 
-def test_a_name_on_one_of_them_settles_it(repo: Path) -> None:
-    nodes, edges = canonical([mem("n-mem-2", "Codebase index", slug="plan-notes")])
+def test_a_different_label_on_one_of_them_settles_it(repo: Path) -> None:
+    nodes, edges = canonical([mem("n-mem-2", "Plan notes")])
     edges += [wire("n-write", "n-mem-2"), wire("n-mem-2", "n-read")]
     assert problems(nodes, edges, repo) == []

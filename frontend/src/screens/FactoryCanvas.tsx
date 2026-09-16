@@ -306,7 +306,7 @@ function CanvasInner({ projectId, onBack }: { projectId: string; onBack: () => v
       // rather than on its top-left corner.
       setNodes((existing) => [
         ...existing.map((node) => ({ ...node, selected: false })),
-        newNode(type, { x: position.x - 120, y: position.y - 40 }, kind || undefined),
+        newNode(type, { x: position.x - 120, y: position.y - 40 }, kind || undefined, existing),
       ]);
     },
     [screenToFlowPosition, setNodes],
@@ -354,8 +354,9 @@ function CanvasInner({ projectId, onBack }: { projectId: string; onBack: () => v
         default_model: null,
       },
       skills,
+      memories: run.memories,
     }),
-    [codebases, gitStates, invalid, patch, agent, project, skills],
+    [codebases, gitStates, invalid, patch, agent, project, skills, run.memories],
   );
 
   return (
@@ -615,6 +616,13 @@ function RunBox({
           )}
           {run.artifacts.map((artifact) => {
             const key = `${artifact.kind}-${artifact.commitSha ?? artifact.path}`;
+            // Memories are drawn below, off `run.memories` — one line per
+            // memory node rather than one per write. Skipped here so they do
+            // not also fall through to the default below, which would announce
+            // an "isolated worktree" every time a document was filed: the one
+            // artifact kind with no worktree and no branch behind it,
+            // described as the thing it is not.
+            if (artifact.kind === "memory") return null;
             if (artifact.kind === "commit") {
               return (
                 <span key={key} className="commit">
@@ -645,6 +653,14 @@ function RunBox({
               </span>
             );
           })}
+          {/* One per memory node that has anything in it, in node order and
+              not in write order: this is a shelf's contents, and a shelf
+              written to four times is still one shelf. */}
+          {Object.entries(run.memories).map(([nodeId, filed]) => (
+            <span key={`memory-${nodeId}`} className="memory" title={filed.path}>
+              ▣ filed {filed.fileCount} section{filed.fileCount === 1 ? "" : "s"}
+            </span>
+          ))}
         </p>
       )}
 

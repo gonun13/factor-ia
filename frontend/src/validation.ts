@@ -303,7 +303,7 @@ export function runProblems(
   for (const [slug, sharing] of bySlug) {
     if (sharing.length < 2) continue;
     problems.push({
-      message: `${sharing.map((n) => `“${label(n)}”`).join(", ")} all come out as “${slug}”, so they would write to one file and overwrite each other. Rename one, or give it a name of its own.`,
+      message: `${sharing.map((n) => `“${label(n)}”`).join(", ")} all come out as “${slug}”, so they would write to one file and overwrite each other. Rename one.`,
       nodeIds: sharing.map((n) => n.id),
     });
   }

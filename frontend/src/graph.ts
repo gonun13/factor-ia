@@ -200,20 +200,20 @@ export function nodeKind(definition: NodeDefinition): string {
 /**
  * What a memory node is filed as — `memory.memory_slug`.
  *
- * The same ladder as the server's, mirrored rather than imported for the same
- * reason every other rule in this file is: the canvas has to be able to say
- * "these two memories would write to one file" before a save, and it cannot
- * ask the server what a name will come out as without a round trip per
- * keystroke. If the two ever disagree, the server is right and this is the bug.
+ * Its label, slugified, and nothing else: the node has no name of its own to
+ * fall back to, because the name a person can see is the name on disk. The
+ * server ends the same ladder at the node id, which the canvas cannot
+ * usefully show, so an unnamed memory comes out as `""` here and the empty
+ * string is what the duplicate check groups on.
+ *
+ * Mirrored from the server rather than imported for the same reason every
+ * other rule in this file is: the canvas has to be able to say "these two
+ * memories would write to one file" before a save, and it cannot ask the
+ * server what a name will come out as without a round trip per keystroke. If
+ * the two ever disagree, the server is right and this is the bug.
  */
 export function memorySlug(definition: NodeDefinition): string {
-  const named = definition.config?.slug;
-  const candidates = [typeof named === "string" ? named : "", definition.label];
-  for (const candidate of candidates) {
-    const slug = slugify(candidate);
-    if (slug) return slug;
-  }
-  return "";
+  return slugify(definition.label);
 }
 
 function slugify(name: string): string {
@@ -263,10 +263,31 @@ export const DEFAULT_LABELS: Record<string, string> = {
   "commit-merge": "Commit & merge",
 };
 
+/**
+ * A default label that is not already on the canvas: "Memory", then "Memory 2".
+ *
+ * Only memories are numbered, because a memory is the only node whose label is
+ * load-bearing — it is the filename, and two that agree are refused before a
+ * run starts. Two agents both called "Agent" are fine and common, and
+ * numbering them would be noise on every drop.
+ */
+function unusedLabel(label: string, taken: FlowNode[]): string {
+  const used = new Set(taken.map((node) => node.data.definition.label.trim()));
+  if (!used.has(label)) return label;
+  // From 2, so the second one reads as the second one. No cap: a canvas with
+  // enough memories to exhaust this has a bigger problem than its labels.
+  for (let n = 2; ; n += 1) {
+    const candidate = `${label} ${n}`;
+    if (!used.has(candidate)) return candidate;
+  }
+}
+
 export function newNode(
   type: NodeType,
   position: { x: number; y: number },
   kind?: string,
+  /** What is already on the canvas, so a memory can be numbered past it. */
+  existing: FlowNode[] = [],
 ): FlowNode {
   // Written into `config` even when it is the default, so a factory file says
   // out loud what its output node does. "This one only commits" is exactly the
@@ -283,6 +304,10 @@ export function newNode(
           : type === "agent"
             ? DEFAULT_AGENT_KIND
             : "");
+  const defaultLabel = DEFAULT_LABELS[resolved] ?? DEFAULT_LABELS[type] ?? type;
+  // Against the other memories only: an agent called "Memory" collides with
+  // nothing, because only memories are filed on disk under their labels.
+  const memoryLabel = type === "memory" ? defaultLabel : "";
   return {
     id: localId("n"),
     type,
@@ -291,7 +316,12 @@ export function newNode(
     data: {
       definition: {
         type,
-        label: DEFAULT_LABELS[resolved] ?? DEFAULT_LABELS[type] ?? type,
+        label: memoryLabel
+          ? unusedLabel(
+              memoryLabel,
+              existing.filter((node) => node.data.definition.type === "memory"),
+            )
+          : defaultLabel,
         position,
         codebase_id: null,
         config: resolved ? { kind: resolved } : {},

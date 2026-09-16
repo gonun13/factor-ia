@@ -47,6 +47,18 @@ export type RunState = {
   /** The branch this run owns, and the commit it produced. Survives the run —
    * it names a ref in the operator's own repository. */
   artifacts: RunArtifact[];
+  /**
+   * What each memory node has filed, by node id — the **latest** state of the
+   * document, not one entry per write.
+   *
+   * A map beside `artifacts` rather than a filter over it: a memory is written
+   * again on every lap of a loop and by every writer wired into it, so the
+   * append-only list holds several entries for one node, all but the last of
+   * them stale. The node on the canvas wants the current size, and a footer
+   * that listed the same memory four times would be counting writes rather
+   * than showing storage.
+   */
+  memories: Record<string, RunArtifact>;
   /** The human nodes the walk is parked on, by node id.
    *
    * Driven by `run.decision.request` rather than by the run record, which is a
@@ -67,6 +79,7 @@ const EMPTY: RunState = {
   runtimes: {},
   costUsd: 0,
   artifacts: [],
+  memories: {},
   decisions: {},
   problems: [],
   error: null,
@@ -204,12 +217,21 @@ export function reduceRunEvent(state: RunState, event: RunEvent): RunState {
         detail: event.detail,
         remote: event.remote,
         mergedInto: event.merged_into,
+        bytes: event.bytes,
+        truncated: event.truncated,
       };
       return {
         ...state,
         // Kept in arrival order, worktree before commit — a replay of the log
         // and a live run therefore produce the same list.
         artifacts: [...state.artifacts, artifact],
+        // Last write wins, which is the whole point of the map: lap 2 of a
+        // writer replaces its section in the document, so lap 2's size is the
+        // document's size and lap 1's is a number that was never true again.
+        memories:
+          event.kind === "memory"
+            ? { ...state.memories, [event.node_id]: artifact }
+            : state.memories,
         // **Only onto a machine that is running.** A `memory` artifact names a
         // node that never runs and has no status of its own, and creating a
         // runtime for it here would put a pip on the canvas and a thread in the

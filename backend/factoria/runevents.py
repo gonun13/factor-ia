@@ -167,6 +167,15 @@ class RunArtifactEvent(RunEventBase):
     commit_sha: str | None = None
     file_count: int = 0
     detail: str = ""
+    #: Set on `memory`: the document's body in bytes, and whether the budget
+    #: cut it. Carried as numbers rather than left inside `detail`, because the
+    #: canvas puts them on the memory node itself — and a client that had to
+    #: parse a sentence to draw a node is a client that draws it wrong the day
+    #: the sentence changes. `truncated` travels with the size for the reason
+    #: the document's own frontmatter carries it: a size that might be a
+    #: ceiling and might be the whole thing is a number a reader trusts wrongly.
+    bytes: int = 0
+    truncated: bool = False
     #: Set on `push` / `merge`: the remote name, and — for a merge — the branch
     #: on it that was fast-forwarded.
     remote: str = ""

@@ -82,6 +82,15 @@ and it has no ports. A machine whose only connections are wires is off the line
 `/workspace/_runs/<run-id>/_memory/<slug>/<slug>.md`, one directory per memory.
 It is readable by the same frontmatter parser skills use.
 
+The slug is **the node's label**, slugified, and there is nothing else to set:
+a memory node has no configuration. The name on the chassis is the filename and
+is what a reader sees in the pointer, so one name is all there is for the three
+to agree on. It falls back to the node id, so a memory dropped and left unnamed
+still runs. Two memories that come out with the same slug would write to one
+file, so `runcheck` refuses them before a run starts — and the palette numbers a
+new node past the memories already on the canvas ("Memory", then "Memory 2"),
+so that refusal is one nobody meets by accident.
+
 ```markdown
 ---
 memory: codebase-index
@@ -118,6 +127,31 @@ correction, and a planner reading a stale index directly above a fresh one is
 worse than no cache at all. A memory whose writer is inside a loop is therefore
 rewritten, not accumulated; the canvas says so as a notice when you draw one.
 (The memory itself is never "inside" anything — it is not on the line.)
+
+## On the canvas
+
+A memory node shows **what is in it**, in both directions: `empty` until
+something is filed, then the sections and the size of the document, in the
+memory colour, with the path in the tooltip. Empty is said out loud rather than
+left blank — a node that spoke up only when it held something would leave a
+reader deciding between "nothing was filed" and "the canvas does not show
+that", and the second reading is what sends someone to the filesystem.
+It arrives on the `run.artifact` event the writer emits (`kind: "memory"`,
+carrying `file_count`, `bytes` and `truncated` as numbers, so a client never
+has to parse `detail` to draw a node), and the run footer gets one line per
+memory beside the branch.
+
+It is deliberately **not a status**. A memory has no `runtime` and never gets
+one: a runtime is what the walk gives a machine it ran, and inventing one here
+would light a pip on the canvas and open a thread in the run log for a node the
+walk never reaches — the canvas claiming storage is a station on the line. The
+filed line is the other question, the one worth asking of a shelf: is there
+anything on it, and how much. The pip stays dark on a memory that has just been
+filled, and the size is a ceiling rather than a total whenever `truncated` is
+set.
+
+What the node does *not* claim is that the file is still there after the run —
+the cleanup policy below decides that, and the node's own note says it.
 
 ## What the agents are told
 

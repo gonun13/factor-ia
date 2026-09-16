@@ -249,6 +249,45 @@
   color: var(--input);
 }
 
+/* **What is in the memory, including nothing.** In the memory colour and not in
+   a status colour: this says a shelf has something on it, not that a machine is
+   doing well — the node has no status, and a green line here would be the
+   canvas quietly promoting storage to a station on the line. */
+.filed-line {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.7rem;
+  color: var(--memory);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Faint and outlined, so "empty" is legible as a fact rather than as a warning
+   — it is the ordinary state of every memory on a canvas nobody has run yet. */
+.filed-line.is-empty {
+  color: var(--ink-faint);
+}
+
+/* A square, where a status pip is a circle. Same reason as the colour. */
+.filed-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 1px;
+  background: var(--memory);
+  flex: 0 0 auto;
+}
+
+.filed-line.is-empty .filed-dot {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--edge-strong);
+}
+
+.filed-cut {
+  color: var(--input);
+}
+
 /* The run's own branch, once it exists. */
 .slot .worktree-line {
   font-size: 0.68rem;

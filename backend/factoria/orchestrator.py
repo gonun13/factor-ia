@@ -1029,6 +1029,8 @@ class Orchestrator:
                     kind="memory",
                     path=str(path),
                     file_count=len(doc.sections),
+                    bytes=record.bytes,
+                    truncated=record.truncated,
                     detail=f"{slug} · {record.bytes} bytes",
                 )
             )

@@ -15,6 +15,7 @@ import type {
   ModelOffer,
   NodeDefinition,
   ProjectSettings,
+  RunArtifact,
   SkillSummary,
 } from "./types";
 
@@ -74,6 +75,17 @@ export type CanvasContextValue = {
    * subprocesses. Empty when `_skills/` does not exist yet, which an agent
    * node renders as "no list" rather than as every node looking broken. */
   skills: SkillSummary[];
+  /**
+   * What each memory node has filed so far, by node id.
+   *
+   * Here rather than on the node's `runtime` because a memory has no runtime
+   * and must not grow one: a runtime is what the walk gives a machine it ran,
+   * and inventing one for storage would put a pip on the canvas and a thread
+   * in the run log for a node the walk never reaches. This is the other fact
+   * about a memory node — not "how is it doing", which is not a question about
+   * a file, but "is there anything in it".
+   */
+  memories: Record<string, RunArtifact>;
 };
 
 export const CanvasContext = createContext<CanvasContextValue>({
@@ -85,6 +97,7 @@ export const CanvasContext = createContext<CanvasContextValue>({
   containerProvider: "claude",
   projectSettings: { default_provider: null, default_model: null },
   skills: [],
+  memories: {},
 });
 
 export const useCanvas = () => useContext(CanvasContext);

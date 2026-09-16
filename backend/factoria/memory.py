@@ -107,23 +107,27 @@ report to a human, and nobody will summarise it for you.
 
 
 def memory_slug(node_or_definition: "Node | NodeDefinition") -> str:
-    """This memory's name on disk: its `config["slug"]`, else its label, else id.
+    """This memory's name on disk: its label, else its node id.
 
-    The ladder ends at the node id so a memory node dragged onto the canvas and
-    left unnamed still runs. `runcheck` refuses two memory nodes that land on
-    the same slug, because they would write to one file.
+    The label and nothing else. A memory node has no configuration — the name
+    a person can see on the canvas is the name on disk and the name in the
+    pointer a reader is handed, and a second, hidden name would only be a way
+    for those three to disagree. The ladder ends at the node id so a memory
+    dragged onto the canvas and left unnamed still runs. `runcheck` refuses two
+    memory nodes that land on the same slug, because they would write to one
+    file; the canvas numbers a new node past the memories already on it, so
+    that refusal is one nobody meets by accident.
     """
     definition = (
         node_or_definition.definition
         if isinstance(node_or_definition, Node)
         else node_or_definition
     )
-    raw = definition.config.get("slug")
-    for candidate in (str(raw or ""), definition.label):
-        slug = slugify(candidate)
-        if slug:
-            return slug
-    return slugify(getattr(node_or_definition, "id", "")) or "memory"
+    return (
+        slugify(definition.label)
+        or slugify(getattr(node_or_definition, "id", ""))
+        or "memory"
+    )
 
 
 def slugify(name: str) -> str:
