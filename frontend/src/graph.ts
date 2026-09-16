@@ -49,6 +49,28 @@ export type FlowNode = Node<NodeData>;
 export type FlowEdge = Edge;
 
 export const BELT_EDGE = "belt";
+/**
+ * A memory attachment. **Not a belt**, and the distinction is the whole of the
+ * memory design: a belt decides what runs next, a wire says where an answer is
+ * filed and which document a machine may read. Mirrors `models.split_edges` —
+ * an edge is a wire because of what it touches, which every reader can see,
+ * rather than because of a field somebody set.
+ */
+export const WIRE_EDGE = "wire";
+
+/** Node types attached to the line rather than standing on it. `models.ATTACHED_TYPES`. */
+export const ATTACHED_TYPES = new Set<string>(["memory"]);
+
+export function isWire(
+  edge: { source: string; target: string },
+  definitions: Map<string, NodeDefinition>,
+): boolean {
+  for (const id of [edge.source, edge.target]) {
+    const definition = definitions.get(id);
+    if (definition && ATTACHED_TYPES.has(definition.type)) return true;
+  }
+  return false;
+}
 
 export function toFlowNode(node: GraphNode): FlowNode {
   return {
@@ -81,6 +103,19 @@ export function toFlowNode(node: GraphNode): FlowNode {
  * have is untouched, and nothing here invents a port.
  */
 export function toFlowEdge(edge: GraphEdge, sources?: Map<string, NodeDefinition>): FlowEdge {
+  // A wire first, because none of a belt's normalisation applies to it: it has
+  // no outcome port to be orphaned from, and nothing travels it.
+  if (sources && isWire(edge, sources)) {
+    return {
+      id: edge.id,
+      source: edge.source,
+      target: edge.target,
+      sourceHandle: null,
+      targetHandle: edge.target_handle,
+      type: WIRE_EDGE,
+      data: { kind: edge.payload.kind, outcome: DEFAULT_EDGE_OUTCOME },
+    };
+  }
   const definition = sources?.get(edge.source);
   const orphaned =
     definition !== undefined &&

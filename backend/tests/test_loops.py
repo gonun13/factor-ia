@@ -479,13 +479,14 @@ def test_a_memory_inside_a_loop_is_rewritten_not_appended_to(
     reading a stale index directly above a fresh one with no way to tell which
     is current — a cache that is wrong is worse than no cache at all.
 
-        n-in ──► n-work ──► n-mem ──► n-review ──success──► n-out
-                    │  ▲                     │
-                    │  └────────fail─────────┘
-                    └───── the task ─────►
+        n-in ──► n-work ──► n-review ──success──► n-ship ──► n-out
+                    ▲            │             ╭┈┈┈┈┈╯
+                    └────fail────┘       n-mem ┘
+                    ╰┈┈┈► n-mem
 
-    The reviewer is fed by the work as well as by the memory: a machine fed only
-    by memory has references and nothing to judge, which `runcheck` refuses.
+    The memory is **attached** to the worker inside the loop and read by a
+    machine below it. Ancestry runs over every belt, back-edges included, so a
+    memory written on lap 1 is there on lap 2 and below the loop.
     """
     from .test_memory_run import documents, mem, writer
 
@@ -496,15 +497,17 @@ def test_a_memory_inside_a_loop_is_rewritten_not_appended_to(
             writer("n-work", "Research"),
             mem("n-mem", "Codebase index"),
             reviewer("n-review", "verdict-fail", "verdict-pass"),
+            agent("n-ship", fake_script="echo"),
             node("n-out", "output"),
         ],
         [
             belt("n-in", "n-work"),
-            belt("n-work", "n-mem"),
-            belt("n-mem", "n-review"),
             belt("n-work", "n-review"),
-            belt("n-review", "n-out", "success"),
+            belt("n-review", "n-ship", "success"),
             belt("n-review", "n-work", "fail"),
+            belt("n-ship", "n-out"),
+            belt("n-work", "n-mem"),
+            belt("n-mem", "n-ship"),
         ],
     )
     written = documents(monkeypatch)
@@ -521,10 +524,13 @@ def test_a_memory_inside_a_loop_is_rewritten_not_appended_to(
 def test_a_memory_whose_writer_was_never_reached_delivers_no_pointer(
     test_store: Store, orch: Orchestrator, repo: Path
 ) -> None:
-    """The degradation that makes a dead belt safe: nothing ever claims a memory
-    exists except the pointer block, so a memory that was never written is a
-    reader that was simply never told about one — not a reader sent to a file
-    that is not there."""
+    """A wire says where an answer is filed; it does not say the answer happened.
+
+    The rescue machine is on a belt a passing review never takes, so its memory
+    is never written — and the reader is simply never told about one. Safe
+    because nothing claims a memory exists except the pointer, and the pointer
+    is built from a document on disk.
+    """
     from .test_memory_run import mem
 
     save(
@@ -535,9 +541,6 @@ def test_a_memory_whose_writer_was_never_reached_delivers_no_pointer(
             agent("n-rescue"),
             mem("n-mem", "Rescue notes"),
             agent("n-read", fake_script="echo"),
-            # An ordinary worker after it, so the output node has a commit to
-            # make and the run's status is about the belts rather than about the
-            # echoing node having edited nothing.
             agent("n-do"),
             node("n-out", "output"),
         ],
@@ -546,15 +549,16 @@ def test_a_memory_whose_writer_was_never_reached_delivers_no_pointer(
             belt("n-review", "n-read", "success"),
             # The rescue path, which a passing review never takes.
             belt("n-review", "n-rescue", "fail"),
-            belt("n-rescue", "n-mem"),
-            belt("n-mem", "n-read"),
+            belt("n-rescue", "n-read"),
             belt("n-read", "n-do"),
             belt("n-do", "n-out"),
+            belt("n-rescue", "n-mem"),
+            belt("n-mem", "n-read"),
         ],
     )
     run = drive(orch)
 
     assert run.status == "succeeded"
-    assert statuses(run)["n-mem"] == "pending"  # never reached
+    assert statuses(run)["n-rescue"] == "pending"  # never reached
     assert run.memory == []
     assert "Memory available" not in run.node_run("n-read").output_text

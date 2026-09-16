@@ -414,6 +414,54 @@ class Edge(Base):
     payload: EdgePayload = Field(default_factory=EdgePayload)
 
 
+#: Node types that are attached to the line rather than standing on it.
+#:
+#: **The distinction the whole memory design rests on.** A belt is control flow:
+#: it decides what runs next, and a node on the end of one can gate the run or
+#: stop it. A wire is not — it says where data is filed and where it is read,
+#: and a memory on the end of one is storage the line reaches past. Storage is
+#: never the reason something runs, and never the reason something stops.
+#:
+#: Kept as a set of *types* rather than a flag on the edge because it must be
+#: impossible to disagree with: an edge is a wire because of what it touches,
+#: which every reader can see, and not because of a field somebody set.
+ATTACHED_TYPES: frozenset[str] = frozenset({"memory"})
+
+
+def is_wire(edge: "Edge", by_id: dict[str, "Node"]) -> bool:
+    """Whether this edge attaches a memory rather than carrying the line.
+
+    An edge with an end this factory does not contain is **not** a wire: a
+    dangling edge is a broken belt, and calling it a wire would hide it from
+    every rule that would otherwise refuse it.
+    """
+    for node_id in (edge.source, edge.target):
+        node = by_id.get(node_id)
+        if node is not None and node.definition.type in ATTACHED_TYPES:
+            return True
+    return False
+
+
+def split_edges(
+    nodes: list["Node"], edges: list["Edge"]
+) -> tuple[list["Edge"], list["Edge"]]:
+    """`(belts, wires)` — the line, and what is attached to it.
+
+    One function, so the walk, the run check and the canvas cannot come to
+    different conclusions about what drives a run. Every rule that was written
+    about "edges" before memory existed means *belts*, and passing it the whole
+    list is the bug this exists to make hard: an agent whose only outgoing edge
+    files a memory is not on the line, and a graph that counted that edge would
+    say it was.
+    """
+    by_id = {node.id: node for node in nodes}
+    belts: list["Edge"] = []
+    wires: list["Edge"] = []
+    for edge in edges:
+        (wires if is_wire(edge, by_id) else belts).append(edge)
+    return belts, wires
+
+
 class Port(Base):
     """A factory's declared input or output.
 

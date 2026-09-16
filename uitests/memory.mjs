@@ -43,15 +43,15 @@ const created = await api("/api/projects", {
 if (!created.ok) throw new Error(`could not create the test project: ${await created.text()}`);
 
 /**
- * The canonical shape, including the belt everybody forgets:
+ * The canonical shape: the line, with a memory attached to it.
  *
- *   Request ──► Research ──► [Codebase index] ──► Planner ──► Commit
- *      └─────────────── the task ───────────────────┘
+ *   Request ──► Research ──► Planner ──► Commit
+ *                  ╰┈┈► [Codebase index] ┈┈╯
  *
- * The Planner reads a memory, so it also needs a belt saying what the job is —
- * a memory carries a reference, never a task. The reader runs the `echo`
- * script, which says its prompt back, so what it was *handed* is assertable on
- * screen rather than only in a run record.
+ * The two dotted connections are **wires**, not belts. Take the memory away and
+ * the line is unchanged. The reader runs the `echo` script, which says its
+ * prompt back, so what it was *handed* is assertable on screen rather than only
+ * in a run record.
  */
 const graph = {
   nodes: [
@@ -63,10 +63,11 @@ const graph = {
   ],
   edges: [
     { id: "e1", source: "n-in", target: "n-research" },
-    { id: "e2", source: "n-research", target: "n-mem" },
-    { id: "e3", source: "n-mem", target: "n-plan" },
-    { id: "e4", source: "n-in", target: "n-plan" },
-    { id: "e5", source: "n-plan", target: "n-out" },
+    { id: "e2", source: "n-research", target: "n-plan" },
+    { id: "e3", source: "n-plan", target: "n-out" },
+    // Wires.
+    { id: "w1", source: "n-research", target: "n-mem" },
+    { id: "w2", source: "n-mem", target: "n-plan" },
   ],
 };
 const saved = await api(`/api/projects/${PROJECT}/factories/main`, {
@@ -97,21 +98,17 @@ try {
     "memory",
   );
 
-  // Both ports, unnamed: a memory sits mid-line and has one way out, so a belt
-  // out of it carries `source_handle: null` like every worker's.
+  // **What attaches it, drawn as what it is.** A wire is not a belt: nothing
+  // travels it and nothing waits on it, so it gets none of a belt's casing or
+  // tread. If these ever render the same, the canvas is telling an operator
+  // that storage drives the line.
+  check("the two wires are drawn as wires", await page.locator("path.wire").count(), 2);
   check(
-    "a memory has one unnamed way out",
-    await page
-      .locator(".node.type-memory")
-      .locator(".react-flow__handle-right")
-      .evaluateAll((els) => els.map((el) => el.getAttribute("data-handleid"))),
-    [null],
+    "…and none of them is drawn as a belt",
+    await page.locator(".react-flow__edge:has(path.wire) .belt-casing").count(),
+    0,
   );
-  check(
-    "…and something can feed it",
-    await page.locator(".node.type-memory").locator(".react-flow__handle-left").count(),
-    1,
-  );
+  check("the three belts are still belts", await page.locator(".belt-casing").count(), 3);
 
   // The name it is filed as, derived from the label rather than invented.
   check(
@@ -122,22 +119,30 @@ try {
 
   check("nothing blocks this factory", await page.locator(".problem.blocker").count(), 0);
 
-  // ---- the rule everybody hits first --------------------------------------
+  // ---- the rule that exists because a wire carries no ordering ------------
   //
-  // A machine fed only by memory has references and no task. The server refuses
-  // it, but finding that out on the Run button is a worse way to learn a rule
-  // than seeing it as the belt is drawn — so the canvas says it too.
-  const withoutTask = { ...graph, edges: graph.edges.filter((edge) => edge.id !== "e4") };
+  // Wired backwards: the Planner files it and Research reads it, so the memory
+  // would still be empty when Research got there. The server refuses it, but
+  // finding that out on the Run button is a worse way to learn a rule than
+  // seeing it as the wire is drawn.
+  const backwards = {
+    ...graph,
+    edges: [
+      ...graph.edges.filter((edge) => !edge.id.startsWith("w")),
+      { id: "w1", source: "n-plan", target: "n-mem" },
+      { id: "w2", source: "n-mem", target: "n-research" },
+    ],
+  };
   await api(`/api/projects/${PROJECT}/factories/main`, {
     method: "PUT",
-    body: JSON.stringify(withoutTask),
+    body: JSON.stringify(backwards),
   });
   await page.reload({ waitUntil: "networkidle" });
   await page.waitForSelector(".node.type-memory");
   await page.waitForTimeout(500);
   check(
-    "a machine fed only by memory is refused before a run starts",
-    await page.locator("text=/fed only by memory/").count() > 0,
+    "a reader whose writer is below it on the line is refused",
+    (await page.locator("text=/is not above it on the line/").count()) > 0,
     true,
   );
 
@@ -148,7 +153,7 @@ try {
   await page.reload({ waitUntil: "networkidle" });
   await page.waitForSelector(".node.type-memory");
   await page.waitForTimeout(500);
-  check("…and drawing the task belt settles it", await page.locator(".problem.blocker").count(), 0);
+  check("…and wiring it the right way round settles it", await page.locator(".problem.blocker").count(), 0);
 
   // ---- the run ------------------------------------------------------------
   await page.locator(".runbox button.run").click();
@@ -157,10 +162,17 @@ try {
   await page.getByRole("button", { name: /Submit the request/ }).click();
 
   await page.waitForSelector('.runbox[data-run-status="succeeded"]', { timeout: 120_000 });
+  // A memory has no status, because it never runs. A pip on it would be the
+  // canvas claiming storage is a station on the line.
   check(
-    "the memory ran",
+    "the memory never gets a status of its own",
     await page.locator(".node.type-memory").getAttribute("data-status"),
-    "succeeded",
+    "idle",
+  );
+  check(
+    "…and gets no thread in the run log, being no machine of the run's",
+    await page.locator(".thread .who", { hasText: /^Codebase index$/ }).count(),
+    0,
   );
 
   // **The claim the whole design rests on.** The reader echoes its prompt, so
@@ -168,6 +180,9 @@ try {
   // must be a path, not the document.
   const handed = await page.locator(".thread", { hasText: "Planner" }).innerText();
   check("the reader was told a memory exists", handed.includes("Memory available"), true);
+  // And it still got its predecessor's answer down the belt, exactly as it
+  // would with no memory in the factory: an attachment adds, it never replaces.
+  check("…without losing what the belt brought it", handed.includes("Done."), true);
   check("…and was given the file, not its contents", /_memory\/codebase-index\//.test(handed), true);
   check("…and was told it is reference, not instruction", handed.includes("reference"), true);
 

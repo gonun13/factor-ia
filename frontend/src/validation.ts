@@ -11,7 +11,9 @@
  */
 
 import {
+  ATTACHED_TYPES,
   hasOutcomePorts,
+  isWire,
   memorySlug,
   nodeKind,
   type FlowEdge,
@@ -109,6 +111,16 @@ export function runProblems(
   const byType = (type: string) => nodes.filter((n) => n.data.definition.type === type);
   const agents = byType("agent");
 
+  // **Belts, not every edge.** Everything below was written before memory
+  // existed and means *the line*. A wire attaches a memory and decides nothing
+  // about what runs next, so a rule handed the whole list would call an agent
+  // whose only outgoing edge files a memory "on the line", and let a factory
+  // run that ends nowhere. Mirrors `models.split_edges`.
+  const definitions = new Map(nodes.map((n) => [n.id, n.data.definition]));
+  const allEdges = edges;
+  const wires = allEdges.filter((e) => isWire(e, definitions));
+  edges = allEdges.filter((e) => !isWire(e, definitions));
+
   if (byType("input").length === 0) {
     problems.push({
       message: "No input node — a factory starts with one, and a run has nothing to submit.",
@@ -184,61 +196,98 @@ export function runProblems(
 
   const hasIncoming = new Set(edges.map((e) => e.target));
   const hasOutgoing = new Set(edges.map((e) => e.source));
-  // A memory node's two halves are named separately below, because "not on the
-  // line" is true of it and useless: what a memory is missing is a writer or a
-  // reader, and those are different mistakes with different fixes.
-  const unwritten = nodes.filter(
-    (n) => n.data.definition.type === "memory" && !hasIncoming.has(n.id),
-  );
-  for (const node of unwritten) {
-    problems.push({
-      message: `“${label(node)}” is a memory with nothing feeding it — draw a belt into it from the machine whose work it should store.`,
-      nodeIds: [node.id],
-    });
-  }
-  const unread = nodes.filter(
-    (n) => n.data.definition.type === "memory" && !hasOutgoing.has(n.id),
-  );
-  for (const node of unread) {
-    problems.push({
-      message: `“${label(node)}” is a memory nothing reads — draw a belt out of it to the machine that will use it. A memory nobody was told about saves no work.`,
-      nodeIds: [node.id],
-    });
-  }
-
-  // Who may write to a memory and who may read one — `runcheck._memory_problems`.
-  // Mirrored here rather than left to the server because these are mistakes made
-  // with a mouse, and finding out on the Run button which belt was wrong is a
-  // worse way to learn a rule than seeing it as you draw it.
-  const memories = nodes.filter((n) => n.data.definition.type === "memory");
+  // What a memory may be wired to, and what it may be called — mirroring
+  // `runcheck._wire_problems`. Mirrored here rather than left to the server
+  // because these are mistakes made with a mouse, and finding out on the Run
+  // button which connection was wrong is a worse way to learn a rule than
+  // seeing it as you draw it.
+  const memories = nodes.filter((n) => ATTACHED_TYPES.has(n.data.definition.type));
   const nodeById = new Map(nodes.map((n) => [n.id, n]));
-  for (const edge of edges) {
-    const source = nodeById.get(edge.source);
-    const target = nodeById.get(edge.target);
-    if (target?.data.definition.type === "memory" && source && source.data.definition.type !== "agent") {
+  const writers = new Map<string, FlowNode[]>(memories.map((n) => [n.id, []]));
+  const readers = new Map<string, FlowNode[]>(memories.map((n) => [n.id, []]));
+
+  for (const wire of wires) {
+    const source = nodeById.get(wire.source);
+    const target = nodeById.get(wire.target);
+    if (!source || !target) continue;
+    const sourceIsMemory = ATTACHED_TYPES.has(source.data.definition.type);
+    const targetIsMemory = ATTACHED_TYPES.has(target.data.definition.type);
+    if (sourceIsMemory && targetIsMemory) {
       problems.push({
-        message: `“${label(target)}” is fed by “${label(source)}”, which is a ${source.data.definition.type} node — a memory stores a machine’s work, so only an agent may write to one.`,
-        nodeIds: [target.id, source.id],
-      });
-    }
-    if (source?.data.definition.type === "memory" && target && target.data.definition.type !== "agent") {
-      problems.push({
-        message: `“${label(source)}” feeds “${label(target)}”, which is a ${target.data.definition.type} node — a memory hands out a reference for a machine to read, so only an agent may read one.`,
+        message: `“${label(source)}” is wired to “${label(target)}” and both are memories — a memory is written by a machine and read by one, so there is nothing at either end of this to do it.`,
         nodeIds: [source.id, target.id],
       });
+      continue;
+    }
+    if (targetIsMemory) {
+      if (source.data.definition.type !== "agent") {
+        problems.push({
+          message: `“${label(target)}” is written to by “${label(source)}”, which is a ${source.data.definition.type} node — what shapes a memory is the contract given to the machine writing it, so only an agent may write one.`,
+          nodeIds: [target.id, source.id],
+        });
+      } else {
+        writers.get(target.id)?.push(source);
+      }
+      if (wire.sourceHandle) {
+        problems.push({
+          message: `the wire from “${label(source)}” to “${label(target)}” leaves by an outcome port — a memory is filed whatever the machine’s outcome, so a wire carries no outcome.`,
+          nodeIds: [source.id, target.id],
+        });
+      }
+    } else if (sourceIsMemory) {
+      if (target.data.definition.type !== "agent") {
+        problems.push({
+          message: `“${label(source)}” is read by “${label(target)}”, which is a ${target.data.definition.type} node — a memory hands out a reference for a machine to read, so only an agent may read one.`,
+          nodeIds: [source.id, target.id],
+        });
+      } else {
+        readers.get(source.id)?.push(target);
+      }
     }
   }
 
-  // An agent holding references and no task. The one that would not look
-  // broken: the server would hand it the run's raw request and run it anyway.
+  // A reader needs a writer above it on the line. The one rule that exists
+  // *because* a wire carries no ordering.
   if (memories.length > 0) {
-    const memoryIds = new Set(memories.map((n) => n.id));
-    for (const node of nodes) {
-      if (node.data.definition.type !== "agent") continue;
-      const feeders = edges.filter((e) => e.target === node.id).map((e) => e.source);
-      if (feeders.length > 0 && feeders.every((id) => memoryIds.has(id))) {
+    const forward = new Map<string, string[]>();
+    for (const belt of edges) {
+      forward.set(belt.source, [...(forward.get(belt.source) ?? []), belt.target]);
+    }
+    const above = new Map<string, Set<string>>();
+    for (const start of nodes) {
+      const stack = [start.id];
+      const seen = new Set<string>();
+      while (stack.length > 0) {
+        const current = stack.pop()!;
+        for (const next of forward.get(current) ?? []) {
+          if (seen.has(next)) continue;
+          seen.add(next);
+          above.set(next, (above.get(next) ?? new Set()).add(start.id));
+          stack.push(next);
+        }
+      }
+    }
+    for (const node of memories) {
+      const wrote = writers.get(node.id) ?? [];
+      const read = readers.get(node.id) ?? [];
+      for (const reader of read) {
+        if (wrote.length === 0) {
+          problems.push({
+            message: `“${label(reader)}” reads “${label(node)}”, which nothing writes to — wire the machine whose work it should hold into it.`,
+            nodeIds: [reader.id, node.id],
+          });
+          break;
+        }
+        if (!wrote.some((w) => above.get(reader.id)?.has(w.id))) {
+          problems.push({
+            message: `“${label(reader)}” reads “${label(node)}”, but ${wrote.map((w) => `“${label(w)}”`).join(", ")} is not above it on the line — the memory would still be empty when it got there. A wire says where work is filed; the belts decide what has happened yet.`,
+            nodeIds: [reader.id, node.id, ...wrote.map((w) => w.id)],
+          });
+        }
+      }
+      if (read.length === 0) {
         problems.push({
-          message: `“${label(node)}” is fed only by memory, so it would be handed references and no work to do — give it a belt from the machine whose task it is continuing.`,
+          message: `nothing reads “${label(node)}” — wire it to the machine that should use it, or delete it. A memory nobody was told about saves no work.`,
           nodeIds: [node.id],
         });
       }
@@ -263,7 +312,9 @@ export function runProblems(
     const type = n.data.definition.type;
     if (type === "input") return !hasOutgoing.has(n.id);
     if (type === "output") return !hasIncoming.has(n.id);
-    if (type === "memory") return false; // said above, in its own words
+    // A memory is attached to the line, never on it — it has no belts by
+    // construction, so this rule would refuse it for being what it is.
+    if (ATTACHED_TYPES.has(type)) return false;
     return !hasIncoming.has(n.id) || !hasOutgoing.has(n.id);
   });
   if (orphans.length > 0) {
@@ -422,17 +473,23 @@ export function runProblems(
           nodeIds: [node.id],
           severity: "notice",
         });
-      } else if (node.data.definition.type === "memory") {
-        // A notice, not a blocker: unlike an output node, which would commit on
-        // every lap, a memory in a loop is the shape people actually want — the
-        // writer's section is corrected rather than added to. Said out loud
-        // anyway, because "rewritten" and "accumulated" are both plausible
-        // readings of a box called Memory and only one of them is true.
-        problems.push({
-          message: `“${label(node)}” is inside the loop that “${label(source)}” closes, so each machine’s section is rewritten on every lap rather than added to.`,
-          nodeIds: [node.id],
-          severity: "notice",
-        });
+      } else if (node.data.definition.type === "agent") {
+        // A memory is never inside a loop — it is not on the line at all. What
+        // can be in one is the machine that *writes* to it, and that is worth
+        // saying: "rewritten" and "accumulated" are both plausible readings of
+        // a box called Memory and only one of them is true. A notice, not a
+        // blocker — unlike an output node, which would commit on every lap,
+        // this is the shape people actually want.
+        for (const wire of wires) {
+          if (wire.source !== node.id) continue;
+          const filed = nodeById.get(wire.target);
+          if (!filed || !ATTACHED_TYPES.has(filed.data.definition.type)) continue;
+          problems.push({
+            message: `“${label(node)}” is inside the loop that “${label(source)}” closes, so its section of “${label(filed)}” is rewritten on every lap rather than added to.`,
+            nodeIds: [node.id, filed.id],
+            severity: "notice",
+          });
+        }
       }
     }
   }

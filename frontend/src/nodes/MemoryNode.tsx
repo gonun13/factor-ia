@@ -7,15 +7,20 @@ import { NodeShell } from "./NodeShell";
 /**
  * A machine's output, parked for a later machine to read.
  *
+ * **Attached to the line, never on it.** The connections to a memory are wires,
+ * not belts: they say where an answer is filed and which document a machine may
+ * read, and decide nothing about what runs next. Take the memory away and the
+ * run is unchanged apart from the pointer — which is exactly what a cache
+ * should be, and why nothing here can hold the line up or stop it.
+ *
  * The distinction against a skill, which is the thing this node is easiest to
  * confuse with: a skill tells an agent *how to behave* and is unconditional; a
  * memory is *information* an agent may use instead of doing the work itself.
  * It is a cache against the run paying twice for the same question — a planner
  * reads the research agent's index rather than exploring the codebase again.
  *
- * What travels down the belt out of here is a **pointer**, never the document.
- * That is the whole reason it saves anything: the bytes stay on disk and a
- * reader pays for them only if it opens the file.
+ * What a reader is handed is a **pointer**, never the document: the bytes stay
+ * on disk and it pays for them only if it opens the file.
  *
  * What it edits is the **name**, which is the only configuration it has — it is
  * the filename, it is what the reader sees in the pointer, and two memories
@@ -55,10 +60,9 @@ export function MemoryNode({ id, data }: NodeProps<FlowNode>) {
         />
       </div>
       <p className="node-note">
-        What arrives here is written to a markdown file for this run. Machines
-        downstream are told to <em>read</em> it, not handed its contents — so
-        they also need a belt saying what the job is. It is discarded when the
-        run ends.
+        Wire a machine in to file its answer here, and a machine below it on the
+        line out, to be told to <em>read</em> it. This is not on the line: it
+        never holds the run up and never stops it. Discarded when the run ends.
       </p>
     </NodeShell>
   );

@@ -210,7 +210,15 @@ export function reduceRunEvent(state: RunState, event: RunEvent): RunState {
         // Kept in arrival order, worktree before commit — a replay of the log
         // and a live run therefore produce the same list.
         artifacts: [...state.artifacts, artifact],
-        runtimes: withNode(state.runtimes, event.node_id, { artifact }),
+        // **Only onto a machine that is running.** A `memory` artifact names a
+        // node that never runs and has no status of its own, and creating a
+        // runtime for it here would put a pip on the canvas and a thread in the
+        // run log for a node the walk is never going to reach — the canvas
+        // claiming storage is a station on the line. Every other artifact kind
+        // is emitted by a machine that is mid-run, so it already has one.
+        runtimes: state.runtimes[event.node_id]
+          ? withNode(state.runtimes, event.node_id, { artifact })
+          : state.runtimes,
       };
     }
     case "agent":

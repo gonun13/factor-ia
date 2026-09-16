@@ -79,6 +79,7 @@ from __future__ import annotations
 import asyncio
 import os
 import uuid
+from pathlib import Path
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
@@ -102,7 +103,9 @@ from .models import (
     RunMemory,
     RunStatus,
     RunWorktree,
+    ATTACHED_TYPES,
     edge_outcome,
+    split_edges,
     has_outcome_ports,
     node_kind,
     node_prompt,
@@ -349,6 +352,11 @@ class ActiveRun:
     #: and a writer on a branch the second lap did not take must keep the one it
     #: already wrote.
     memories: dict[str, memory.MemoryDoc] = field(default_factory=dict)
+    #: Something to say about a node's memory that must not be mistaken for the
+    #: node's own outcome — a document that could not be written. Held here and
+    #: folded in by `_set_node` because a memory failure is not a status, and
+    #: every path out of `_run_agent` passes through that one function.
+    memory_notes: dict[str, str] = field(default_factory=dict)
 
 
 class Orchestrator:
@@ -452,7 +460,14 @@ class Orchestrator:
                         # explain its own output.
                         skill=skill_for(node),
                     )
+                    # **Only what stands on the line.** A memory is attached to
+                    # it (`models.ATTACHED_TYPES`): it never runs, so it has no
+                    # status, no lap and no outcome, and inventing a `NodeRun`
+                    # saying "pending" for one would put a machine in the run's
+                    # table that the walk is never going to reach. What a memory
+                    # did is recorded on `run.memory` instead.
                     for node in factory.nodes
+                    if node.definition.type not in ATTACHED_TYPES
                 ],
             )
             channel = RunChannel(run.id)
@@ -701,7 +716,13 @@ class Orchestrator:
         three gets three laps altogether.
         """
         nodes = state.factory.nodes
-        edges = state.factory.edges
+        # **Belts only.** A wire attaches a memory, and storage does not decide
+        # what runs next — so a node is never waiting on one, a memory is never
+        # a node the walk settles, and a memory that could not be written is
+        # never the reason a run stops. Everything below was written about
+        # "edges" before memory existed and means belts; handing it the whole
+        # list is precisely the bug `split_edges` exists to make hard.
+        edges, _wires = split_edges(nodes, state.factory.edges)
         incoming: dict[str, list[Edge]] = {
             node.id: [edge for edge in edges if edge.target == node.id] for node in nodes
         }
@@ -929,122 +950,88 @@ class Orchestrator:
             await self._run_output(state, node, incoming)
         elif kind == "human":
             await self._run_human(state, node, incoming)
-        elif kind == "memory":
-            await self._run_memory(state, node)
         else:
             if node_run is not None:
                 node_run.output_text = incoming
             await self._set_node(state, node.id, "succeeded")
 
-    async def _run_memory(self, state: ActiveRun, node: Node) -> None:
-        """Park what the belts brought in, and hand a pointer to it downstream.
+    async def _file_memories(self, state: ActiveRun, node: Node, text: str) -> None:
+        """File one agent's output into every memory wired to it. Side effect.
 
-        The node's `output_text` is the **pointer block**, never the body. That
-        is the whole mechanism and the reason this costs nothing to deliver:
-        `_incoming_text` already carries a node's output to whatever its belts
-        reach, so a memory read by a node five machines down the line is an
-        ordinary forward belt and not a new channel. The bytes stay on disk and
-        a consumer pays for them only if it opens the file.
+        **Storage, not a station.** This runs after the writing node has already
+        succeeded, and it cannot change that: a memory that could not be written
+        leaves a line on the node's detail and in the log, and the run carries
+        on. That is not leniency, it is what a cache *is* — the work was done
+        and the answer is real whether or not a copy of it was filed, and a
+        factory that stopped because its scratch space was full would be a
+        factory brought down by an optimisation.
 
-        No agent runs here. What shapes the document is
-        `memory.WRITER_CONTRACT`, injected into the *writer's* system prompt by
-        `_run_agent` — so a memory costs one `write(2)` rather than a model
-        call, which is the point of a cache.
+        The reader's side degrades the same way and is safe for the same reason:
+        nothing ever claims a memory exists except the pointer block, and the
+        pointer is built from the document in hand.
         """
         assert state.workspaces is not None
+        if not text.strip():
+            return
         node_run = state.run.node_run(node.id)
-        slug = memory.memory_slug(node)
-        label = node.definition.label or slug
-
-        doc = state.memories.get(node.id)
-        if doc is None:
-            doc = memory.MemoryDoc(
-                run_id=state.run.id, node_id=node.id, slug=slug, label=label
-            )
-            state.memories[node.id] = doc
-
         by_id = {other.id: other for other in state.factory.nodes}
-        wrote = 0
-        for source_id, text in self._incoming_parts(state, node):
-            if not text.strip():
+        _belts, wires = split_edges(state.factory.nodes, state.factory.edges)
+
+        for wire in wires:
+            if wire.source != node.id:
                 continue
-            source = by_id.get(source_id)
-            source_run = state.run.node_run(source_id)
+            target = by_id.get(wire.target)
+            if target is None or target.definition.type != "memory":
+                continue
+
+            slug = memory.memory_slug(target)
+            label = target.definition.label or slug
+            doc = state.memories.get(target.id)
+            if doc is None:
+                doc = memory.MemoryDoc(
+                    run_id=state.run.id, node_id=target.id, slug=slug, label=label
+                )
+                state.memories[target.id] = doc
             doc.record(
-                node_id=source_id,
-                label=(source.definition.label if source else "") or source_id,
-                lap=source_run.lap if source_run else 0,
+                node_id=node.id,
+                label=node.definition.label or node.id,
+                lap=node_run.lap if node_run else 0,
                 text=text,
             )
-            wrote += 1
 
-        if not wrote and not doc.sections:
-            # The same standard `_run_output` holds an empty commit to: a green
-            # tick over a memory nobody can read would send the next machine to
-            # a file that says nothing, with a pointer telling it to trust it.
-            await self._set_node(
-                state,
-                node.id,
-                "failed",
-                "nothing arrived to remember — the belt into this memory carried no text.",
+            try:
+                state.workspaces.ensure_memory_dir(slug)
+                path = await asyncio.to_thread(memory.write, doc, state.workspaces.root)
+            except (OSError, memory.MemoryError) as exc:
+                # Recorded where a reader of the run will see it, and nowhere
+                # near the node's status.
+                state.memory_notes[node.id] = (
+                    f"memory {slug!r} could not be written: {exc}"
+                )
+                continue
+
+            record = next(
+                (r for r in state.run.memory if r.node_id == target.id), None
             )
-            return
+            if record is None:
+                record = RunMemory(node_id=target.id, slug=slug, path=str(path))
+                state.run.memory.append(record)
+            record.label = label
+            record.path = str(path)
+            record.sections = len(doc.sections)
+            record.bytes = doc._body_bytes()
+            record.truncated = doc.truncated
 
-        if not wrote:
-            # A loop came round again down a branch this memory's writer was not
-            # on. Keeping the previous lap's document is the whole reason
-            # `state.memories` outlives a lap: rewriting it now would discard
-            # work the run has not replaced.
-            count = len(doc.sections)
-            await self._set_node(
-                state,
-                node.id,
-                "succeeded",
-                f"nothing new arrived; kept {count} section(s) from the previous lap.",
+            await state.channel.emit(
+                RunArtifactEvent(
+                    run_id=state.run.id,
+                    node_id=target.id,
+                    kind="memory",
+                    path=str(path),
+                    file_count=len(doc.sections),
+                    detail=f"{slug} · {record.bytes} bytes",
+                )
             )
-            return
-
-        state.workspaces.ensure_memory_dir(slug)
-        try:
-            path = await asyncio.to_thread(memory.write, doc, state.workspaces.root)
-        except (OSError, memory.MemoryError) as exc:
-            await self._set_node(
-                state, node.id, "failed", f"the memory could not be written: {exc}"
-            )
-            return
-
-        if node_run is not None:
-            node_run.output_text = memory.pointer_block(doc, path)
-
-        record = next((r for r in state.run.memory if r.node_id == node.id), None)
-        if record is None:
-            record = RunMemory(node_id=node.id, slug=slug, path=str(path))
-            state.run.memory.append(record)
-        record.label = label
-        record.path = str(path)
-        record.sections = len(doc.sections)
-        record.bytes = doc._body_bytes()
-        record.truncated = doc.truncated
-        await self._persist(state)
-
-        await state.channel.emit(
-            RunArtifactEvent(
-                run_id=state.run.id,
-                node_id=node.id,
-                kind="memory",
-                path=str(path),
-                file_count=len(doc.sections),
-                detail=f"{slug} · {record.bytes} bytes",
-            )
-        )
-        size = f"{record.bytes / 1000:.1f} kB"
-        cut = " · truncated" if doc.truncated else ""
-        await self._set_node(
-            state,
-            node.id,
-            "succeeded",
-            f"remembered {len(doc.sections)} section(s) · {size}{cut} → {path.name}",
-        )
 
     async def _run_human(self, state: ActiveRun, node: Node, incoming: str) -> None:
         """Stop the line and ask a person which belt the run leaves by.
@@ -1365,6 +1352,20 @@ class Orchestrator:
             str(state.workspaces.ensure_memory_dir(memory.memory_slug(other)))
             for other in reads
         ]
+        # **The pointer goes in the prompt, because a wire is not a belt.** The
+        # belts already brought this node its task and its predecessor's answer;
+        # a memory adds a reference to that and changes nothing else, which is
+        # the whole of what an attachment costs. Appended rather than prepended
+        # so the task is still the first thing read.
+        written = {record.node_id: record for record in state.run.memory}
+        pointers = [
+            memory.pointer_block(
+                state.memories[other.id], Path(written[other.id].path)
+            )
+            for other in reads
+        ]
+        if pointers:
+            prompt = "\n\n".join([prompt, *pointers]) if prompt else "\n\n".join(pointers)
         cwd = await self._worktree_for(state, node, codebase)
         adapter = adapter_for(node, state.settings, lap=node_run.lap)
         agent_run = adapter.create_run(
@@ -1422,6 +1423,12 @@ class Orchestrator:
         # replaces the text because a person writing one is choosing what to
         # send on. Nobody chose here.
         node_run.output_text = "".join(collected).strip()
+        # Filed here, after the answer is final and before the outcome is
+        # routed: what gets stored is exactly what the next machine on the line
+        # would have been handed. A crash still files what it managed to say —
+        # half an investigation is worth more to the next agent than nothing,
+        # and the document names the lap it came from.
+        await self._file_memories(state, node, node_run.output_text)
 
         if cause != "completed":
             # **A crash may be rescued, but never retried.** Stage 8 made "a
@@ -1530,7 +1537,8 @@ class Orchestrator:
         """
         seen: set[str] = set()
         parts: list[tuple[str, str]] = []
-        for edge in state.factory.edges:
+        belts, _wires = split_edges(state.factory.nodes, state.factory.edges)
+        for edge in belts:
             if edge.target != node.id or edge.id not in state.taken:
                 continue
             if edge.source in seen:
@@ -1545,32 +1553,44 @@ class Orchestrator:
     ) -> tuple[bool, list[Node]]:
         """`(writes a memory, the memories it reads)` for one agent node.
 
-        A **static graph** question, deliberately, not a run-state one. A
-        reviewer whose success port reaches a memory gets the writer contract
-        even on a lap it will fail, because whether its output is going to be
-        stored is a property of the factory the operator drew and not of how
-        this lap happens to turn out — and an agent told halfway through a run
-        that its answer is being filed would have written a different one.
+        Read off the **wires**, which are not belts: they say where this node's
+        answer is filed and which documents it may read, and nothing about what
+        runs next.
 
-        The read side is the same question asked backwards, and it is safe for
-        the same reason it is cheap: if the writer was never reached, the memory
-        node never ran, its belt is dead, and this node simply gets no pointer.
-        Nothing ever claims a memory exists except the pointer block itself.
+        A **static graph** question, deliberately, not a run-state one. A
+        reviewer whose output is filed gets the writer contract even on a lap it
+        will fail, because whether its answer is being stored is a property of
+        the factory the operator drew — and an agent told halfway through a run
+        that it is being filed would have written a different answer.
+
+        Because a wire carries no ordering, whether a memory has anything in it
+        by the time this node runs is decided by the **line**, not by the wire.
+        `runcheck` refuses a reader with no writer above it on any path; a
+        reader whose writer merely did not run this time gets no pointer, which
+        is the safe degradation the pointer block's existence guarantees.
         """
         by_id = {other.id: other for other in state.factory.nodes}
+        _belts, wires = split_edges(state.factory.nodes, state.factory.edges)
         writes = False
         reads: list[Node] = []
         seen: set[str] = set()
-        for edge in state.factory.edges:
-            if edge.source == node.id:
-                other = by_id.get(edge.target)
+        for wire in wires:
+            if wire.source == node.id:
+                other = by_id.get(wire.target)
                 writes = writes or (other is not None and other.definition.type == "memory")
-            if edge.target == node.id:
-                other = by_id.get(edge.source)
+            if wire.target == node.id:
+                other = by_id.get(wire.source)
                 if (
                     other is not None
                     and other.definition.type == "memory"
                     and other.id not in seen
+                    # **Only a memory that is actually on disk.** The evidence is
+                    # the run record, which is appended to after the write
+                    # succeeds — not `state.memories`, which holds the document
+                    # from the moment it is composed and is therefore also true
+                    # of a memory whose write then failed. A pointer to a file
+                    # that is not there is the one claim this must never make.
+                    and any(r.node_id == other.id for r in state.run.memory)
                 ):
                     seen.add(other.id)
                     reads.append(other)
@@ -1628,6 +1648,13 @@ class Orchestrator:
             return
         node_run.status = status
         node_run.detail = detail
+        if status in ("succeeded", "failed"):
+            # A memory that could not be written, said where a reader of the run
+            # will see it — and deliberately *beside* the outcome rather than as
+            # one. The machine did its work; only the copy failed.
+            note = state.memory_notes.pop(node_id, None)
+            if note:
+                node_run.detail = f"{detail} · {note}" if detail else note
         if status == "running" and node_run.started_at is None:
             node_run.started_at = utcnow()
         if status in ("succeeded", "failed"):

@@ -35,6 +35,13 @@ def writer(node_id: str, label: str, **config) -> Node:
     return made
 
 
+def wire(source: str, target: str) -> Edge:
+    """A memory attachment. The same `Edge` shape as a belt — what makes it a
+    wire is that a memory is on one end of it (`models.split_edges`), which is
+    a fact every reader can see rather than a flag somebody set."""
+    return belt(source, target)
+
+
 def mem(node_id: str, label: str = "", **config) -> Node:
     return Node(
         id=node_id,
@@ -45,15 +52,15 @@ def mem(node_id: str, label: str = "", **config) -> Node:
 
 
 def line(test_store: Store, **reader_config) -> Factory:
-    """The canonical shape: a writer, a memory, and a reader that echoes.
+    """The canonical shape: a line, with a memory attached to it.
 
-        n-in ──► n-write ──► n-mem ──► n-read ──► n-out
-         └──────────── the task ────────►
+        n-in ──► n-write ──► n-read ──► n-out
+                    ╰┈┈► n-mem ┈┈╯
 
-    The second belt out of the input is not decoration. A memory carries a
-    *reference*, so a machine fed only by memories would be handed pointers and
-    no work to do — `runcheck._memory_problems` refuses that outright, and the
-    belt that answers it is the one that says where the task comes from.
+    The line is drawn as it would be if memory did not exist. The two dotted
+    connections are **wires**, not belts: they say the writer's answer is filed
+    and the reader may read it, and nothing about what runs next. Take the
+    memory away and the run is unchanged apart from the pointer.
     """
     return save(
         test_store,
@@ -66,10 +73,10 @@ def line(test_store: Store, **reader_config) -> Factory:
         ],
         [
             belt("n-in", "n-write"),
-            belt("n-write", "n-mem"),
-            belt("n-mem", "n-read"),
-            belt("n-in", "n-read"),
+            belt("n-write", "n-read"),
             belt("n-read", "n-out"),
+            wire("n-write", "n-mem"),
+            wire("n-mem", "n-read"),
         ],
     )
 
@@ -112,7 +119,9 @@ def test_a_memory_writes_a_document_and_hands_a_pointer_downstream(
     line(test_store)
     run = drive(orch)
 
-    assert statuses(run)["n-mem"] == "succeeded"
+    # A memory has no status, because it never runs. It is not in the run's
+    # table of machines at all — what it did is on `run.memory`.
+    assert "n-mem" not in statuses(run)
     path = memory_file(run)
     assert path == worktree.memory_dir(run.id, workspace) / "codebase-index/codebase-index.md"
 
@@ -152,7 +161,14 @@ def test_the_body_does_not_travel_down_the_belt(
     said = run.node_run("n-write").output_text
     assert said  # the writer really did say something
     assert said in documents_by_slug["codebase-index"]  # and it was filed
-    assert said not in read_of(run)  # and the reader was not handed it
+
+    # The reader does get the writer's answer — down the **belt**, exactly as it
+    # would with no memory in the factory at all. What the memory adds is the
+    # pointer and nothing else, which is the whole of what an attachment costs.
+    handed = read_of(run)
+    assert said in handed
+    assert "Memory available" in handed
+    assert str(memory_file(run)) in handed
 
 
 def test_the_memory_is_recorded_on_the_run_and_in_the_log(
@@ -183,10 +199,10 @@ def test_a_slug_on_the_node_names_the_file(
         ],
         [
             belt("n-in", "n-write"),
-            belt("n-write", "n-mem"),
-            belt("n-mem", "n-read"),
-            belt("n-in", "n-read"),
+            belt("n-write", "n-read"),
             belt("n-read", "n-out"),
+            wire("n-write", "n-mem"),
+            wire("n-mem", "n-read"),
         ],
     )
     run = drive(orch)
@@ -212,11 +228,12 @@ def test_two_writers_get_one_section_each_in_the_order_the_belts_were_drawn(
         [
             belt("n-in", "n-a"),
             belt("n-in", "n-b"),
-            belt("n-a", "n-mem"),
-            belt("n-b", "n-mem"),
-            belt("n-mem", "n-read"),
-            belt("n-in", "n-read"),
+            belt("n-a", "n-read"),
+            belt("n-b", "n-read"),
             belt("n-read", "n-out"),
+            wire("n-a", "n-mem"),
+            wire("n-b", "n-mem"),
+            wire("n-mem", "n-read"),
         ],
     )
     written = documents(monkeypatch)
@@ -317,14 +334,14 @@ def test_the_reader_is_granted_the_memory_it_is_wired_to_and_no_other(
         ],
         [
             belt("n-in", "n-write"),
-            belt("n-write", "n-mem-a"),
-            belt("n-write", "n-mem-b"),
-            belt("n-mem-a", "n-other"),
-            belt("n-in", "n-other"),
-            belt("n-mem-b", "n-read"),
-            belt("n-in", "n-read"),
+            belt("n-write", "n-read"),
+            belt("n-write", "n-other"),
             belt("n-read", "n-out"),
             belt("n-other", "n-out"),
+            wire("n-write", "n-mem-a"),
+            wire("n-write", "n-mem-b"),
+            wire("n-mem-a", "n-other"),
+            wire("n-mem-b", "n-read"),
         ],
     )
     seen = configs_by_node(orch, monkeypatch)
@@ -356,11 +373,13 @@ def test_a_granted_directory_is_outside_every_worktree(
 # ---- refusals ----------------------------------------------------------------
 
 
-def test_a_memory_that_receives_nothing_fails_rather_than_ticking_green(
+def test_a_memory_that_receives_nothing_stops_nothing(
     test_store: Store, orch: Orchestrator, repo: Path
 ) -> None:
-    """The standard an empty commit is held to: a green tick over a memory
-    nobody can read would send the next machine to a file that says nothing."""
+    """**Storage is never the reason a run stops.** The writer completes without
+    saying anything, so there is nothing to file and no document to point at.
+    The line carries on and the run succeeds — a factory brought down by its own
+    scratch space would be a factory brought down by an optimisation."""
     save(
         test_store,
         [
@@ -368,21 +387,46 @@ def test_a_memory_that_receives_nothing_fails_rather_than_ticking_green(
             agent("n-write", fake_script="silent"),
             mem("n-mem", "Index"),
             agent("n-read", fake_script="echo"),
+            # An ordinary worker, so the commit at the end is not the thing
+            # under test — an echoing machine edits nothing.
+            agent("n-do"),
             node("n-out", "output"),
         ],
         [
             belt("n-in", "n-write"),
-            belt("n-write", "n-mem"),
-            belt("n-mem", "n-read"),
-            belt("n-in", "n-read"),
-            belt("n-read", "n-out"),
+            belt("n-write", "n-read"),
+            belt("n-read", "n-do"),
+            belt("n-do", "n-out"),
+            wire("n-write", "n-mem"),
+            wire("n-mem", "n-read"),
         ],
     )
     run = drive(orch)
 
-    assert statuses(run)["n-mem"] == "failed"
-    assert "nothing arrived to remember" in (run.node_run("n-mem").detail or "")
-    assert run.status == "failed"
+    assert run.status == "succeeded"
+    assert run.memory == []
+    # And no pointer, because nothing ever claims a memory exists except the
+    # pointer, and it is built from a document in hand.
+    assert "Memory available" not in read_of(run)
+
+
+def test_a_memory_that_cannot_be_written_does_not_fail_the_writer(
+    test_store: Store, orch: Orchestrator, repo: Path, monkeypatch
+) -> None:
+    """The same principle at its sharpest: the disk refuses the write, and the
+    machine that did the work still succeeded — because it did."""
+    line(test_store)
+
+    def explode(doc, root=None):
+        raise OSError("no space left on device")
+
+    monkeypatch.setattr(memory, "write", explode)
+    run = drive(orch)
+
+    assert run.status == "succeeded"
+    assert statuses(run)["n-write"] == "succeeded"
+    assert "could not be written" in (run.node_run("n-write").detail or "")
+    assert "Memory available" not in read_of(run)
 
 
 # ---- lifecycle ---------------------------------------------------------------
@@ -416,10 +460,10 @@ def test_a_failed_run_keeps_its_memory_and_the_summary_says_where(
         ],
         [
             belt("n-in", "n-write"),
-            belt("n-write", "n-mem"),
-            belt("n-mem", "n-read"),
-            belt("n-in", "n-read"),
+            belt("n-write", "n-read"),
             belt("n-read", "n-out"),
+            wire("n-write", "n-mem"),
+            wire("n-mem", "n-read"),
         ],
     )
     run = drive(orch)
