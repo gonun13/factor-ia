@@ -106,14 +106,30 @@ fast-forward, so nothing rewrites history and the operator's own working tree is
 still never the cwd of anything. See `gitwork._check`.
 """
 
-HumanKind = Literal["approval"]
+HumanKind = Literal["approval", "scope"]
 """What a `human` node asks a person for.
 
-One member so far, and a kind rather than a node type for the same reason
-`InputKind` is one: *"a factory starts with an input and ends with an output"*
-stays a rule about the type union, and a human node that later learns to ask
-for an edit or a redirection is a new word in `config["kind"]` rather than a
-sixth member of `NodeType`.
+A kind rather than a node type for the same reason `InputKind` is one: *"a
+factory starts with an input and ends with an output"* stays a rule about the
+type union, and a human node that learns to ask for something new is a new word
+in `config["kind"]` rather than a sixth member of `NodeType`.
+
+- `approval` — a **gate**. One question, written into the graph when it was
+  drawn, answered once with approve or reject plus a note. The line stops, a
+  person says yes or no, and the run leaves by the matching port.
+- `scope` — a **negotiation**. An agent reads what came down the belt, decides
+  what it still does not know, and asks the operator in sequence; the answers
+  become a markdown document that leaves by the success port. `DESIGN.md` open
+  question 2 named this as the one feature that might have forced a live
+  back-channel. It did not: a question is a server→client event and an answer
+  is a POST, which is the shape `approval` already had, repeated rather than
+  widened. See `docs/SCOPE.md`.
+
+Both keep the two outcome ports, both park the walk on `waiting_input`, and the
+orchestrator dispatches between them in one place (`_run_human`). What a scope
+node needs that a gate does not is a **skill** — the standing instructions that
+decide what it asks about — and it needs no codebase at all, which is what lets
+it sit at the head of a line before there is anything to operate on.
 """
 
 AgentKind = Literal["worker", "reviewer"]
@@ -145,7 +161,7 @@ DEFAULT_AGENT_KIND: AgentKind = "worker"
 
 INPUT_KINDS: frozenset[str] = frozenset({"request", "prd"})
 OUTPUT_KINDS: frozenset[str] = frozenset({"commit", "commit-push", "commit-merge"})
-HUMAN_KINDS: frozenset[str] = frozenset({"approval"})
+HUMAN_KINDS: frozenset[str] = frozenset({"approval", "scope"})
 AGENT_KINDS: frozenset[str] = frozenset({"worker", "reviewer"})
 
 #: `commit-push` and `commit-merge` need a remote to push to; `commit` does not.
@@ -993,3 +1009,25 @@ class RunDecision(Base):
     node_id: str
     approved: bool
     note: str = Field(default="", max_length=20_000)
+
+
+class RunAnswer(Base):
+    """One questionnaire's answers, from a `scope` human node's form.
+
+    The third thing a person can post at a stopped run, and a third shape for
+    the reason `RunDecision` is a second one: a submission carries the work, a
+    verdict routes it, and this **continues a conversation**. What makes it its
+    own shape is `request_id` — a scope node asks many times, so the node id
+    alone no longer names what is being answered, and a form left open in a
+    second tab must fail against the question it was showing rather than
+    answer the one on screen now.
+
+    `answers` is keyed by question text, exactly as asked, because that is what
+    the provider matches on (`questions.clean_answers`). The server clamps both
+    sides against the question it actually posed, so the width of this dict is
+    bounded by the questionnaire rather than by the poster.
+    """
+
+    node_id: str
+    request_id: str
+    answers: dict[str, str] = Field(default_factory=dict)

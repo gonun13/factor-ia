@@ -58,8 +58,14 @@ wants a *policy*, not a prompt with no human behind it, so:
 
 **What the spawn deliberately omits:**
 
-- `--permission-prompt-tool stdio` — there is still nobody to ask; the policy
-  above is what replaces it.
+- `--permission-prompt-tool stdio` — **on a `scope` node only**, where there is
+  finally somebody to ask: its agent's whole job is to interview the operator,
+  and without this flag the permission engine turns that `ask` into an immediate
+  denial. Every other node spawns without it, because an unattended run that
+  stops to ask has nobody there and the policy above is what replaces a prompt.
+  It is orchestrator policy (`RunConfig.permission_prompt_tool`), never
+  something a node can ask for, and turning it on obliges the caller to answer:
+  a request nobody resolves is a run parked forever.
 - `--resume` / `--fork-session` — no resume in the interface (`DESIGN.md`).
 - `--include-hook-events`, `--forward-subagent-text` — nothing renders either,
   and both add volume to an event log that stage 5 persists whole.
@@ -78,7 +84,7 @@ from __future__ import annotations
 import asyncio
 import json
 import uuid
-from typing import AsyncIterator
+from typing import Any, AsyncIterator
 
 from .. import config, paths
 from ..scrub import scrub_text
@@ -179,6 +185,18 @@ def build_argv(session_id: str, run_config: RunConfig) -> list[str]:
     # and a node that could edit it would be the hole it closes.
     if mode != "default":
         argv += ["--permission-mode", mode]
+    # **Somebody to ask, for the one node type that has somebody.** Without this
+    # flag the permission engine turns an `ask` into an immediate denial, so a
+    # `scope` node's `AskUserQuestion` would never reach the operator at all;
+    # with it, the request arrives as a `control_request` on stdout and the
+    # answer goes back down stdin (`ClaudeRun.resolve_permission`). `stdio` is
+    # the CLI's own sentinel for "the caller is holding the stream".
+    #
+    # Setting it changes the shape of the whole session: stdin is then held open
+    # rather than closed after the prompt, because a closed stdin is a stream
+    # with no way to answer. That is why it is one field and not two.
+    if run_config.permission_prompt_tool:
+        argv += ["--permission-prompt-tool", run_config.permission_prompt_tool]
     # **The deny list is the server's, plus whatever this node is refused.** The
     # additions are the knowledge write tools on a node with no write wire
     # (`knowledge/mcp.denied_tool_names`), and they are *appended* rather than
@@ -260,6 +278,20 @@ class ClaudeRun:
         self._task: asyncio.Task[None] | None = None
         self._interrupted = False
         self._stderr_tail: list[str] = []
+        #: Hold stdin open after the prompt, because something is going to
+        #: answer permission requests on it. Derived from the flag rather than
+        #: passed separately: a spawn that asks and a stream that cannot be
+        #: replied to is not a combination any caller should be able to build.
+        self._hold_stdin = bool(run_config.permission_prompt_tool)
+        #: One writer at a time. Two `control_response` frames interleaved on a
+        #: line-delimited stream are two frames the child can parse neither of.
+        self._stdin_lock = asyncio.Lock()
+        self._stdin_closed = False
+        #: The tool input of every permission request still outstanding, by
+        #: request id. Kept because an allow must respread the **original**
+        #: input under `updatedInput` — a response carrying only the answers
+        #: would run the tool with its arguments thrown away.
+        self._pending: dict[str, Any] = {}
 
     # ---- public surface ----------------------------------------------------
 
@@ -275,6 +307,10 @@ class ClaudeRun:
         self._interrupted = True
         process = self._process
         if process is not None:
+            # Closed first: a child parked on a question nobody will now answer
+            # reads end-of-input and can leave on its own, and the group kill
+            # below is what happens when it does not.
+            self._close_stdin()
             await proc.terminate_group(process)
 
     # ---- the pump ----------------------------------------------------------
@@ -404,7 +440,16 @@ class ClaudeRun:
         return "crash", code, detail
 
     async def _write_prompt(self, process: asyncio.subprocess.Process) -> None:
-        """Write the one turn and close stdin. See the module docstring.
+        """Write the one turn, and close stdin unless something will answer on it.
+
+        **Closing stdin is what makes the CLI exit after `result`**, which is
+        the whole of why a factory node is one shot. A `scope` node is the one
+        exception: its agent asks the operator questions, the answers go back as
+        `control_response` frames on this same pipe, and a closed pipe is a
+        conversation with no return path. So the close moves to `turn.end`
+        (`_read_stdout`), the frame that says the turn this prompt started is
+        over — the child still exits on its own, a moment later than before, and
+        `interrupt()` remains the backstop for one that does not.
 
         A broken pipe here is a child that died during the spawn; the exit path
         already reports that, so it is swallowed rather than raised into a
@@ -418,10 +463,85 @@ class ClaudeRun:
         except (BrokenPipeError, ConnectionResetError, RuntimeError):
             pass
         finally:
+            if not self._hold_stdin:
+                self._close_stdin()
+
+    def _close_stdin(self) -> None:
+        """Close the child's stdin, once. Idempotent and never raises.
+
+        Called from the ordinary path, from `turn.end` on a held stream, and
+        from `interrupt()` — three callers, one of which may well be racing
+        another, which is the whole reason it is a method with a flag rather
+        than three `try` blocks.
+        """
+        if self._stdin_closed:
+            return
+        self._stdin_closed = True
+        process = self._process
+        if process is None or process.stdin is None:
+            return
+        try:
+            process.stdin.close()
+        except (BrokenPipeError, OSError):
+            pass
+
+    async def _write_control_response(self, payload: dict[str, Any]) -> None:
+        """One frame down stdin, serialized. Swallows a dead pipe.
+
+        A child that has gone is a child whose `exit` is already on its way to
+        the consumer, so failing here would report the same death twice and in
+        the less useful place.
+        """
+        async with self._stdin_lock:
+            process = self._process
+            if process is None or process.stdin is None or self._stdin_closed:
+                return
             try:
-                process.stdin.close()
-            except (BrokenPipeError, OSError):
+                process.stdin.write(json.dumps(payload).encode("utf-8") + b"\n")
+                await process.stdin.drain()
+            except (BrokenPipeError, ConnectionResetError, RuntimeError):
                 pass
+
+    async def resolve_permission(
+        self,
+        request_id: str,
+        *,
+        allow: bool,
+        answers: dict[str, str] | None = None,
+        message: str | None = None,
+    ) -> None:
+        """Answer one permission request. See `adapter.AgentRun`.
+
+        **The original input is respread under `updatedInput`.** The CLI runs
+        the tool with whatever this response hands back, so a response carrying
+        only `answers` would run `AskUserQuestion` with its questions deleted.
+        The pending input is dropped as it is answered, so a second response to
+        the same request is a response with nothing to respread — which is the
+        harmless half of "idempotent on an unknown id".
+
+        Answers are keyed by question text exactly as asked
+        (`factoria/questions.py`), and allowing an `AskUserQuestion` **without**
+        them is not an answer: the CLI reports that the user did not answer and
+        the agent asks again.
+        """
+        original = self._pending.pop(request_id, None)
+        if allow:
+            updated: dict[str, Any] = dict(original) if isinstance(original, dict) else {}
+            if answers:
+                updated["answers"] = dict(answers)
+            inner: dict[str, Any] = {"behavior": "allow", "updatedInput": updated}
+        else:
+            inner = {"behavior": "deny", "message": message or "not permitted here"}
+        await self._write_control_response(
+            {
+                "type": "control_response",
+                "response": {
+                    "subtype": "success",
+                    "request_id": request_id,
+                    "response": inner,
+                },
+            }
+        )
 
     async def _read_stdout(self, process: asyncio.subprocess.Process) -> None:
         """Read in chunks, not lines.
@@ -439,6 +559,16 @@ class ClaudeRun:
             if not chunk:
                 return
             for event in self._normalizer.feed(chunk):
+                if event.type == "permission.request":
+                    # Recorded **before** the consumer sees it, so a caller that
+                    # answers the instant the event arrives finds its input
+                    # waiting rather than racing this loop for it.
+                    self._pending[event.request_id] = event.input
+                elif event.type == "turn.end" and self._hold_stdin:
+                    # The turn this run's one prompt started is over, so the
+                    # return path is no longer needed and the child may exit.
+                    # See `_write_prompt`.
+                    self._close_stdin()
                 self._emit(event)
 
     async def _read_stderr(self, process: asyncio.subprocess.Process) -> None:

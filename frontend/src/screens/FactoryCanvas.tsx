@@ -68,6 +68,7 @@ import {
   PrdGlyph,
   PushGlyph,
   ReviewerGlyph,
+  ScopeGlyph,
   SettingsGlyph,
 } from "../nodes/Glyphs";
 import { ProjectSettingsPanel } from "./ProjectSettingsPanel";
@@ -84,6 +85,7 @@ import type {
   NodeType,
   Project,
   KnowledgeBaseSummary,
+  ScopeQuestion,
   SkillSummary,
 } from "../types";
 
@@ -161,6 +163,11 @@ const PALETTE_GROUPS: {
     Glyph: HumanGlyph,
     items: [
       { type: "human", kind: "approval", label: "Sign-off", hint: "stops the line for a person", Glyph: HumanGlyph },
+      // Beside the sign-off, because both are a person on the line and the
+      // difference is only how much they are asked. The hints are written
+      // against each other: one stops the line to be told yes or no, the other
+      // stops it to be asked.
+      { type: "human", kind: "scope", label: "Scope", hint: "interviews you, and writes up the answers", Glyph: ScopeGlyph },
     ],
   },
   {
@@ -794,12 +801,18 @@ function RunBox({
     live: boolean;
     awaiting: NodeRun[];
     parked: { nodeRun: NodeRun; prompt: string; incoming: string }[];
+    asking: { nodeRun: NodeRun; requestId: string; questions: ScopeQuestion[] }[];
     start: () => Promise<unknown>;
     submit: (
       text: string,
       options?: { nodeId?: string; filename?: string },
     ) => Promise<void>;
     decide: (nodeId: string, approved: boolean, note?: string) => Promise<void>;
+    answer: (
+      nodeId: string,
+      requestId: string,
+      answers: Record<string, string>,
+    ) => Promise<void>;
     cancel: () => Promise<void>;
     clear: () => void;
   };
@@ -931,6 +944,22 @@ function RunBox({
           busy={run.busy}
           onDecide={(approved, note) =>
             void run.decide(gate.nodeRun.node_id, approved, note)
+          }
+        />
+      ))}
+
+      {/* And one per open questionnaire. Same place as the other two forms and
+          for the same reason — the canvas never goes away while you answer —
+          but keyed by request rather than by node: a scope node asks many
+          times, and the form on screen has to be the one being answered. */}
+      {run.asking.map((open) => (
+        <QuestionForm
+          key={open.requestId}
+          nodeRun={open.nodeRun}
+          questions={open.questions}
+          busy={run.busy}
+          onAnswer={(answers) =>
+            void run.answer(open.nodeRun.node_id, open.requestId, answers)
           }
         />
       ))}
@@ -1146,6 +1175,179 @@ function InputForm({
  * thing that makes a rejection useful: it replaces what the node passes on, so
  * the fail belt carries a reason rather than a copy of what was rejected.
  */
+/**
+ * One questionnaire from a `scope` node, answered under the canvas.
+ *
+ * The same place and the same shape as `DecisionForm` — a form where the run is
+ * rather than a modal, so the canvas never goes away while you answer — and the
+ * differences are all the difference between a gate and an interview:
+ *
+ * - **Options are answers, not buttons.** The agent offers them, so they are a
+ *   list you pick from rather than a fixed Approve/Reject pair, and "other" is
+ *   always there because an agent's options are a guess at what you will say.
+ * - **Keyed by question text.** That is the provider's own contract: the answer
+ *   map goes back keyed by the question exactly as asked, so nothing here
+ *   rewrites the wording it renders.
+ * - **`1`–`9` picks an option**, because an interview is a sequence and reaching
+ *   for the mouse once per question is the thing that makes people stop using
+ *   one. The listener is scoped to the form, so it cannot eat a digit typed
+ *   into a node's label on the canvas behind it.
+ */
+function QuestionForm({
+  nodeRun,
+  questions,
+  busy,
+  onAnswer,
+}: {
+  nodeRun: NodeRun;
+  questions: ScopeQuestion[];
+  busy: boolean;
+  onAnswer: (answers: Record<string, string>) => void;
+}) {
+  // Keyed by question text, like the thing being built. `picked` holds the
+  // option labels chosen; `typed` holds whatever was written in "other". A
+  // question with both sends what was typed — you cannot type by accident.
+  const [picked, setPicked] = useState<Record<string, string[]>>({});
+  const [typed, setTyped] = useState<Record<string, string>>({});
+  const name = nodeRun.label || nodeRun.node_id;
+  const form = useRef<HTMLFormElement>(null);
+
+  // **Focus follows the question.** The digit shortcuts are listened for on the
+  // form, so they only work while it holds focus — and a form the operator has
+  // to click before they can answer is a shortcut nobody discovers. This is
+  // also the accessible behaviour: the run stopped to ask something, so the
+  // thing it is asking is where the keyboard should be. Safe to take: a scope
+  // node parks the whole run, so nothing else on the canvas is mid-edit.
+  useEffect(() => {
+    form.current?.focus();
+  }, []);
+
+  const answerFor = (question: ScopeQuestion): string => {
+    const written = (typed[question.question] ?? "").trim();
+    if (written) return written;
+    return (picked[question.question] ?? []).join(", ");
+  };
+  const answers = Object.fromEntries(
+    questions.map((question) => [question.question, answerFor(question)]),
+  );
+  // Every question, or none. A partially answered form posted anyway would be
+  // filtered server-side into a shorter map, and the agent would read the gaps
+  // as questions it has to ask again.
+  const complete = questions.every((question) => answers[question.question] !== "");
+
+  const choose = (question: ScopeQuestion, label: string) => {
+    setPicked((previous) => {
+      const current = previous[question.question] ?? [];
+      if (!question.multi_select) {
+        return { ...previous, [question.question]: current[0] === label ? [] : [label] };
+      }
+      return {
+        ...previous,
+        [question.question]: current.includes(label)
+          ? current.filter((one) => one !== label)
+          : [...current, label],
+      };
+    });
+  };
+
+  return (
+    <form
+      className="request question"
+      ref={form}
+      // Focusable but not in the tab order: the form is a container, and a stop
+      // on the way to its own first button would be a tab stop that does
+      // nothing.
+      tabIndex={-1}
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (complete && !busy) onAnswer(answers);
+      }}
+      onKeyDown={(event) => {
+        // Only a bare digit, and only when the focus is not in a text box —
+        // otherwise "1" would be untypeable in the "other" field.
+        if (event.metaKey || event.ctrlKey || event.altKey) return;
+        const target = event.target as HTMLElement;
+        if (target.tagName === "INPUT" || target.tagName === "TEXTAREA") return;
+        if (busy) return;
+        const digit = Number(event.key);
+        if (!Number.isInteger(digit) || digit < 1 || digit > 9) return;
+        // The first unanswered question, which is the one being read.
+        const open =
+          questions.find((question) => answers[question.question] === "") ?? questions[0];
+        const option = open?.options[digit - 1];
+        if (!option) return;
+        event.preventDefault();
+        choose(open, option.label);
+      }}
+    >
+      <label>{name} is asking</label>
+
+      {questions.map((question) => (
+        <fieldset className="question-block" key={question.question}>
+          <legend>
+            {question.header && <span className="question-chip">{question.header}</span>}
+            {question.question}
+          </legend>
+
+          {question.options.length > 0 && (
+            <ol className="question-options">
+              {question.options.map((option, index) => {
+                const chosen = (picked[question.question] ?? []).includes(option.label);
+                return (
+                  <li key={option.label}>
+                    <button
+                      type="button"
+                      className={`question-option${chosen ? " chosen" : ""}`}
+                      aria-pressed={chosen}
+                      disabled={busy}
+                      onClick={() => choose(question, option.label)}
+                    >
+                      <kbd>{index + 1}</kbd>
+                      <span className="question-label">{option.label}</span>
+                      {option.description && (
+                        <span className="question-what">{option.description}</span>
+                      )}
+                    </button>
+                  </li>
+                );
+              })}
+            </ol>
+          )}
+
+          <input
+            className="nodrag nowheel"
+            value={typed[question.question] ?? ""}
+            aria-label={`another answer to: ${question.question}`}
+            placeholder={
+              question.options.length > 0 ? "…or say something else" : "Your answer"
+            }
+            disabled={busy}
+            onChange={(event) =>
+              setTyped((previous) => ({
+                ...previous,
+                [question.question]: event.target.value,
+              }))
+            }
+          />
+        </fieldset>
+      ))}
+
+      <div className="decision-actions">
+        <button className="primary" type="submit" disabled={busy || !complete}>
+          Answer
+        </button>
+        {!complete && (
+          <span className="question-hint">
+            {questions.length === 1
+              ? "Pick an option or write an answer."
+              : "Every question needs an answer."}
+          </span>
+        )}
+      </div>
+    </form>
+  );
+}
+
 function DecisionForm({
   nodeRun,
   prompt,

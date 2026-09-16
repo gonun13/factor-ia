@@ -46,6 +46,7 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
 from .agent.events import AgentEvent
 from .models import NodeStatus, RunStatus, utcnow
+from .questions import Question
 
 
 class Base(BaseModel):
@@ -119,6 +120,47 @@ class RunDecisionEvent(RunEventBase):
     approved: bool
     #: What they wrote, if anything. Becomes the node's output when non-empty.
     note: str = ""
+
+
+class RunQuestionRequestEvent(RunEventBase):
+    """A `scope` node's agent is asking the operator something.
+
+    The repeating half of `run.decision.request`, and deliberately the same
+    shape of thing: a question is a server→client event and an answer is a POST,
+    so a node that negotiates is the one that already existed, asked more than
+    once. That is the whole of why `DESIGN.md`'s open question 2 stayed
+    answered — nothing here needs a back-channel that SSE cannot carry.
+
+    Keyed by `request_id` as well as `node_id`, because a scope node asks many
+    times and the node id alone no longer names what is on screen. A form left
+    open in a second tab therefore fails against the question it was showing
+    rather than answering the one being asked now.
+
+    Carries the whole questionnaire, so a canvas that joined late renders the
+    open form from the log alone — the standard `run.decision.request` and
+    `run.artifact` are already held to.
+    """
+
+    type: Literal["run.question.request"] = "run.question.request"
+    node_id: str
+    request_id: str
+    #: Already parsed and clamped by `factoria/questions.py`. An agent composed
+    #: this, so it is untrusted input and it is never widened after here.
+    questions: list[Question] = Field(default_factory=list)
+
+
+class RunQuestionEvent(RunEventBase):
+    """A person answered one questionnaire. The node goes back to running.
+
+    Answers are keyed by question text, exactly as asked — the provider matches
+    on it (`questions.clean_answers`), and so does a replaying canvas looking
+    for which question this was.
+    """
+
+    type: Literal["run.question"] = "run.question"
+    node_id: str
+    request_id: str
+    answers: dict[str, str] = Field(default_factory=dict)
 
 
 class AgentStreamEvent(RunEventBase):
@@ -198,6 +240,8 @@ RunEvent = Annotated[
         RunInputEvent,
         RunDecisionRequestEvent,
         RunDecisionEvent,
+        RunQuestionRequestEvent,
+        RunQuestionEvent,
         AgentStreamEvent,
         RunArtifactEvent,
         RunCostEvent,

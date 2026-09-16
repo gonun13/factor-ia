@@ -130,6 +130,20 @@ MEMORY_DIRNAME = "_memory"
 #: is run-scoped in exactly the way a base is not, and so goes with the run.
 KNOWLEDGE_DIRNAME = "_knowledge"
 
+#: Where a `scope` node's session runs. An empty directory, one per node.
+#:
+#: **Not a worktree, and that is the point.** A scope session interviews the
+#: operator and writes a document; it has no codebase to operate on, and
+#: requiring one would make the node unusable at the head of a line — which is
+#: the only place anybody wants it. It still needs *a* cwd, because the adapter
+#: refuses one outside `/workspace` and an exception to the containment check is
+#: not worth making for a directory that costs a `mkdir`.
+#:
+#: Empty rather than shared, per node rather than per run: the session is
+#: allowed to read, so a directory holding another node's work would be a
+#: directory this one can read without any belt saying so.
+SCOPE_DIRNAME = "_scope"
+
 
 def run_dir(run_id: str, root: Path | None = None) -> Path:
     """`<workspace>/_runs/<run-id>/` — everything one run owns, under one path.
@@ -161,6 +175,15 @@ def memory_dir(run_id: str, root: Path | None = None) -> Path:
     Never inside a worktree. See `MEMORY_DIRNAME`.
     """
     return run_dir(run_id, root) / MEMORY_DIRNAME
+
+
+def scope_dir(run_id: str, node_slug: str, root: Path | None = None) -> Path:
+    """`<workspace>/_runs/<run-id>/_scope/<node>/`. See `SCOPE_DIRNAME`."""
+    return (
+        run_dir(run_id, root)
+        / SCOPE_DIRNAME
+        / safe_name(node_slug, "scope node")
+    )
 
 
 def knowledge_dir(run_id: str, root: Path | None = None) -> Path:
@@ -352,6 +375,17 @@ class RunWorkspaces:
         level for the cost of one `mkdir`.
         """
         path = memory_dir(self.run_id, self.root) / safe_name(slug, "memory slug")
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    def ensure_scope_dir(self, node_slug: str) -> Path:
+        """`_scope/<node>/`, created if it is not there. Idempotent.
+
+        One per node, for the reason `SCOPE_DIRNAME` gives, and created lazily
+        like every other directory here: a run that never reaches its scope node
+        never makes one.
+        """
+        path = scope_dir(self.run_id, node_slug, self.root)
         path.mkdir(parents=True, exist_ok=True)
         return path
 

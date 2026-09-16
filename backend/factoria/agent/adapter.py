@@ -85,6 +85,17 @@ class RunConfig(BaseModel):
     #: call being made, and the server stops a call that was made anyway. **The
     #: server is authoritative** — if they ever disagree, the flag is the bug.
     disallowed_tools: list[str] = Field(default_factory=list)
+    #: The CLI's `--permission-prompt-tool`. `"stdio"` is the sentinel that
+    #: makes the permission engine route an `ask` back over the same stream the
+    #: events arrive on, instead of turning it into an immediate denial — which
+    #: is what a `scope` node needs and what nothing else here wants.
+    #:
+    #: **Orchestrator policy, never node config**, for the reason `add_dirs` and
+    #: `mcp_servers` are: a node that could ask to be asked would be a node that
+    #: decides its own permission policy. Setting it is also what obliges the
+    #: caller to *answer* — an unanswered request is a run parked forever, so
+    #: this field and `AgentRun.resolve_permission` are one feature.
+    permission_prompt_tool: str | None = None
 
     @classmethod
     def from_node_config(
@@ -97,6 +108,7 @@ class RunConfig(BaseModel):
         mcp_servers: dict[str, Any] | None = None,
         allowed_tools: list[str] | None = None,
         disallowed_tools: list[str] | None = None,
+        permission_prompt_tool: str | None = None,
     ) -> "RunConfig":
         """Build from an agent node's freeform `config` dict, ignoring the rest.
 
@@ -137,6 +149,11 @@ class RunConfig(BaseModel):
             known["allowed_tools"] = list(allowed_tools)
         if disallowed_tools:
             known["disallowed_tools"] = list(disallowed_tools)
+        # Passed in and never read out of `config`, for the reason above it:
+        # being asked is a policy, and a node that could turn it on would be
+        # choosing its own.
+        if permission_prompt_tool:
+            known["permission_prompt_tool"] = permission_prompt_tool
         return cls(**known)
 
 
@@ -151,6 +168,36 @@ class AgentRun(Protocol):
 
     async def interrupt(self) -> None:
         """Stop the run and everything it spawned. Idempotent."""
+        ...
+
+    async def resolve_permission(
+        self,
+        request_id: str,
+        *,
+        allow: bool,
+        answers: dict[str, str] | None = None,
+        message: str | None = None,
+    ) -> None:
+        """Answer one `permission.request`. The other half of the stream.
+
+        Every other event on this interface goes one way. This one has a reply,
+        and the reply is what makes a `scope` node possible: the agent asks the
+        operator something through its own `AskUserQuestion` tool, the request
+        surfaces here, and the answers travel back inside the allow.
+
+        - `allow=True` with `answers` lets the call run with the operator's
+          replies spread over its input. **Allowing an `AskUserQuestion` with no
+          answers is not the same thing** — the CLI reports "The user did not
+          answer the questions" and the agent asks again, which is a loop the
+          operator cannot see the cause of.
+        - `allow=False` with `message` denies the call and tells the agent why.
+          That is the ordinary answer for every tool a scope session is not
+          permitted, and the message is what stops it retrying blindly.
+
+        Idempotent and safe on an unknown `request_id`: a permission whose run
+        has moved on is a no-op rather than an error, because the alternative is
+        a cancel path that has to know what the child was in the middle of.
+        """
         ...
 
 

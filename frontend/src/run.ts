@@ -32,6 +32,7 @@ import {
   type Run,
   type RunArtifact,
   type RunEvent,
+  type ScopeQuestion,
   type ToolActivity,
 } from "./types";
 
@@ -66,6 +67,15 @@ export type RunState = {
    * mid-graph. The event carries what the belts delivered, so a tab that joined
    * late renders the same form from the log alone. */
   decisions: Record<string, { prompt: string; incoming: string }>;
+  /** The open questionnaires a `scope` node is waiting on, by **request** id.
+   *
+   * Keyed by request rather than by node, which is the difference between
+   * negotiating and gating: a gate asks once, so its node names the question;
+   * a scope node asks repeatedly, and only the request does. Driven by
+   * `run.question.request` and cleared by `run.question` — so a tab that joined
+   * late renders the open form from the log alone, and a tab that was already
+   * open loses the form the moment anybody answers it. */
+  questions: Record<string, { nodeId: string; questions: ScopeQuestion[] }>;
   /** Blockers the *server* refused the run with, or a control-call failure. */
   problems: string[];
   error: string | null;
@@ -81,6 +91,7 @@ const EMPTY: RunState = {
   artifacts: [],
   memories: {},
   decisions: {},
+  questions: {},
   problems: [],
   error: null,
   busy: false,
@@ -183,6 +194,31 @@ export function reduceRunEvent(state: RunState, event: RunEvent): RunState {
         decisions: withoutNode(state.decisions, event.node_id),
         runtimes: withNode(state.runtimes, event.node_id, {
           text: event.note || undefined,
+        }),
+      };
+    case "run.question.request":
+      return {
+        ...state,
+        questions: {
+          ...state.questions,
+          [event.request_id]: {
+            nodeId: event.node_id,
+            questions: event.questions,
+          },
+        },
+      };
+    case "run.question":
+      return {
+        ...state,
+        // Keyed by request, so `withoutNode` is doing its job on a different
+        // kind of key — the function drops one entry and does not care what the
+        // entry is about.
+        questions: withoutNode(state.questions, event.request_id),
+        // What the operator said, on the node, the way a decision's note is.
+        // The node is mid-session and about to go back to running: this is the
+        // last thing it was told, not its output.
+        runtimes: withNode(state.runtimes, event.node_id, {
+          text: Object.values(event.answers).join(" · ") || undefined,
         }),
       };
     case "run.input":
@@ -437,6 +473,43 @@ export function useRun(projectId: string, factoryId: string) {
     [state.run?.id],
   );
 
+  const answer = useCallback(
+    async (nodeId: string, requestId: string, answers: Record<string, string>) => {
+      const runId = state.run?.id;
+      if (!runId) return;
+      setState((previous) => ({ ...previous, busy: true, error: null }));
+      try {
+        const run = await api.submitRunAnswer(runId, nodeId, requestId, answers);
+        // The form is cleared by the stream, not here — `decide`'s reason: the
+        // server is the authority on what is still being asked, and a scope
+        // node's *next* question arrives the same way this one's answer left.
+        setState((previous) => ({ ...previous, run, busy: false }));
+      } catch (cause) {
+        setState((previous) => ({ ...previous, busy: false, error: message(cause) }));
+      }
+    },
+    [state.run?.id],
+  );
+
+  /** The questionnaires a `scope` node is waiting on, in factory order.
+   *
+   * In factory order like `parked`, and for the same reason — the canvas reads
+   * left to right — but keyed by request, so the entry carries its own id back
+   * to the server when it is answered. */
+  const asking = useMemo(
+    () =>
+      (state.run?.node_runs ?? []).flatMap((node_run) =>
+        Object.entries(state.questions)
+          .filter(([, open]) => open.nodeId === node_run.node_id)
+          .map(([requestId, open]) => ({
+            nodeRun: node_run,
+            requestId,
+            questions: open.questions,
+          })),
+      ),
+    [state.run, state.questions],
+  );
+
   /** The human nodes the walk is parked on, in factory order. */
   const parked = useMemo(
     () =>
@@ -477,5 +550,18 @@ export function useRun(projectId: string, factoryId: string) {
     [state.status],
   );
 
-  return { ...state, live, awaiting, parked, start, submit, decide, cancel, watch, clear };
+  return {
+    ...state,
+    live,
+    awaiting,
+    parked,
+    asking,
+    start,
+    submit,
+    decide,
+    answer,
+    cancel,
+    watch,
+    clear,
+  };
 }

@@ -13,6 +13,7 @@ untouched — the argv a test asserts is the argv the real CLI would get.
 
 from __future__ import annotations
 
+import json
 import os
 import signal
 import subprocess
@@ -49,6 +50,59 @@ def main() -> int:
                 "    time.sleep(0.05)\n",
                 marker,
             ]
+        )
+
+    # A permission request, and the answer read back off stdin. The one thing
+    # the fixtures cannot replay: a `control_request` is only interesting if
+    # something replies to it, and replying means the pipe was still open —
+    # which is the behaviour `--permission-prompt-tool stdio` turns on.
+    ask_out = os.environ.get("STUB_ASK_OUT")
+    if ask_out:
+        print(
+            json.dumps(
+                {
+                    "type": "control_request",
+                    "request_id": "req-1",
+                    "session_id": "stub-session",
+                    "request": {
+                        "subtype": "can_use_tool",
+                        "tool_name": "AskUserQuestion",
+                        "input": {
+                            "questions": [
+                                {
+                                    "question": "What is this change for?",
+                                    "header": "Goal",
+                                    "multiSelect": False,
+                                    "options": [
+                                        {"label": "Fixing a bug", "description": "today"}
+                                    ],
+                                }
+                            ]
+                        },
+                    },
+                }
+            ),
+            flush=True,
+        )
+        # Blocks. On a stream that was closed after the prompt this returns ""
+        # immediately, which is exactly the failure the held stdin prevents.
+        answer = sys.stdin.readline()
+        with open(ask_out, "w", encoding="utf-8") as handle:
+            handle.write(answer)
+        print(
+            json.dumps(
+                {
+                    "type": "result",
+                    "subtype": "success",
+                    "is_error": False,
+                    "session_id": "stub-session",
+                    "usage": {"input_tokens": 1, "output_tokens": 1},
+                    "total_cost_usd": 0.0,
+                    "duration_ms": 1,
+                    "num_turns": 1,
+                }
+            ),
+            flush=True,
         )
 
     for line in os.environ.get("STUB_STDERR", "").splitlines():

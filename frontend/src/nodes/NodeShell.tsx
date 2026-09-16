@@ -29,6 +29,7 @@ import {
   PrdGlyph,
   PushGlyph,
   ReviewerGlyph,
+  ScopeGlyph,
 } from "./Glyphs";
 
 const GLYPHS = {
@@ -52,6 +53,7 @@ const GLYPHS = {
 const KIND_GLYPHS: Record<string, () => ReactNode> = {
   prd: PrdGlyph,
   reviewer: ReviewerGlyph,
+  scope: ScopeGlyph,
   "commit-push": PushGlyph,
   "commit-merge": MergeGlyph,
 };
@@ -71,6 +73,7 @@ const KIND_NAME: Record<string, string> = {
   worker: "agent",
   reviewer: "reviewer",
   approval: "sign-off",
+  scope: "scope",
   commit: "commit",
   "commit-push": "commit & push",
   "commit-merge": "commit & merge",

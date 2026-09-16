@@ -91,8 +91,9 @@ from .knowledge import index as knowledge_index
 from .knowledge import mcp as knowledge_mcp
 from .knowledge import store as knowledge_store
 from .agent.adapter import AgentAdapter, AgentRun, RunConfig
+from .agent.events import PermissionRequest
 from .agent.claude import ClaudeAdapter, PermissionDenied, resolve_permission_mode
-from .agent.fake import FAKE_COST_USD, SCRIPTS as FAKE_SCRIPTS, FakeAdapter
+from .agent.fake import FAKE_COST_USD, SCRIPT_NAMES as FAKE_SCRIPTS, FakeAdapter
 from .discovery import discover_codebases
 from . import verdict
 from .models import (
@@ -105,6 +106,7 @@ from .models import (
     ProjectSettings,
     PUSHING_OUTPUT_KINDS,
     Run,
+    RunAnswer,
     RunDecision,
     RunMemory,
     RunStatus,
@@ -123,6 +125,13 @@ from .models import (
 from .paths import PathEscape, is_safe_name
 from .runcheck import NotRunnable
 from .skills import SkillError
+from .questions import (
+    ASK_TOOL,
+    INTERVIEW_CONTRACT,
+    Question,
+    clean_answers,
+    parse_questions,
+)
 from .runevents import (
     AgentStreamEvent,
     NodeStatusEvent,
@@ -131,11 +140,41 @@ from .runevents import (
     RunDecisionEvent,
     RunDecisionRequestEvent,
     RunInputEvent,
+    RunQuestionEvent,
+    RunQuestionRequestEvent,
     RunStatusEvent,
 )
 from .worktree import RunWorkspaces, WorktreeError
 from .runlog import RunChannel, RunStore
 from .store import NotFound, Store, get_store
+
+SCOPE_READ_TOOLS: frozenset[str] = frozenset({"Read", "Grep", "Glob", "TodoWrite"})
+"""What a `scope` session may do besides ask, and the whole of it.
+
+Reading is allowed because an interviewer that cannot look at what it was given
+asks worse questions. `TodoWrite` is here because it writes nothing outside the
+agent's own head — it is the checklist the canvas renders, not a file.
+
+**Everything else is denied**, including every tool this list forgot: the policy
+is an allowlist precisely so a tool added to the CLI next month is denied by
+this server before anybody notices it exists. A scope node has no codebase, no
+worktree and nothing to commit, so there is no work for a write or a command to
+be part of.
+"""
+
+SCOPE_DENIED_TOOLS: tuple[str, ...] = (
+    "Write",
+    "Edit",
+    "NotebookEdit",
+    "Bash",
+    "WebFetch",
+    "WebSearch",
+    "Task",
+)
+"""Named on the spawn as well as refused at the prompt. Two mechanisms for one
+rule, for the reason `RunConfig.disallowed_tools` gives: the flag stops the call
+being made, the policy stops a call that was made anyway, and **the policy is
+authoritative** — if they ever disagree, the flag is the bug."""
 
 CANCEL_GRACE_S = 10.0
 """How long a cancelled run may take to stop before the task is killed."""
@@ -231,11 +270,18 @@ def adapter_for(
         if isinstance(scripts, list) and scripts:
             script = str(scripts[min(max(lap, 1) - 1, len(scripts) - 1)])
         else:
+            # A scope node's default is the one script that interviews somebody.
+            # `success` would edit a README and say "Done", which is not a thing
+            # this node can do and not a document anything downstream can read —
+            # a dry run of a scope node must still stop and ask.
+            default = "scope" if _is_scope(node) else "success"
             script = str(
                 node.definition.config.get("fake_script")
                 or os.environ.get("FACTOR_IA_FAKE_SCRIPT")
-                or "success"
+                or default
             )
+            if script not in FAKE_SCRIPTS:
+                script = default
         if script not in FAKE_SCRIPTS:
             script = "success"
         return FakeAdapter(  # type: ignore[arg-type]
@@ -244,14 +290,27 @@ def adapter_for(
     return ClaudeAdapter()
 
 
+def _is_scope(node: Node) -> bool:
+    """A `human` node that negotiates rather than one that gates.
+
+    One reader, for `model_for`'s reason — the run record, the run check, the
+    adapter choice and the spawn must all agree about which kind of human node
+    this is, and four copies of `type == "human" and kind == "scope"` is four
+    places for them to stop agreeing.
+    """
+    return node.definition.type == "human" and node_kind(node) == "scope"
+
+
 def model_for(node: Node, settings: ProjectSettings | None = None) -> str:
     """What this node asked to run on. `""` when it defers to the CLI's default.
 
     The same ladder `adapter_name_for` walks, and the same reason for existing:
     one reader, so the run record, the spawn and anything that comes later all
-    resolve the model identically. Non-agent nodes never have one.
+    resolve the model identically. A `scope` node has one for the same reason an
+    agent does — it spawns a session, and what that session runs on is a
+    property of the machine. No other node type ever has one.
     """
-    if node.definition.type != "agent":
+    if node.definition.type != "agent" and not _is_scope(node):
         return ""
     resolved = RunConfig.from_node_config(
         node.definition.config,
@@ -266,8 +325,14 @@ def skill_for(node: Node) -> str:
     One reader, for `model_for`'s reason: the run record, the run check and the
     spawn must agree about which standing instructions applied. No ladder — a
     skill is a property of the node and of nothing above it.
+
+    **A `scope` node wears one too, and unlike an agent's it is required.** What
+    an agent does without a skill is still the work the belt described; what a
+    scope session does without one is ask an operator whatever occurs to it,
+    which is the difference between an interview and a chat. `runcheck` refuses
+    the run rather than letting that happen.
     """
-    if node.definition.type != "agent":
+    if node.definition.type != "agent" and not _is_scope(node):
         return ""
     return str(node.definition.config.get("skill") or "").strip()
 
@@ -315,6 +380,26 @@ def _carries(node: Node, edge: Edge, outcome: str) -> bool:
 
 
 @dataclass
+class ScopeQuestion:
+    """One questionnaire a `scope` node is parked on, awaiting the operator.
+
+    Keyed by the **request id** rather than the node id, which is the whole
+    difference between negotiating and gating: a gate asks once, so its node
+    names the question; a scope node asks repeatedly, so only the request does.
+    A form left open in a second tab therefore fails against the question it was
+    showing instead of answering the one on screen now.
+
+    The questions are held as well as the future because the answers are checked
+    against them (`questions.clean_answers`) — an answer is keyed by question
+    text, and the server is the one that knows what it actually asked.
+    """
+
+    node_id: str
+    questions: list[Question]
+    future: "asyncio.Future[dict[str, str]]"
+
+
+@dataclass
 class ActiveRun:
     """A run's in-process half: the task, the bus, the adapter run in flight."""
 
@@ -354,6 +439,11 @@ class ActiveRun:
     #: Human nodes the walk is parked on, by node id. Resolved by
     #: `submit_decision`, cancelled by `cancel`.
     decisions: dict[str, "asyncio.Future[RunDecision]"] = field(default_factory=dict)
+    #: Questionnaires a `scope` node is parked on, by **request** id. Resolved
+    #: by `submit_answer`, cancelled by `cancel`. Separate from `decisions` for
+    #: the reason `ScopeQuestion` gives, and drained by the same code paths:
+    #: every future in here is one an operator may never answer.
+    questions: dict[str, ScopeQuestion] = field(default_factory=dict)
     #: One document per memory node that has run, by node id. **This is the
     #: record**; the file on disk is its rendering, rewritten whole on every
     #: write (`memory.py`). Held across laps on purpose: a loop that sends a
@@ -650,6 +740,53 @@ class Orchestrator:
         future.set_result(decision)
         return state.run
 
+    async def submit_answer(self, run_id: str, answer: RunAnswer) -> Run:
+        """One questionnaire's answers. Lets a parked `scope` session carry on.
+
+        A sibling of `submit_decision`, addressed one level finer. A verdict
+        names a node because a gate asks once; this names a **request**, because
+        a scope node asks many times and the node id stopped being enough the
+        moment it did. `node_id` is still required and still checked: an answer
+        that matched a request id but not the node it belongs to is a client
+        that has lost track of which run it is looking at, and answering it
+        anyway would file an operator's words against a machine they never saw.
+
+        The answers are filtered against the questions this server actually
+        asked (`questions.clean_answers`) rather than passed through, because
+        they are about to be spread over a tool call the agent composed — and an
+        answer to a question nobody asked is the one thing that shape must not
+        be able to carry.
+
+        **A form submitted with nothing in it is refused.** Allowing it would
+        send the agent an empty answer map, which the CLI reports as "the user
+        did not answer the questions" — so the agent asks again, the operator
+        sees the same form return, and nothing on any surface says why.
+
+        Like `submit_decision`, the run handed back still says `waiting_input`:
+        the session resumes on the walk's own task and the transition arrives on
+        the stream a moment later.
+        """
+        state = self._active.get(run_id)
+        if state is None:
+            raise RunConflict(f"run {run_id} is not in flight")
+        pending = state.questions.get(answer.request_id)
+        if pending is None or pending.future.done():
+            raise RunConflict(
+                f"question {answer.request_id} of run {run_id} is not waiting for an answer"
+            )
+        if pending.node_id != answer.node_id:
+            raise RunConflict(
+                f"question {answer.request_id} belongs to node {pending.node_id!r}, "
+                f"not {answer.node_id!r}"
+            )
+        cleaned = clean_answers(pending.questions, answer.answers)
+        if not cleaned:
+            raise RunConflict(
+                "that form was submitted with no answers to the questions it asked"
+            )
+        pending.future.set_result(cleaned)
+        return state.run
+
     async def cancel(self, run_id: str) -> Run:
         """Stop the run and everything it spawned.
 
@@ -665,6 +802,14 @@ class Orchestrator:
             raise RunConflict(f"run {run_id} already finished as {run.status}")
 
         state.cancelled = True
+        for pending in list(state.questions.values()):
+            # Parked on a question, for `decisions`' reason and with one extra:
+            # the *agent* is parked too, holding a permission request open on a
+            # pipe. Releasing the walk is what lets `_run_scope` unwind and the
+            # interrupt below reach a child that is otherwise waiting for an
+            # answer nobody is going to give it.
+            if not pending.future.done():
+                pending.future.cancel()
         for future in list(state.decisions.values()):
             # Parked on a person: unblock the walk now rather than leave the
             # watchdog to hard-cancel the task `CANCEL_GRACE_S` from now. The
@@ -1087,7 +1232,16 @@ class Orchestrator:
         in the walk: the operator saying no is an outcome on the fail port, and
         making it the *same* outcome an agent's crash produces is what lets one
         belt handle both. `detail` says which it was.
+
+        **`scope` is the other kind, and it branches here** (`models.HumanKind`).
+        It is the same node — two ports, parked on `waiting_input`, answered
+        over a POST — asking more than once, with an agent deciding what to ask.
+        Everything below this branch is the gate, unchanged.
         """
+        if node_kind(node) == "scope":
+            await self._run_scope(state, node, incoming)
+            return
+
         node_run = state.run.node_run(node.id)
         prompt = node_run.prompt if node_run is not None else node_prompt(node)
         if node_run is not None:
@@ -1158,6 +1312,314 @@ class Orchestrator:
             await self._set_node(
                 state, node.id, "failed", f"rejected: {note}" if note else "rejected"
             )
+
+    async def _run_scope(self, state: ActiveRun, node: Node, incoming: str) -> None:
+        """Interview the operator, and put the answers on the belt.
+
+        The agent path and the human path spliced together, and the reason
+        `DESIGN.md`'s open question 2 stayed answered. An agent reads what came
+        down the belt, decides what it still does not know, and asks — through
+        its own `AskUserQuestion` tool, which reaches this server as a permission
+        request because it is deliberately **not** pre-approved. Each question is
+        an SSE event down and a POST up, which is the shape a gate already had.
+        Nothing here needs a socket (`docs/SCOPE.md`).
+
+        **Three things make this not an agent node**, and each is the reason for
+        the one after it:
+
+        1. *No codebase.* A scope session writes no code, so requiring one would
+           make the node unusable at the head of a line — which is the only place
+           anybody wants it. Its cwd is an empty run-scoped directory, because
+           the adapter refuses a cwd outside `/workspace` and an exception to a
+           containment check is worth less than a `mkdir` (`worktree.py`).
+        2. *A skill is required, not optional.* An agent with no skill still does
+           the work the belt described; a session with no skill asks whatever
+           occurs to it, which is a chat and not an interview. Refused by
+           `runcheck` before the run starts, and again here.
+        3. *An allowlist, not `acceptEdits`.* With a permission prompt tool in
+           play every non-preapproved call arrives here, so the policy is a
+           whitelist of reading (`SCOPE_READ_TOOLS`) plus the question, and a
+           denial with a reason for everything else. A scope session therefore
+           cannot edit, run a command or reach the network **whatever its skill
+           says** — which matters more here than anywhere, because this is the
+           one node whose instructions an operator picks from a dropdown.
+
+        The document is the agent's own final text, unedited. A session that
+        ends without one **fails**, onto the fail belt, exactly as a rejected
+        approval does: the operator declined to confirm, and a node that went
+        green over an empty document would be this project's own failure mode.
+        """
+        node_run = state.run.node_run(node.id)
+        assert node_run is not None
+        # Working before it is waiting — unlike a gate, which has done nothing
+        # at the moment it parks. `_run_node` leaves the transition to us for
+        # exactly this reason.
+        await self._set_node(state, node.id, "running")
+
+        # Required, unlike an agent's, and failed on rather than defaulted for
+        # the reason `_run_agent` gives about dropping standing instructions: a
+        # session that quietly lost the thing deciding what it asks about would
+        # produce a document that looks right and was made under rules nobody
+        # chose.
+        wanted = skill_for(node)
+        if not wanted:
+            await self._set_node(
+                state,
+                node.id,
+                "failed",
+                "no skill attached — a scope node needs one to know what to ask",
+            )
+            return
+        try:
+            appended = skills.body(wanted)
+        except SkillError as exc:
+            await self._set_node(
+                state, node.id, "failed", f"skill {wanted!r} unavailable: {exc}"
+            )
+            return
+        # The interview contract goes **after** the skill, which is the ladder
+        # `compose_system_prompt` applies everywhere: the skill says what to ask
+        # about, and what an interview is is not a skill's to redefine.
+        appended = verdict.compose_system_prompt(
+            appended, reviewer=False, scope=INTERVIEW_CONTRACT
+        )
+
+        assert state.workspaces is not None
+        cwd = str(state.workspaces.ensure_scope_dir(_spawn_stem(node.id, node_run.lap)))
+        adapter = adapter_for(node, state.settings, lap=node_run.lap)
+        agent_run = adapter.create_run(
+            incoming,
+            cwd,
+            RunConfig(
+                # The same ladder an agent node walks — node, then project, then
+                # the CLI's own — through the same one reader.
+                model=model_for(node, state.settings) or None,
+                # **Not `acceptEdits`.** The default mode is the one where
+                # everything asks, and everything asking is what puts this
+                # server's policy in front of every call the session makes.
+                permission_mode="default",
+                permission_prompt_tool="stdio",
+                append_system_prompt=appended,
+                # Pre-approved so reading costs no round trip. `AskUserQuestion`
+                # is deliberately **not** here: an allowed tool runs without
+                # asking, and there would then be no human in it.
+                allowed_tools=sorted(SCOPE_READ_TOOLS),
+                disallowed_tools=list(SCOPE_DENIED_TOOLS),
+            ),
+        )
+        state.agent_run = agent_run
+        collected: list[str] = []
+        cumulative = 0.0
+        answered = 0
+        cause = "crash"
+        detail: str | None = None
+        try:
+            async for event in agent_run:
+                await state.channel.emit(
+                    AgentStreamEvent(run_id=state.run.id, node_id=node.id, event=event)
+                )
+                if event.type == "session.init":
+                    node_run.session_id = event.session_id
+                    if event.model:
+                        node_run.model = event.model
+                elif event.type == "text.delta":
+                    collected.append(event.text)
+                elif event.type == "tool.start":
+                    # **The document is the last thing said, not everything.**
+                    # A session narrates between questions — "let me look at
+                    # this", "one more thing" — and that narration is addressed
+                    # to nobody: the operator sees the form, and the next
+                    # machine gets handed `output_text`. So the text resets at
+                    # every tool call, and what survives is the prose written
+                    # after the final one, which is the document.
+                    #
+                    # Deliberately unlike `_run_agent`, where the *whole* reply
+                    # is kept because a reviewer's analysis is what the next lap
+                    # acts on. Here the reply and the artefact are different
+                    # things, and only one of them is for anybody.
+                    collected.clear()
+                elif event.type == "permission.request":
+                    # **The whole feature, in one await.** The walk parks inside
+                    # the agent's stream rather than beside it, which is what
+                    # keeps the session alive between questions: the adapter is
+                    # holding a pipe open and the child is waiting on an answer.
+                    if await self._answer_permission(state, node, agent_run, event):
+                        answered += 1
+                elif event.type == "turn.end":
+                    delta = max(0.0, event.total_cost_usd - cumulative)
+                    cumulative = max(cumulative, event.total_cost_usd)
+                    if delta:
+                        node_run.cost_usd += delta
+                        state.run.total_cost_usd += delta
+                        await state.channel.emit(
+                            RunCostEvent(
+                                run_id=state.run.id,
+                                node_id=node.id,
+                                delta_usd=delta,
+                                total_usd=state.run.total_cost_usd,
+                            )
+                        )
+                elif event.type == "exit":
+                    cause, detail = event.cause, event.detail
+        finally:
+            state.agent_run = None
+            # A session that ended while a question was open — a crash, a
+            # cancel, a child that gave up — leaves a future nothing will ever
+            # resolve and a form on the operator's screen. Dropping them here
+            # rather than in each path above is the same reasoning `_run_human`
+            # applies to `state.decisions`: a run being torn down must not leave
+            # a request id behind for a later submission to resolve.
+            for request_id, pending in list(state.questions.items()):
+                if pending.node_id == node.id:
+                    state.questions.pop(request_id, None)
+                    if not pending.future.done():
+                        pending.future.cancel()
+
+        # The agent's own last words, whole. Unlike a gate — where a note
+        # *replaces* what arrived because a person chose what to send on —
+        # nobody chose here, and the document is what the session was for.
+        node_run.output_text = "".join(collected).strip()
+
+        if cause != "completed":
+            if cause == "user":
+                await self._set_node(state, node.id, "failed", "cancelled")
+            else:
+                await self._set_node(
+                    state, node.id, "failed", detail or f"the session ended: {cause}"
+                )
+            return
+
+        if not node_run.output_text:
+            # Onto the fail belt, matching a rejected approval: the operator
+            # declined to confirm, or the session ran out of things to say
+            # without writing anything down. Either way there is nothing to hand
+            # the next machine, and a green tick over that is the lie this
+            # project exists to avoid.
+            await self._set_node(
+                state,
+                node.id,
+                "failed",
+                "the session ended without a document",
+            )
+            return
+
+        await self._set_node(
+            state,
+            node.id,
+            "succeeded",
+            f"scoped over {answered} question{'' if answered == 1 else 's'}"
+            if answered
+            else "scoped without asking anything",
+        )
+
+    async def _answer_permission(
+        self,
+        state: ActiveRun,
+        node: Node,
+        agent_run: AgentRun,
+        event: PermissionRequest,
+    ) -> bool:
+        """Apply the scope policy to one permission request. `True` if a person answered.
+
+        Three outcomes, and the order matters because each rules out the next:
+
+        1. **Not the question tool** — allowed if it is reading
+           (`SCOPE_READ_TOOLS`), denied with a sentence otherwise. The sentence
+           is the point: a denial with no reason is a session that retries the
+           same call until it runs out of turns.
+        2. **The question tool, with nothing answerable in it** — denied, also
+           with a reason. An agent composed that input, so a questionnaire this
+           server cannot parse is a model's mistake and not a broken run
+           (`questions.parse_questions`).
+        3. **A real questionnaire** — the walk parks, exactly as it does at a
+           gate, and the answers go back inside the allow.
+
+        **Never left unanswered.** Every path here resolves the request, because
+        the child is blocked on it: a request this function returned from
+        without replying to is a run that hangs until the watchdog kills it.
+        """
+        request_id = event.request_id
+        if event.tool_name != ASK_TOOL:
+            allowed = event.tool_name in SCOPE_READ_TOOLS
+            await agent_run.resolve_permission(
+                request_id,
+                allow=allowed,
+                message=None
+                if allowed
+                else (
+                    f"{event.tool_name} is not available at a scope node — it has no "
+                    "codebase and changes nothing. Ask the operator instead, and put "
+                    "what you learn in the document."
+                ),
+            )
+            return False
+
+        questions = parse_questions(event.input)
+        if not questions:
+            await agent_run.resolve_permission(
+                request_id,
+                allow=False,
+                message=(
+                    "that questionnaire could not be read. Send `questions` as a list, "
+                    "each with a non-empty `question`, and ask again."
+                ),
+            )
+            return False
+
+        # **Registered before the node is announced as waiting**, for the reason
+        # `_run_human` gives: the events below are what tell a client a form is
+        # open, and a client that answers the instant it sees one would
+        # otherwise be refused for the width of this function.
+        future: asyncio.Future[dict[str, str]] = (
+            asyncio.get_running_loop().create_future()
+        )
+        state.questions[request_id] = ScopeQuestion(
+            node_id=node.id, questions=questions, future=future
+        )
+
+        await self._set_node(
+            state, node.id, "waiting_input", questions[0].question[:120]
+        )
+        state.run.status = "waiting_input"
+        await self._persist(state)
+        await state.channel.emit(
+            RunStatusEvent(
+                run_id=state.run.id,
+                status="waiting_input",
+                detail=questions[0].question[:120],
+            )
+        )
+        await state.channel.emit(
+            RunQuestionRequestEvent(
+                run_id=state.run.id,
+                node_id=node.id,
+                request_id=request_id,
+                questions=questions,
+            )
+        )
+
+        try:
+            answers = await future
+        finally:
+            state.questions.pop(request_id, None)
+
+        await state.channel.emit(
+            RunQuestionEvent(
+                run_id=state.run.id,
+                node_id=node.id,
+                request_id=request_id,
+                answers=answers,
+            )
+        )
+        state.run.status = "running"
+        await self._persist(state)
+        await state.channel.emit(RunStatusEvent(run_id=state.run.id, status="running"))
+        await self._set_node(state, node.id, "running")
+        # The answers travel back **inside the allow**, spread over the call the
+        # agent made. Allowing without them is not the same thing: the CLI
+        # reports that nobody answered and the session asks again.
+        await agent_run.resolve_permission(request_id, allow=True, answers=answers)
+        return True
 
     async def _run_output(self, state: ActiveRun, node: Node, incoming: str) -> None:
         """The commit, and — for the two pushing kinds — where it goes next.

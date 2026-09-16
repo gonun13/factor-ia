@@ -194,6 +194,22 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ node_id: nodeId, approved, note }),
     }),
+  /** One questionnaire's answers, from a `scope` node's form.
+   *
+   * Addressed one level finer than a verdict: a scope node asks many times, so
+   * `requestId` is what names the question being answered. Answers are keyed by
+   * question text exactly as asked — the provider matches on it, and the server
+   * drops anything keyed to a question it did not pose. */
+  submitRunAnswer: (
+    runId: string,
+    nodeId: string,
+    requestId: string,
+    answers: Record<string, string>,
+  ) =>
+    request<Run>(`/api/runs/${runId}/answer`, {
+      method: "POST",
+      body: JSON.stringify({ node_id: nodeId, request_id: requestId, answers }),
+    }),
   /** Explicit cancel — closing the tab is not a decision to stop work. */
   cancelRun: (runId: string) =>
     request<Run>(`/api/runs/${runId}/cancel`, { method: "POST" }),

@@ -49,7 +49,14 @@ from .adapter import RunConfig
 from .events import AgentEvent
 
 Script = Literal[
-    "success", "failure", "streaming", "echo", "silent", "verdict-pass", "verdict-fail"
+    "success",
+    "failure",
+    "streaming",
+    "echo",
+    "silent",
+    "verdict-pass",
+    "verdict-fail",
+    "scope",
 ]
 
 #: What the fake reports as the model. Deliberately not a real model id — a
@@ -264,6 +271,45 @@ def silent_script(session_id: str, cwd: str, prompt: str, cost: float) -> Iterab
     yield ev.Exit(session_id=session_id, cause="completed", code=0)
 
 
+#: The questions the `scope` script puts to the operator, in order. Two of
+#: them, because one proves nothing about sequence and the second is where a
+#: form that answered the wrong question would show up.
+SCOPE_QUESTIONS: list[list[dict[str, Any]]] = [
+    [
+        {
+            "question": "What is this change for?",
+            "header": "Goal",
+            "multiSelect": False,
+            "options": [
+                {"label": "Fixing a bug", "description": "Something is wrong today"},
+                {"label": "New capability", "description": "Something that is not there"},
+            ],
+        }
+    ],
+    [
+        {
+            "question": "How will we know it worked?",
+            "header": "Done",
+            "multiSelect": False,
+            "options": [{"label": "Tests pass", "description": "The suite covers it"}],
+        }
+    ],
+]
+
+
+def scope_document(answers: dict[str, str]) -> str:
+    """The markdown a scope session leaves on its success belt.
+
+    Composed from the answers rather than fixed, because what the node claims
+    to produce is *the operator's answers* — a fake that returned a constant
+    would pass a test that the real thing's answers never reached the belt.
+    """
+    lines = ["# Scope", ""]
+    for question, answer in answers.items():
+        lines += [f"## {question}", "", answer, ""]
+    return "\n".join(lines).strip() + "\n"
+
+
 SCRIPTS: dict[str, Callable[[str, str, str, float], Iterable[AgentEvent]]] = {
     "success": success_script,
     #: Completes without producing any text. The empty belt, without a failure.
@@ -278,6 +324,16 @@ SCRIPTS: dict[str, Callable[[str, str, str, float], Iterable[AgentEvent]]] = {
     "verdict-pass": _verdict_script("pass", "the fix is there and the tests cover it"),
     "verdict-fail": _verdict_script("fail", "the bounds check is still missing"),
 }
+
+
+#: Every script by name, including the one that is not in `SCRIPTS`.
+#:
+#: `scope` waits for an answer, so it is an async generator on `FakeRun` rather
+#: than an entry in that dict — but a caller validating a requested script name
+#: is asking "is this a script", not "is this a plain generator", and the two
+#: questions having one answer is what keeps `fake_script: scope` selectable
+#: from a node's config like every other.
+SCRIPT_NAMES: frozenset[str] = frozenset(SCRIPTS) | {"scope"}
 
 
 def apply_tool(cwd: str, name: str, tool_input: dict[str, Any]) -> str | None:
@@ -344,17 +400,148 @@ class FakeRun:
         #: recorded here for a test to assert.
         self.append_system_prompt = run_config.append_system_prompt
         self.add_dirs = list(run_config.add_dirs)
+        self.permission_prompt_tool = run_config.permission_prompt_tool
+        #: Permission requests this run is parked on, by request id. Only the
+        #: `scope` script raises any — see `_scope_events`.
+        self._permissions: dict[str, asyncio.Future[Any]] = {}
+        #: Every permission this run was handed, in order, as
+        #: `(request_id, allow, answers, message)`. The fake's half of the
+        #: seam's new method: a test asserts the orchestrator's *policy* — what
+        #: it allows, what it denies and with what reason — by reading this
+        #: rather than by inspecting a subprocess it does not have.
+        self.resolved: list[tuple[str, bool, dict[str, str], str | None]] = []
 
     def __aiter__(self) -> AsyncIterator[AgentEvent]:
         return self._iterate()
 
     async def interrupt(self) -> None:
         self._interrupted = True
+        # A script parked on a question nobody will now answer. Released with a
+        # sentinel rather than cancelled, so the generator ends itself with the
+        # `exit` the interface promises instead of unwinding through the
+        # consumer's `async for` with no terminal event at all.
+        for future in list(self._permissions.values()):
+            if not future.done():
+                future.set_result(None)
 
-    async def _iterate(self) -> AsyncIterator[AgentEvent]:
+    async def resolve_permission(
+        self,
+        request_id: str,
+        *,
+        allow: bool,
+        answers: dict[str, str] | None = None,
+        message: str | None = None,
+    ) -> None:
+        """See `adapter.AgentRun`. Records, then releases the parked script.
+
+        Idempotent on an unknown or already-answered id, for the reason the
+        interface gives: a cancel does not know what the script was in the
+        middle of.
+        """
+        self.resolved.append((request_id, allow, dict(answers or {}), message))
+        future = self._permissions.pop(request_id, None)
+        if future is not None and not future.done():
+            future.set_result((allow, dict(answers or {})))
+
+    async def _scope_events(self) -> AsyncIterator[AgentEvent]:
+        """An agent that interviews the operator and writes up the answers.
+
+        The script a `scope` node is tested against, and the only one that
+        *waits*: it emits a `permission.request` carrying a questionnaire and
+        then stops until something calls `resolve_permission`. That is exactly
+        what the real adapter does — emit the request, park until a
+        `control_response` goes back down stdin — so an orchestrator that
+        deadlocks against one deadlocks against the other.
+
+        Two questions rather than one, because a single question proves nothing
+        about sequence, and because the interesting failure is answering the
+        second with the first one's form.
+        """
+        yield _init(self.session_id, self._cwd)
+        yield ev.TextDelta(session_id=self.session_id, text="Reading the brief.\n")
+        collected: dict[str, str] = {}
+        for questions in SCOPE_QUESTIONS:
+            request_id = f"req_{uuid.uuid4().hex[:12]}"
+            tool_use_id = f"toolu_{uuid.uuid4().hex[:12]}"
+            tool_input: dict[str, Any] = {"questions": questions}
+            future: asyncio.Future[Any] = asyncio.get_running_loop().create_future()
+            # Registered before the event is yielded, for the reason the
+            # orchestrator registers its own future before announcing a parked
+            # node: a consumer that answers the instant it sees the request must
+            # not be refused for the width of this loop body.
+            self._permissions[request_id] = future
+            yield ev.ToolStart(
+                session_id=self.session_id,
+                tool_use_id=tool_use_id,
+                name="AskUserQuestion",
+                input=tool_input,
+            )
+            yield ev.PermissionRequest(
+                session_id=self.session_id,
+                request_id=request_id,
+                tool_name="AskUserQuestion",
+                input=tool_input,
+            )
+            outcome = await future
+            self._permissions.pop(request_id, None)
+            if outcome is None:
+                # Interrupted while parked. The terminal event is still ours to
+                # emit — `_iterate` only checks the flag between events, and
+                # this one never came back from the consumer.
+                yield ev.Exit(session_id=self.session_id, cause="user", code=None)
+                return
+            allow, answers = outcome
+            if not allow or not answers:
+                yield ev.ToolEnd(
+                    session_id=self.session_id,
+                    tool_use_id=tool_use_id,
+                    output="The user did not answer the questions.",
+                    is_error=True,
+                )
+                yield ev.TurnEnd(
+                    session_id=self.session_id,
+                    model=FAKE_MODEL,
+                    usage=ev.Usage(input_tokens=400, output_tokens=40),
+                    total_cost_usd=self._cost_usd,
+                    duration_ms=800,
+                    num_turns=1,
+                )
+                yield ev.Exit(session_id=self.session_id, cause="completed", code=0)
+                return
+            collected.update(answers)
+            yield ev.ToolEnd(
+                session_id=self.session_id, tool_use_id=tool_use_id, output="answered"
+            )
+        yield ev.TextDelta(session_id=self.session_id, text=scope_document(collected))
+        yield ev.TurnEnd(
+            session_id=self.session_id,
+            model=FAKE_MODEL,
+            usage=ev.Usage(input_tokens=1400, output_tokens=300),
+            total_cost_usd=self._cost_usd,
+            duration_ms=5200,
+            num_turns=len(SCOPE_QUESTIONS) + 1,
+        )
+        yield ev.Exit(session_id=self.session_id, cause="completed", code=0)
+
+    async def _source(self) -> AsyncIterator[AgentEvent]:
+        """The script, as an async stream whichever kind it is.
+
+        Every script but `scope` is a plain generator that never waits, and
+        stays one: making them all async to accommodate the one that interviews
+        somebody would have been a cost paid by six scripts for a feature that
+        belongs to a seventh.
+        """
+        if self._script == "scope":
+            async for event in self._scope_events():
+                yield event
+            return
         for event in SCRIPTS[self._script](
             self.session_id, self._cwd, self._prompt, self._cost_usd
         ):
+            yield event
+
+    async def _iterate(self) -> AsyncIterator[AgentEvent]:
+        async for event in self._source():
             if self._interrupted:
                 # Mid-script, like the real one: whatever had been emitted
                 # stands, and the terminal event says who stopped it.

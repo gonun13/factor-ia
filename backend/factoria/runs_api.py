@@ -9,8 +9,12 @@ Two halves with deliberately different transports (`DESIGN.md`, Stack):
 - **State is SSE, one-way.** `GET /api/runs/{id}/events`. Stage 2 left GETs out
   of the Origin check precisely so this works, and run state is one-way because
   the input is a one-shot submission rather than a conversation (open question
-  2). The moment a human node needs a live back-channel, this is the decision to
-  revisit — Overseer chose `/ws` for exactly that reason.
+  2). A human node that *negotiates* was the one thing expected to force that
+  decision open again, and it did not: a `scope` node's question is an ordinary
+  SSE event and its answer is an ordinary POST (`/answer`), which is the shape
+  `/decision` already had, repeated rather than widened. Overseer chose `/ws`
+  because its console and its permission prompts are genuinely bidirectional;
+  nothing here is. See `docs/SCOPE.md`.
 
 **The catch-up problem, and how `seq` solves it.** Three cases have to work, and
 they are the same case:
@@ -39,7 +43,7 @@ from typing import Any, AsyncIterator
 from fastapi import APIRouter, Header, HTTPException, Query, Request, status
 from fastapi.responses import StreamingResponse
 
-from .models import Run, RunDecision, RunInput
+from .models import Run, RunAnswer, RunDecision, RunInput
 from .orchestrator import Orchestrator, RunBusy, RunConflict, get_orchestrator
 from .runcheck import NotRunnable
 from .runlog import RunLog
@@ -134,6 +138,28 @@ async def submit_run_decision(run_id: str, body: RunDecision) -> Run:
     """
     try:
         return await orchestrator().submit_decision(run_id, body)
+    except RunConflict as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+
+
+@router.post("/runs/{run_id}/answer", response_model=Run)
+async def submit_run_answer(run_id: str, body: RunAnswer) -> Run:
+    """One questionnaire's answers, from a `scope` human node.
+
+    The third control call, and a sibling of `/decision` for the reason
+    `/decision` is a sibling of `/input`: a submission carries the work, a
+    verdict routes it, and this continues a conversation. What is new is that it
+    is **repeatable** — a scope node asks many times — which is why the body
+    names a `request_id` and not just a node.
+
+    **This is the endpoint `DESIGN.md` expected to be a socket.** Open question
+    2 reserved the right to follow Overseer to `/ws` if a human node ever needed
+    a live back-channel. It turned out not to: a question is an SSE event and an
+    answer is a POST, so the negotiating node is the one that already existed,
+    asked more than once. SSE stands.
+    """
+    try:
+        return await orchestrator().submit_answer(run_id, body)
     except RunConflict as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
 

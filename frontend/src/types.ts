@@ -28,7 +28,17 @@ export type NodeType =
  */
 export type InputKind = "request" | "prd";
 export type OutputKind = "commit" | "commit-push" | "commit-merge";
-export type HumanKind = "approval";
+/**
+ * What a `human` node asks a person for — `models.HumanKind`.
+ *
+ * `approval` is a **gate**: one question written into the graph when it was
+ * drawn, answered once. `scope` is a **negotiation**: an agent reads the
+ * incoming belt, decides what it still does not know, and interviews the
+ * operator in sequence; the answers become the markdown document that leaves by
+ * the success port. Both park the run and both have two ports — a scope node
+ * simply asks more than once, which is why the transport never had to change.
+ */
+export type HumanKind = "approval" | "scope";
 /**
  * What an agent node is *for* — `models.AgentKind`.
  *
@@ -553,6 +563,21 @@ export type AgentEvent = { session_id: string; timestamp: string } & (
   | { type: "exit"; cause: string; code: number | null; detail: string | null }
 );
 
+/**
+ * One question a `scope` node's agent is putting to the operator — the server's
+ * `questions.Question`, already parsed and clamped on the way in.
+ *
+ * `question` is also the **key** an answer is returned under, verbatim: the
+ * provider matches answers to questions by their text, so a form that tidied
+ * the wording would send back an answer the agent reads as no answer at all.
+ */
+export type ScopeQuestion = {
+  question: string;
+  header: string;
+  multi_select: boolean;
+  options: { label: string; description: string }[];
+};
+
 /** The envelope: an adapter event addressed to a graph node, plus the two
  * things only the orchestrator knows — the node's state machine and the run's.
  * `seq` is the SSE `id:`, and the whole reconnection contract. */
@@ -583,6 +608,22 @@ export type RunEvent = { seq: number; run_id: string; timestamp: string } & (
       kind: string;
     }
   | { type: "run.decision"; node_id: string; approved: boolean; note: string }
+  | {
+      type: "run.question.request";
+      node_id: string;
+      /** What an answer names. A scope node asks many times, so the node id
+       * stopped being enough the moment it did — and a form left open in a
+       * second tab fails against the question it was showing rather than
+       * answering the one on screen now. */
+      request_id: string;
+      questions: ScopeQuestion[];
+    }
+  | {
+      type: "run.question";
+      node_id: string;
+      request_id: string;
+      answers: Record<string, string>;
+    }
   | { type: "agent"; node_id: string; event: AgentEvent }
   | {
       type: "run.artifact";
@@ -610,6 +651,8 @@ export const RUN_EVENT_TYPES: RunEvent["type"][] = [
   "run.input",
   "run.decision.request",
   "run.decision",
+  "run.question.request",
+  "run.question",
   "agent",
   "run.artifact",
   "run.cost",

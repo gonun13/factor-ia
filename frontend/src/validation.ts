@@ -168,6 +168,23 @@ export function runProblems(
     });
   }
 
+  // A `scope` human node needs a skill, and needs no codebase. The mirror image
+  // of the agent rules above, and worth stating as its own check rather than
+  // folding in: the message is the one `runcheck` refuses the run with, so the
+  // canvas says it before the operator reaches for Run rather than after.
+  const scopeless = nodes.filter(
+    (node) =>
+      node.data.definition.type === "human" &&
+      nodeKind(node.data.definition) === "scope" &&
+      !String(node.data.definition.config?.skill ?? "").trim(),
+  );
+  for (const node of scopeless) {
+    problems.push({
+      message: `Scope “${label(node)}” has no skill attached — a scope node needs one to know what to ask about.`,
+      nodeIds: [node.id],
+    });
+  }
+
   // The clean-repo precondition (DESIGN.md, Blast radius). The server refuses
   // it too, and its refusal is the one that counts — this is the canvas saying
   // the same thing before the operator reaches for Run. Reported once per

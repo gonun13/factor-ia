@@ -305,6 +305,7 @@ def compose_system_prompt(
     reviewer: bool,
     memory: str | None = None,
     knowledge: str | None = None,
+    scope: str | None = None,
 ) -> str | None:
     """The standing instructions one agent node runs under, composed once.
 
@@ -324,6 +325,12 @@ def compose_system_prompt(
     says "no sign-off" and a reviewer's verdict is the one thing that looks like
     one and is not.
 
+    `scope` is last, and it is the only one that is never combined with the
+    verdict fence: a `scope` human node and a `reviewer` agent node are
+    different machines. It goes below the skill for the ladder's reason — a
+    skill decides what a session interviews about, and what an interview *is* is
+    not a skill's to redefine (`questions.INTERVIEW_CONTRACT`).
+
     `memory` and `knowledge` both arrive already rendered
     (`memory.WRITER_CONTRACT`, `knowledge.index.compose`) so this module learns
     nothing about where either lives, exactly as it learns nothing about where
@@ -332,7 +339,13 @@ def compose_system_prompt(
     """
     parts = [
         part.strip()
-        for part in (skill_body, memory, knowledge, CONTRACT if reviewer else None)
+        for part in (
+            skill_body,
+            memory,
+            knowledge,
+            CONTRACT if reviewer else None,
+            scope,
+        )
         if part
     ]
     if not parts:

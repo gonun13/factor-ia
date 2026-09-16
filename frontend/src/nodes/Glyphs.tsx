@@ -70,6 +70,23 @@ export function HumanGlyph() {
   );
 }
 
+/** Scope: a person with a question mark — the human glyph, still asking.
+ *
+ * Deliberately the sign-off glyph plus one mark rather than a new drawing: both
+ * are a person on the line, and what differs is that this one has not finished
+ * asking. A reader who knows the human node should recognise this as a kind of
+ * it at a glance, which is what the eyebrow then spells out. */
+export function ScopeGlyph() {
+  return (
+    <svg viewBox="0 0 16 16" aria-hidden>
+      <circle cx="6.2" cy="4.6" r="2.4" {...stroke} />
+      <path d="M1.6 14.2a4.9 4.9 0 0 1 8.4-3.4" {...stroke} />
+      <path d="M11.4 9.1a1.7 1.7 0 1 1 2.3 1.6v1.1" {...stroke} />
+      <path d="M13.7 14.1v.1" {...stroke} />
+    </svg>
+  );
+}
+
 /** Memory: a spool, because what it holds is wound up and read back later. */
 export function MemoryGlyph() {
   return (

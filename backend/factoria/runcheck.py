@@ -173,6 +173,36 @@ def run_problems(
                     f"Agent “{label(node)}”: skill {wanted!r} cannot be read — {exc}"
                 )
 
+    # A `scope` human node runs a real session, so it has an agent node's two
+    # stale-reference problems and exactly one of its requirements. **No
+    # codebase** — the checks above are scoped to `by_type["agent"]` on purpose,
+    # and a scope node that needed one could not sit at the head of a line,
+    # which is the only place it is any use. **But a skill, and not optionally:**
+    # what an agent does without one is still the work the belt described; what
+    # a scope session does without one is ask whatever occurs to it, which is a
+    # chat and not an interview (`orchestrator._run_scope`).
+    for node in by_type.get("human", []):
+        if node_kind(node) != "scope":
+            continue
+        wanted = str(node.definition.config.get("skill") or "").strip()
+        if not wanted:
+            problems.append(
+                f"Scope “{label(node)}” has no skill attached — "
+                "a scope node needs one to know what to ask about."
+            )
+            continue
+        try:
+            skills.get_skill(wanted)
+        except skills.SkillNotFound:
+            problems.append(
+                f"Scope “{label(node)}”: skill {wanted!r} is no longer in "
+                "/workspace/_skills — attach another, or clear the plate."
+            )
+        except (skills.SkillError, PathEscape) as exc:
+            problems.append(
+                f"Scope “{label(node)}”: skill {wanted!r} cannot be read — {exc}"
+            )
+
     # "A factory starts with an input and ends with an output" — as two rules
     # about the *ends of the line*, which is the only way to state it that a
     # graph can be checked against:

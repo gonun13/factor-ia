@@ -141,9 +141,12 @@ Roughly in the order the design anticipates them:
 - **Nested factories** — a factory as a node inside another factory. The data
   model accommodates this from day one (see below) even though the UI won't.
 - **Multiple codebases per project.**
-- ~~**Human-in-the-middle nodes**~~ — *done (stage 8).* A `human` node stops the
-  line and routes on approve/reject. Edits and redirection mid-run are still
-  later; what it takes today is a verdict and a note.
+- ~~**Human-in-the-middle nodes**~~ — *done (stage 8, extended in stage 10).* A
+  `human` node stops the line and routes on approve/reject. Its second kind,
+  `scope`, negotiates: an agent interviews the operator over several turns and
+  the answers become a document on the success belt (`docs/SCOPE.md`). Editing
+  what is on the belt, and redirecting the run to a node of your choosing, are
+  still later — a scope node adds to the brief rather than rewriting it.
 - ~~**Loops**~~ — *done (stage 9).* An `agent` node now has a **kind**: a
   `worker` does the job and has one way out, a `reviewer` judges what it is
   given and must end its reply with a fenced JSON verdict. A reviewer's `fail`
@@ -426,7 +429,7 @@ Each choice with its rationale, and what the web check found.
 | Canvas | **React Flow (`@xyflow/react`) v12** | Operator's explicit choice, and the right one — it's what this entire product category is built on. *Check:* v12 is current, published as `@xyflow/react`, with native subflow support via `parentId` (renamed from `parentNode` in v12 — worth knowing since older tutorials use the old name). UI components were updated in August 2026 for shadcn/ui on React 19 + Tailwind 4. |
 | Backend | **Python + FastAPI** | Operator's comfort zone. Native async fits the orchestrator and child-process supervision. |
 | Agent runtime | **The `claude` CLI, spawned headless**, behind `AgentAdapter` | **Decided** — a reversal from this document's first draft, which recommended the Agent SDK (see Compliance below). The CLI is installed in the image and is the backend's single agent dependency. It speaks `--input-format stream-json --output-format stream-json`, a clean machine interface, and it is how both Overseer and `askill` drive it. Also the cheapest path to multi-provider: `askill` already launches five different CLIs through one script. |
-| Live updates | **SSE** (`StreamingResponse` + `EventSource`) | *Check:* the current recommendation for one-way server→client task/progress streams is SSE over WebSockets — plain HTTP, no extra protocol, browser-native reconnect. Run state is one-way; run *control* (start, cancel) is a normal POST. The documented SSE weakness — the server keeps working after a client disconnect — is handled by making cancellation an explicit endpoint. Note Overseer chose `/ws` instead, because its raw console and permission prompts are genuinely bidirectional; Factor-ia's input is a one-shot request submission (open question 2), so this holds — expect to follow Overseer only if human-in-the-middle nodes turn out to need a live back-channel. |
+| Live updates | **SSE** (`StreamingResponse` + `EventSource`) | *Check:* the current recommendation for one-way server→client task/progress streams is SSE over WebSockets — plain HTTP, no extra protocol, browser-native reconnect. Run state is one-way; run *control* (start, cancel) is a normal POST. The documented SSE weakness — the server keeps working after a client disconnect — is handled by making cancellation an explicit endpoint. Note Overseer chose `/ws` instead, because its raw console and permission prompts are genuinely bidirectional; Factor-ia's input is a one-shot request submission (open question 2), so this holds — expect to follow Overseer only if human-in-the-middle nodes turn out to need a live back-channel. *Stage 10: they did not.* The `scope` node negotiates over several turns and does it on SSE down and POST up, one exchange at a time — see open question 2 and `docs/SCOPE.md`. This row needs no revisiting; the thing that would still argue for `/ws` is a raw console, and there is none. |
 | Persistence | **JSON + Markdown files** | Operator's choice, and it earns it: git-diffable, reviewable, agent-readable, zero infrastructure. JSON for structure and state, Markdown for memory and summaries. No DB process in the container. |
 | Event log | **JSONL, append-only** | Natural fit for a stream; trivially tailable; gives replay later for free. |
 | Isolation | **git worktree per agent run** | See Architecture. Contains blast radius, never touches the dev's working tree. |
@@ -607,9 +610,20 @@ argument. Deliberately left open.
    *Stage 8 settled the half of this that was in doubt.* The human node was the
    deferred feature most likely to force a back-channel, and it did not: it
    parks the walk, emits `run.decision.request`, and takes one verdict back over
-   a normal POST. SSE stands. What would still reopen the question is a human
-   node that negotiates — several turns with an agent mid-run — which is a
-   different feature from a gate.
+   a normal POST. SSE stands.
+
+   *Stage 10 settled the other half, and settled it the same way.* The thing
+   this entry reserved judgement on — *"a human node that negotiates, several
+   turns with an agent mid-run"* — was built as the `scope` kind, and it did not
+   need a back-channel either. It is the gate asked **more than once**:
+   `run.question.request` down the stream, `POST /runs/{id}/answer` back up,
+   with a request id naming which question is being answered. Run state is still
+   one-way, because each exchange is one request and one reply rather than a
+   stream somebody types into — which is the property Overseer's `/ws` exists to
+   serve and this still does not have. **SSE stands, and the question is now
+   closed rather than deferred.** What had to change was a layer below the
+   transport: the adapter used to end every conversation by closing stdin. See
+   `docs/SCOPE.md`.
 
 3. **Does the codebase attachment belong on the node, or on the factory?**
    Per-node is more flexible and matches "the agent can't run without one".

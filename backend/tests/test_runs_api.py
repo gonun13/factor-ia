@@ -465,3 +465,132 @@ def test_a_verdict_on_a_finished_run_is_409(runnable: TestClient) -> None:
         f"/api/runs/{run['id']}/decision", json={"node_id": "n-gate", "approved": True}
     )
     assert refused.status_code == 409
+
+
+SCOPED = {
+    "nodes": [
+        GRAPH["nodes"][0],
+        {
+            "id": "n-scope",
+            "definition": {
+                "type": "human",
+                "label": "Scope",
+                "position": {"x": 160, "y": 0},
+                "config": {"kind": "scope", "skill": "scoping"},
+            },
+        },
+        GRAPH["nodes"][1],
+        GRAPH["nodes"][2],
+    ],
+    "edges": [
+        {"id": "e-1", "source": "n-in", "target": "n-scope"},
+        {"id": "e-2", "source": "n-scope", "target": "n-agent", "source_handle": "success"},
+        {"id": "e-3", "source": "n-agent", "target": "n-out", "source_handle": "success"},
+    ],
+}
+
+SCOPE_SKILL = """---
+name: scoping
+description: Interviews an operator about a change before anyone builds it.
+---
+
+Ask what it is for.
+"""
+
+
+def _open_question(client: TestClient, run_id: str) -> dict:
+    """Poll the *stream* for the open question, the way a browser learns of one.
+
+    Unlike a gate, a scope node's question is not in the run record at all: the
+    record is a snapshot from before the walk and a node that asks four times
+    looks identical in it each time. The request id only exists on the stream,
+    which is the whole reason the form is driven from there.
+    """
+    for _ in range(1500):
+        # The **log**, not the stream: an SSE response ends when the run does,
+        # so a reader draining it while the run is parked waits for the answer
+        # it is being read in order to give.
+        events = list(RunLog(run_id).read(0))
+        asked = [e for e in events if e["type"] == "run.question.request"]
+        answered = {e["request_id"] for e in events if e["type"] == "run.question"}
+        for event in asked:
+            if event["request_id"] not in answered:
+                return event
+        time.sleep(0.01)
+    raise AssertionError("no question was ever asked")
+
+
+def test_a_run_parks_on_every_question_and_an_answer_resumes_it(
+    runnable: TestClient, workspace: Path
+) -> None:
+    """The negotiating node, over the wire it was supposed to need a socket for.
+
+    `DESIGN.md` open question 2 reserved the right to move to `/ws` if a human
+    node ever needed a live back-channel. This is that node, and the transport
+    is the one that was already there: SSE down, POST up, once per question.
+    """
+    (workspace / "_skills").mkdir(exist_ok=True)
+    (workspace / "_skills" / "scoping.md").write_text(SCOPE_SKILL, encoding="utf-8")
+    assert runnable.put("/api/projects/demo/factories/main", json=SCOPED).status_code == 200
+
+    run = start(runnable)
+    runnable.post(f"/api/runs/{run['id']}/input", json={"text": "make it resumable"})
+
+    asked = 0
+    while asked < 2:
+        question = _open_question(runnable, run["id"])
+        assert question["node_id"] == "n-scope"
+        assert question["questions"], "the form has nothing to render"
+        answers = {
+            one["question"]: one["options"][0]["label"] if one["options"] else "yes"
+            for one in question["questions"]
+        }
+        posted = runnable.post(
+            f"/api/runs/{run['id']}/answer",
+            json={
+                "node_id": "n-scope",
+                "request_id": question["request_id"],
+                "answers": answers,
+            },
+        )
+        assert posted.status_code == 200, posted.text
+        # Still `waiting_input`: the session resumes on the walk's own task and
+        # the transition arrives on the stream, like every other transition.
+        assert posted.json()["status"] == "waiting_input"
+        asked += 1
+
+    events = read_stream(runnable, f"/api/runs/{run['id']}/events")
+    assert events[-1]["type"] == "run.status" and events[-1]["status"] == "succeeded"
+    assert [e["type"] for e in events].count("run.question.request") == 2
+    assert [e["type"] for e in events].count("run.question") == 2
+
+
+def test_an_answer_to_a_question_that_is_not_open_is_409(
+    runnable: TestClient, workspace: Path
+) -> None:
+    (workspace / "_skills").mkdir(exist_ok=True)
+    (workspace / "_skills" / "scoping.md").write_text(SCOPE_SKILL, encoding="utf-8")
+    assert runnable.put("/api/projects/demo/factories/main", json=SCOPED).status_code == 200
+
+    run = start(runnable)
+    runnable.post(f"/api/runs/{run['id']}/input", json={"text": "x"})
+    question = _open_question(runnable, run["id"])
+    answers = {question["questions"][0]["question"]: "yes"}
+
+    stale = runnable.post(
+        f"/api/runs/{run['id']}/answer",
+        json={"node_id": "n-scope", "request_id": "gone", "answers": answers},
+    )
+    assert stale.status_code == 409
+
+    blank = runnable.post(
+        f"/api/runs/{run['id']}/answer",
+        json={
+            "node_id": "n-scope",
+            "request_id": question["request_id"],
+            "answers": {},
+        },
+    )
+    assert blank.status_code == 409
+
+    runnable.post(f"/api/runs/{run['id']}/cancel")

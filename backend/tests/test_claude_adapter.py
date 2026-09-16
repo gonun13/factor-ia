@@ -13,6 +13,7 @@ recorded fixtures, so the events are still the real shapes.
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import time
 from pathlib import Path
@@ -325,3 +326,100 @@ def test_from_node_config_takes_the_body_not_the_name() -> None:
     config = RunConfig.from_node_config({"skill": "repo-recon"}, append_system_prompt="body")
     assert config.append_system_prompt == "body"
     assert "repo-recon" not in (config.append_system_prompt or "")
+
+
+# ---- the held stream, and the answer that goes back up it -------------------
+
+
+def test_a_permission_request_reaches_the_consumer_with_its_questions(
+    stub, workspace, tmp_path, monkeypatch
+) -> None:
+    """The questionnaire lives in the tool input, which is what a scope node
+    reads. Answered here as the orchestrator answers it, so the stub's own read
+    of stdin is the proof the stream was still open."""
+    out = tmp_path / "answer.json"
+    monkeypatch.setenv("STUB_ASK_OUT", str(out))
+    run = ClaudeAdapter().create_run(
+        "go", str(workspace), RunConfig(permission_prompt_tool="stdio")
+    )
+
+    async def collect():
+        events = []
+        async for event in run:
+            events.append(event)
+            if event.type == "permission.request":
+                await run.resolve_permission(
+                    event.request_id,
+                    allow=True,
+                    answers={"What is this change for?": "Fixing a bug"},
+                )
+        return events
+
+    events = asyncio.run(collect())
+    asked = [event for event in events if event.type == "permission.request"]
+    assert len(asked) == 1
+    assert asked[0].tool_name == "AskUserQuestion"
+    assert asked[0].input["questions"][0]["header"] == "Goal"
+    # The stream still ends exactly once, which is the interface's one promise.
+    assert types_of(events)[-1] == "exit"
+    assert events[-1].cause == "completed"
+
+    frame = json.loads(out.read_text(encoding="utf-8"))
+    assert frame["type"] == "control_response"
+    assert frame["response"]["request_id"] == "req-1"
+    inner = frame["response"]["response"]
+    assert inner["behavior"] == "allow"
+    # **The original input, respread.** A response carrying only the answers
+    # would run `AskUserQuestion` with its questions deleted.
+    assert inner["updatedInput"]["questions"][0]["question"] == "What is this change for?"
+    assert inner["updatedInput"]["answers"] == {"What is this change for?": "Fixing a bug"}
+
+
+def test_a_denied_permission_carries_the_reason(stub, workspace, tmp_path, monkeypatch) -> None:
+    """A denial with no message is a session that retries the same call."""
+    out = tmp_path / "answer.json"
+    monkeypatch.setenv("STUB_ASK_OUT", str(out))
+    run = ClaudeAdapter().create_run(
+        "go", str(workspace), RunConfig(permission_prompt_tool="stdio")
+    )
+
+    async def collect():
+        async for event in run:
+            if event.type == "permission.request":
+                await run.resolve_permission(
+                    event.request_id, allow=False, message="not here"
+                )
+
+    asyncio.run(collect())
+    inner = json.loads(out.read_text(encoding="utf-8"))["response"]["response"]
+    assert inner == {"behavior": "deny", "message": "not here"}
+
+
+def test_without_the_prompt_tool_stdin_is_closed_after_the_prompt(
+    stub, workspace, tmp_path, monkeypatch
+) -> None:
+    """The behaviour every other node depends on, asserted rather than assumed.
+
+    A closed stdin is what makes the CLI exit after `result`, so this is the
+    thing the scope node's held stream is an exception to — and an exception
+    nobody checked the other side of is a regression waiting to happen.
+    """
+    out = tmp_path / "answer.json"
+    monkeypatch.setenv("STUB_ASK_OUT", str(out))
+    run = ClaudeAdapter().create_run("go", str(workspace), RunConfig())
+
+    async def collect():
+        return [event async for event in run]
+
+    events = asyncio.run(collect())
+    assert types_of(events)[-1] == "exit"
+    # The child read end-of-input instead of an answer, and wrote it down.
+    assert out.read_text(encoding="utf-8") == ""
+
+
+def test_resolving_an_unknown_request_is_a_no_op(stub, workspace) -> None:
+    """A cancel does not know what the child was in the middle of."""
+    run = ClaudeAdapter().create_run(
+        "go", str(workspace), RunConfig(permission_prompt_tool="stdio")
+    )
+    asyncio.run(run.resolve_permission("never-asked", allow=False, message="x"))

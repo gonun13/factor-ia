@@ -114,6 +114,18 @@ plus `factory-ref`, which is in the union with no UI and no execution so that
 nesting is a later UI change rather than a file-format change. `human` was in
 the union on the same terms until stage 8 gave it both.
 
+**A `human` node has two kinds** (`models.HumanKind`), and they are the same
+machine asked for different amounts. `approval` is a **gate**: one question
+written into the graph, answered once. `scope` is a **negotiation**: an agent
+reads the incoming belt, decides what it still does not know, and interviews the
+operator through its own `AskUserQuestion` tool, which reaches the orchestrator
+as a permission request because the spawn deliberately does not pre-approve it.
+The answers become a Markdown document on the success belt. A scope node needs a
+**skill** and no codebase — the inverse of an agent node — and its session may
+do nothing but read and ask, enforced server-side whatever its skill says. It is
+also the feature `DESIGN.md` reserved the right to move off SSE for, and did
+not: a question is an event down and an answer is a POST up. See `docs/SCOPE.md`.
+
 **A `reviewer` and a `human` node leave by one of two ports**, `success` or
 `fail` (`models.EdgeOutcome`), carried on the belt's `source_handle` — a field
 React Flow already set and the factory file already round-tripped, so outcome
