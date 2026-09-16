@@ -610,10 +610,11 @@
 
 /* The skill plate reads like the model plate — both are properties of the
    machine rather than things flowing through it — but it carries a sentence as
-   well as a name, so the description hides with the rest of the prose and stays
-   clamped when it shows: a node is a label on a machine, not a place to read a
-   document. */
+   well as a name, and that sentence is a tooltip: it floats off the plate it
+   describes instead of opening a line inside it. `position: relative` is what
+   it hangs from. */
 .slot.skill {
+  position: relative;
   border-color: color-mix(in srgb, var(--ink-faint) 55%, transparent);
   background: color-mix(in srgb, var(--ink-faint) 8%, transparent);
   color: var(--ink-dim);
@@ -624,20 +625,51 @@
   background: #10141b;
 }
 
+/* Out of the grid entirely, so a chosen skill costs the machine no height and
+   the sentence needs no clamp — the two-line limit was the price of living
+   inside the plate, not a wish to say less. It hangs above the plate because
+   what is below one is usually another plate, and it answers the plate's own
+   hover rather than the whole node's: "what is this skill" is a narrower
+   question than "what is this machine", and a tooltip is the narrow answer.
+   `pointer-events: none` keeps it from stealing the hover that opened it —
+   without that it flickers over the select underneath. `:focus-within` is the
+   keyboard's hover, as it is everywhere else here. */
 .slot.skill .skill-what {
   display: none;
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(100% + 7px);
+  z-index: 3;
+  padding: 0.4rem 0.5rem;
+  border: 1px solid var(--edge-strong);
+  border-radius: 8px;
+  background: #10141b;
+  box-shadow: var(--shadow);
   font-size: 0.72rem;
   line-height: 1.35;
-  color: var(--ink-faint);
-  -webkit-line-clamp: 2;
-  line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
+  color: var(--ink-dim);
+  pointer-events: none;
 }
 
-.node:hover .slot.skill .skill-what,
-.node:focus-within .slot.skill .skill-what {
-  display: -webkit-box;
+/* The stem, so it reads as pointing at the plate rather than floating near it. */
+.slot.skill .skill-what::after {
+  content: "";
+  position: absolute;
+  top: 100%;
+  left: 1.1rem;
+  width: 7px;
+  height: 7px;
+  margin-top: -4px;
+  transform: rotate(45deg);
+  border: 1px solid var(--edge-strong);
+  border-width: 0 1px 1px 0;
+  background: #10141b;
+}
+
+.slot.skill:hover .skill-what,
+.slot.skill:focus-within .skill-what {
+  display: block;
 }
 
 /* ---- the two ports ------------------------------------------------------

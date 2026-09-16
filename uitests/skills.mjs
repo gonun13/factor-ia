@@ -115,16 +115,21 @@ try {
   const plate = page.locator('.node.type-agent select[aria-label="skill"]');
   check("the plate starts empty, which is its normal state", await plate.inputValue(), "");
   await plate.selectOption(SKILL);
-  // The description is hover-only now, like every other sentence on a node, so
-  // the check has to let go of the plate and then look the way a person does —
-  // a node still holding focus counts as looked at.
+  // The description is a tooltip on the plate now, so the check has to let go
+  // of the plate and then look the way a person does — a plate still holding
+  // focus counts as hovered, which is the point of `:focus-within`.
   await plate.blur();
   await page.mouse.move(0, 0);
   check("the description stays off the resting node",
     await page.locator(".node.type-agent .skill-what").isVisible(), false);
-  await page.locator(".node.type-agent").hover();
-  check("…and names what is in force once chosen, on hover",
+  await page.locator(".node.type-agent .slot.skill").hover();
+  check("…and names what is in force once chosen, on hovering the plate",
     (await page.locator(".node.type-agent .skill-what").innerText()).startsWith("Reads a repository"), true);
+  // A tooltip, not a line in the plate: it hangs above the plate it describes
+  // and is out of the flow, so the box it sits in never grew a row for it.
+  const tip = await page.locator(".node.type-agent .skill-what").boundingBox();
+  const plateBox = await page.locator(".node.type-agent .slot.skill").boundingBox();
+  check("the tooltip floats clear of the plate", tip.y + tip.height <= plateBox.y, true);
 
   await page.keyboard.press("Meta+s");
   await page.waitForTimeout(800);
