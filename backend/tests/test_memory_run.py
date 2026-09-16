@@ -48,6 +48,12 @@ def line(test_store: Store, **reader_config) -> Factory:
     """The canonical shape: a writer, a memory, and a reader that echoes.
 
         n-in ──► n-write ──► n-mem ──► n-read ──► n-out
+         └──────────── the task ────────►
+
+    The second belt out of the input is not decoration. A memory carries a
+    *reference*, so a machine fed only by memories would be handed pointers and
+    no work to do — `runcheck._memory_problems` refuses that outright, and the
+    belt that answers it is the one that says where the task comes from.
     """
     return save(
         test_store,
@@ -62,6 +68,7 @@ def line(test_store: Store, **reader_config) -> Factory:
             belt("n-in", "n-write"),
             belt("n-write", "n-mem"),
             belt("n-mem", "n-read"),
+            belt("n-in", "n-read"),
             belt("n-read", "n-out"),
         ],
     )
@@ -178,6 +185,7 @@ def test_a_slug_on_the_node_names_the_file(
             belt("n-in", "n-write"),
             belt("n-write", "n-mem"),
             belt("n-mem", "n-read"),
+            belt("n-in", "n-read"),
             belt("n-read", "n-out"),
         ],
     )
@@ -207,6 +215,7 @@ def test_two_writers_get_one_section_each_in_the_order_the_belts_were_drawn(
             belt("n-a", "n-mem"),
             belt("n-b", "n-mem"),
             belt("n-mem", "n-read"),
+            belt("n-in", "n-read"),
             belt("n-read", "n-out"),
         ],
     )
@@ -298,15 +307,24 @@ def test_the_reader_is_granted_the_memory_it_is_wired_to_and_no_other(
             agent("n-write"),
             mem("n-mem-a", "Index A"),
             mem("n-mem-b", "Index B"),
+            # Reads B, and is wired to nothing that touches A.
             agent("n-read", fake_script="echo"),
+            # Reads A, so both memories are really written and really read —
+            # what is being tested is which directory each reader was granted,
+            # not which memories exist.
+            agent("n-other"),
             node("n-out", "output"),
         ],
         [
             belt("n-in", "n-write"),
             belt("n-write", "n-mem-a"),
-            belt("n-mem-a", "n-mem-b"),
+            belt("n-write", "n-mem-b"),
+            belt("n-mem-a", "n-other"),
+            belt("n-in", "n-other"),
             belt("n-mem-b", "n-read"),
+            belt("n-in", "n-read"),
             belt("n-read", "n-out"),
+            belt("n-other", "n-out"),
         ],
     )
     seen = configs_by_node(orch, monkeypatch)
@@ -316,6 +334,9 @@ def test_the_reader_is_granted_the_memory_it_is_wired_to_and_no_other(
     assert len(granted) == 1
     assert granted[0].endswith("/index-b")
     assert not any(path.endswith("/index-a") for path in granted)
+    # The other reader gets the mirror image, so this is about the belts and
+    # not about one memory being unreachable.
+    assert [p.rsplit("/", 1)[-1] for p in seen["n-other"].add_dirs] == ["index-a"]
     # And the writer, which reads nothing, is granted nothing.
     assert seen["n-write"].add_dirs == []
 
@@ -353,6 +374,7 @@ def test_a_memory_that_receives_nothing_fails_rather_than_ticking_green(
             belt("n-in", "n-write"),
             belt("n-write", "n-mem"),
             belt("n-mem", "n-read"),
+            belt("n-in", "n-read"),
             belt("n-read", "n-out"),
         ],
     )
@@ -396,6 +418,7 @@ def test_a_failed_run_keeps_its_memory_and_the_summary_says_where(
             belt("n-in", "n-write"),
             belt("n-write", "n-mem"),
             belt("n-mem", "n-read"),
+            belt("n-in", "n-read"),
             belt("n-read", "n-out"),
         ],
     )

@@ -480,8 +480,12 @@ def test_a_memory_inside_a_loop_is_rewritten_not_appended_to(
     is current — a cache that is wrong is worse than no cache at all.
 
         n-in ──► n-work ──► n-mem ──► n-review ──success──► n-out
-                    ▲                      │
-                    └─────────fail─────────┘
+                    │  ▲                     │
+                    │  └────────fail─────────┘
+                    └───── the task ─────►
+
+    The reviewer is fed by the work as well as by the memory: a machine fed only
+    by memory has references and nothing to judge, which `runcheck` refuses.
     """
     from .test_memory_run import documents, mem, writer
 
@@ -498,6 +502,7 @@ def test_a_memory_inside_a_loop_is_rewritten_not_appended_to(
             belt("n-in", "n-work"),
             belt("n-work", "n-mem"),
             belt("n-mem", "n-review"),
+            belt("n-work", "n-review"),
             belt("n-review", "n-out", "success"),
             belt("n-review", "n-work", "fail"),
         ],

@@ -54,7 +54,7 @@ from . import config, gitwork, skills, worktree
 from .agent.claude import PermissionDenied, resolve_permission_mode
 from .api import validate_graph
 from .discovery import discover_codebases
-from .paths import PathEscape
+from .paths import PathEscape, is_safe_name
 from . import sshkeys
 from .models import (
     INPUT_KINDS,
@@ -130,6 +130,7 @@ def run_problems(
     problems += _kind_problems(nodes, label)
     problems += _outcome_problems(nodes, edges, label)
     problems += _duplicate_belt_problems(nodes, edges, label)
+    problems += _memory_problems(nodes, edges, label)
 
     for node in by_type.get("agent", []):
         attached = node.definition.codebase_id
@@ -195,6 +196,23 @@ def run_problems(
                 f"“{label(node)}” is an output, so it may not feed anything — a "
                 "factory ends with its outputs."
             )
+        elif kind == "memory":
+            # The same two rules, said in the words that are useful here.
+            # "Connect it to an output node" is true and unhelpful: what a
+            # memory node is missing is a writer or a reader, and telling an
+            # operator to wire it to the commit is advice that would produce a
+            # factory that commits a pointer block.
+            if node.id not in incoming:
+                problems.append(
+                    f"“{label(node)}” is a memory with nothing feeding it — draw a "
+                    "belt into it from the machine whose work it should store."
+                )
+            if node.id not in outgoing:
+                problems.append(
+                    f"“{label(node)}” is a memory nothing reads — draw a belt out "
+                    "of it to the machine that will use it. A memory nobody was "
+                    "told about saves no work."
+                )
         elif kind not in ("input", "output"):
             if node.id not in incoming:
                 problems.append(
@@ -301,6 +319,94 @@ def _outcome_problems(
                     f"“{label(source)}” is a {source.definition.type} node, which has one "
                     f"way out — its belt cannot leave by {outcome!r}."
                 )
+    return problems
+
+
+def _memory_problems(
+    nodes: list[Node], edges: list[Edge], label: Callable[[Node], str]
+) -> list[str]:
+    """What a memory node may be wired to, and what it may be called.
+
+    Most of what a memory node must satisfy is already checked and is not
+    repeated here: it needs a belt in and a belt out (the ends-of-line rules),
+    it has one way out so a `fail` belt off it is refused (`_outcome_problems`),
+    and it may not carry a codebase (the API's node check). What is left is the
+    three questions those rules cannot ask.
+    """
+    from . import memory
+
+    problems: list[str] = []
+    by_id = {node.id: node for node in nodes}
+    memories = [node for node in nodes if node.definition.type == "memory"]
+
+    for node in memories:
+        for edge in edges:
+            # **A writer must be an agent.** What shapes a memory document is
+            # the contract injected into the writing agent's system prompt
+            # (`memory.WRITER_CONTRACT`), so a memory fed by an input or a human
+            # would store text no contract ever shaped — a cache whose format
+            # nobody chose, handed to a reader told to trust it.
+            if edge.target == node.id:
+                source = by_id.get(edge.source)
+                if source is not None and source.definition.type != "agent":
+                    problems.append(
+                        f"“{label(node)}” is fed by “{label(source)}”, which is a "
+                        f"{source.definition.type} node — a memory stores a "
+                        "machine's work, so only an agent may write to one."
+                    )
+            # **A reader must be an agent.** A pointer block into an output node
+            # becomes the commit message; into a human node it asks a person to
+            # form an opinion about a file path.
+            if edge.source == node.id:
+                target = by_id.get(edge.target)
+                if target is not None and target.definition.type != "agent":
+                    problems.append(
+                        f"“{label(node)}” feeds “{label(target)}”, which is a "
+                        f"{target.definition.type} node — a memory hands out a "
+                        "reference for a machine to read, so only an agent may "
+                        "read one."
+                    )
+
+    # **An agent fed only by memories** would be handed references and no task.
+    # Worse than useless: `_incoming_text` falls back to the run's raw request
+    # when a node's belts carry nothing, so this would not look broken — it
+    # would quietly do something nobody drew.
+    memory_ids = {node.id for node in memories}
+    if memory_ids:
+        feeders: dict[str, set[str]] = {}
+        for edge in edges:
+            feeders.setdefault(edge.target, set()).add(edge.source)
+        for node in nodes:
+            if node.definition.type != "agent":
+                continue
+            sources = feeders.get(node.id, set())
+            if sources and sources <= memory_ids:
+                problems.append(
+                    f"“{label(node)}” is fed only by memory, so it would be handed "
+                    "references and no work to do — give it a belt from the "
+                    "machine whose task it is continuing."
+                )
+
+    # **Two memories on one name** would write to one file and overwrite each
+    # other a lap at a time. Load-bearing rather than tidy: the run keys its
+    # documents by node id, so nothing downstream would notice.
+    slugs: dict[str, list[Node]] = {}
+    for node in memories:
+        slugs.setdefault(memory.memory_slug(node), []).append(node)
+    for slug, sharing in slugs.items():
+        if len(sharing) > 1:
+            names = ", ".join(f"“{label(node)}”" for node in sharing)
+            problems.append(
+                f"{names} all come out as “{slug}”, so they would write to one "
+                "file and overwrite each other. Rename one, or give it a slug of "
+                "its own."
+            )
+        if not is_safe_name(slug):
+            problems.append(
+                f"“{label(sharing[0])}” comes out as {slug!r}, which is not a "
+                "usable file name — rename it, or give it a slug of its own."
+            )
+
     return problems
 
 
