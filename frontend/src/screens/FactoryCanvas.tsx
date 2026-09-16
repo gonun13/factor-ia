@@ -70,7 +70,6 @@ import {
 import { ProjectSettingsPanel } from "./ProjectSettingsPanel";
 import { useRun, type RunState } from "../run";
 import { RunChat } from "./RunChat";
-import { runProblems } from "../validation";
 import { blockers, runProblems, type Problem } from "../validation";
 import type {
   AgentStatus,
@@ -406,8 +405,11 @@ function CanvasInner({ projectId, onBack }: { projectId: string; onBack: () => v
           }}
           onDrop={(event) => {
             event.preventDefault();
-            const type = event.dataTransfer.getData(DND_TYPE) as NodeType;
-            if (type) addNode(type, event.clientX, event.clientY);
+            // `<type>:<kind>` in one entry, because `dataTransfer` exposes only
+            // the *types* of its entries during dragover — a second key would be
+            // readable on drop and invisible while deciding whether to accept.
+            const [type, kind = ""] = event.dataTransfer.getData(DND_TYPE).split(":");
+            if (type) addNode(type as NodeType, kind, event.clientX, event.clientY);
           }}
         >
           {factory === null ? (
@@ -441,8 +443,8 @@ function CanvasInner({ projectId, onBack }: { projectId: string; onBack: () => v
               />
               <Controls showInteractive={false} />
               {/* Beside the zoom controls, not opposite them: the bottom-right
-                  corner is the pane's edge now, and a minimap tucked against it
-                  reads as part of the pane rather than part of the sheet. */}
+                  corner is the run pane's edge now, and a minimap tucked against
+                  it reads as part of the pane rather than part of the sheet. */}
               <MiniMap
                 position="bottom-left"
                 pannable
@@ -455,13 +457,13 @@ function CanvasInner({ projectId, onBack }: { projectId: string; onBack: () => v
               <Panel position="top-left">
                 <div className="panel palette">
                   <span className="eyebrow">Machines</span>
-                  {PALETTE.map(({ type, label, hint, Glyph }) => (
+                  {PALETTE.map(({ type, kind, label, hint, Glyph }) => (
                     <button
-                      key={type}
-                      className={`palette-item type-${type}`}
+                      key={`${type}:${kind}`}
+                      className={`palette-item type-${type}${kind ? ` kind-${kind}` : ""}`}
                       draggable
                       onDragStart={(event) => {
-                        event.dataTransfer.setData(DND_TYPE, type);
+                        event.dataTransfer.setData(DND_TYPE, `${type}:${kind}`);
                         event.dataTransfer.effectAllowed = "copy";
                       }}
                       onClick={(event) => {
@@ -470,6 +472,7 @@ function CanvasInner({ projectId, onBack }: { projectId: string; onBack: () => v
                           ?.getBoundingClientRect();
                         addNode(
                           type,
+                          kind,
                           (box?.left ?? 0) + (box?.width ?? 800) / 2,
                           (box?.top ?? 0) + (box?.height ?? 600) / 2,
                         );
@@ -487,9 +490,10 @@ function CanvasInner({ projectId, onBack }: { projectId: string; onBack: () => v
                     </button>
                   ))}
                   <p className="palette-note">
-                    Drag onto the line, or click to drop one in the middle. Belts
-                    carry work between machines; a codebase is a property of an
-                    agent, not a belt. Select and press ⌫ to remove.
+                    Drag onto the line, or click to drop one in the middle. A
+                    factory starts with an input and ends with an output; belts
+                    carry work between machines, and a codebase is a property of
+                    an agent, not a belt. Select and press ⌫ to remove.
                   </p>
                 </div>
               </Panel>
@@ -497,122 +501,16 @@ function CanvasInner({ projectId, onBack }: { projectId: string; onBack: () => v
           </CanvasContext.Provider>
           )}
         </div>
-
-        {/* The run, docked down the right: the controls it starts from, then a
-            thread per machine. It waits for the factory for the same reason the
-            canvas does — a run box that lists everything wrong with a graph
-            nobody has loaded yet is noise, not a warning. */}
+        {/* The run, docked down the right rather than floating over the line:
+            the controls it starts from, then a thread per machine. It waits for
+            the factory for the same reason the canvas does — a run box listing
+            everything wrong with a graph nobody has loaded yet is noise, not a
+            warning. */}
         {factory !== null && (
           <aside className="runpane">
             <RunBox problems={problems} onFocus={focus} run={run} />
             <RunChat nodes={nodes} runtimes={run.runtimes} />
           </aside>
-      {/* React Flow is mounted only once the graph is in hand: `fitView` latches
-          on the first render that has measured nodes, so mounting it empty makes
-          it re-centre on whatever node is dropped first — which yanks the
-          viewport out from under the cursor mid-drop. */}
-      <div
-        className="canvas-wrap"
-        onDragOver={(event) => {
-          event.preventDefault();
-          event.dataTransfer.dropEffect = "copy";
-        }}
-        onDrop={(event) => {
-          event.preventDefault();
-          // `<type>:<kind>` in one entry, because `dataTransfer` exposes only
-          // the *types* of its entries during dragover — a second key would be
-          // readable on drop and invisible while deciding whether to accept.
-          const [type, kind = ""] = event.dataTransfer.getData(DND_TYPE).split(":");
-          if (type) addNode(type as NodeType, kind, event.clientX, event.clientY);
-        }}
-      >
-        {factory === null ? (
-          <p className="loading">Loading the factory…</p>
-        ) : (
-        <CanvasContext.Provider value={context}>
-          <ReactFlow<FlowNode, FlowEdge>
-            nodes={nodes}
-            edges={edges}
-            onNodesChange={onNodesChange}
-            onEdgesChange={onEdgesChange}
-            onConnect={onConnect}
-            nodeTypes={nodeTypes}
-            edgeTypes={edgeTypes}
-            defaultEdgeOptions={{ type: BELT_EDGE }}
-            deleteKeyCode={["Backspace", "Delete"]}
-            // Only for a graph that already has something in it: `fitView`
-            // latches on the first render with measured nodes, so an empty
-            // factory would fit on whatever node is dropped first and yank the
-            // viewport out from under the cursor.
-            fitView={factory.nodes.length > 0}
-            fitViewOptions={{ padding: 0.35, maxZoom: 1 }}
-            minZoom={0.25}
-            proOptions={{ hideAttribution: false }}
-          >
-            <Background
-              variant={BackgroundVariant.Dots}
-              gap={22}
-              size={1.5}
-              color="var(--grid)"
-            />
-            <Controls showInteractive={false} />
-            <MiniMap
-              pannable
-              zoomable
-              bgColor="#131922"
-              maskColor="rgba(8,10,14,0.65)"
-              nodeColor={(node: FlowNode) => NODE_COLOUR[node.data.definition.type] ?? "#3a4558"}
-            />
-
-            <Panel position="top-left">
-              <div className="panel palette">
-                <span className="eyebrow">Machines</span>
-                {PALETTE.map(({ type, kind, label, hint, Glyph }) => (
-                  <button
-                    key={`${type}:${kind}`}
-                    className={`palette-item type-${type}${kind ? ` kind-${kind}` : ""}`}
-                    draggable
-                    onDragStart={(event) => {
-                      event.dataTransfer.setData(DND_TYPE, `${type}:${kind}`);
-                      event.dataTransfer.effectAllowed = "copy";
-                    }}
-                    onClick={(event) => {
-                      const box = event.currentTarget
-                        .closest(".canvas-wrap")
-                        ?.getBoundingClientRect();
-                      addNode(
-                        type,
-                        kind,
-                        (box?.left ?? 0) + (box?.width ?? 800) / 2,
-                        (box?.top ?? 0) + (box?.height ?? 600) / 2,
-                      );
-                    }}
-                  >
-                    <span className="glyph">
-                      <Glyph />
-                    </span>
-                    <span>
-                      <span className="label" style={{ display: "block", color: "var(--ink)" }}>
-                        {label}
-                      </span>
-                      <span className="hint">{hint}</span>
-                    </span>
-                  </button>
-                ))}
-                <p className="palette-note">
-                  Drag onto the line, or click to drop one in the middle. A
-                  factory starts with an input and ends with an output; belts
-                  carry work between machines, and a codebase is a property of
-                  an agent, not a belt. Select and press ⌫ to remove.
-                </p>
-              </div>
-            </Panel>
-
-            <Panel position="top-right">
-              <RunBox problems={problems} onFocus={focus} run={run} />
-            </Panel>
-          </ReactFlow>
-        </CanvasContext.Provider>
         )}
       </div>
 
@@ -747,36 +645,6 @@ function RunBox({
         </p>
       )}
 
-      {/* The request: submitted once, not a chat (DESIGN.md, open question 2).
-          It appears where the run is, not in a modal, so the canvas never goes
-          away while you answer it. */}
-      {awaiting && (
-        <form
-          className="request"
-          onSubmit={(event) => {
-            event.preventDefault();
-            if (request.trim()) void run.submit(request.trim());
-          }}
-        >
-          <label htmlFor="run-request">What should this factory do?</label>
-          <textarea
-            id="run-request"
-            autoFocus
-            rows={3}
-            value={request}
-            placeholder="Tidy the README and fix the broken link."
-            onChange={(event) => setRequest(event.target.value)}
-            onKeyDown={(event) => {
-              if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
-                event.currentTarget.form?.requestSubmit();
-              }
-            }}
-          />
-          <button className="primary" type="submit" disabled={!request.trim() || run.busy}>
-            Submit the request
-          </button>
-        </form>
-      )}
       {/* One form per input node still waiting — submitted once each, and not
           a chat (DESIGN.md, open question 2). They appear where the run is
           rather than in a modal, so the canvas never goes away while you

@@ -905,6 +905,8 @@ button:focus-visible {
 
 .thread-foot .commit {
   color: var(--output);
+}
+
 .request label .hint {
   color: var(--ink-faint);
 }

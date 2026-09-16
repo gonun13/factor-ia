@@ -16,9 +16,7 @@
 
 import type { ReactNode } from "react";
 import { Handle, Position } from "@xyflow/react";
-import type { NodeData } from "../graph";
 import { hasOutcomePorts, nodeKind, type NodeData } from "../graph";
-import { type NodeRuntime } from "../types";
 import { useCanvas } from "../canvasContext";
 import {
   AgentGlyph,
