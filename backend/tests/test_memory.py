@@ -201,5 +201,21 @@ def test_the_pointer_names_the_file_absolutely_and_says_reference_not_instructio
     assert "body" not in block.replace("do not have", "")
 
 
+def test_the_pointer_costs_the_same_whatever_the_memory_weighs(tmp_path):
+    """The saving, stated as a property: a consumer pays a fixed ~90 tokens to
+    be told a memory exists, whether it holds one line or sixty kilobytes. That
+    is the whole argument for a path over an inlined body."""
+    small, large = doc(label="Index"), doc(label="Index")
+    small.record(node_id="n-a", label="Research", lap=1, text="one line")
+    large.record(node_id="n-a", label="Research", lap=1, text="x" * 60_000)
+    path = memory.write(large, tmp_path)
+
+    small_block = memory.pointer_block(small, path)
+    large_block = memory.pointer_block(large, path)
+    # They differ only in the reported size, never in what they carry.
+    assert abs(len(small_block) - len(large_block)) < 20
+    assert "x" * 100 not in large_block
+
+
 def test_the_writer_contract_stays_small_enough_to_pay_for_on_every_turn():
     assert len(memory.WRITER_CONTRACT.encode("utf-8")) < 1200

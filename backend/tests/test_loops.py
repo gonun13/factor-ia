@@ -466,3 +466,90 @@ def test_a_node_is_handed_each_predecessor_once(
     # What the second machine was actually handed. One belt's worth, not two.
     assert prompts[1].count("Done.") == 1, f"handed it twice: {prompts[1]!r}"
     assert prompts[1] == work.output_text
+
+
+# ---- memory in a loop -------------------------------------------------------
+
+
+def test_a_memory_inside_a_loop_is_rewritten_not_appended_to(
+    test_store: Store, orch: Orchestrator, repo: Path, monkeypatch
+) -> None:
+    """The decision this design turns on: a second lap of the *same* writer is a
+    correction, not a second voice. Appending it would leave the next machine
+    reading a stale index directly above a fresh one with no way to tell which
+    is current — a cache that is wrong is worse than no cache at all.
+
+        n-in ──► n-work ──► n-mem ──► n-review ──success──► n-out
+                    ▲                      │
+                    └─────────fail─────────┘
+    """
+    from .test_memory_run import documents, mem, writer
+
+    save(
+        test_store,
+        [
+            node("n-in", "input"),
+            writer("n-work", "Research"),
+            mem("n-mem", "Codebase index"),
+            reviewer("n-review", "verdict-fail", "verdict-pass"),
+            node("n-out", "output"),
+        ],
+        [
+            belt("n-in", "n-work"),
+            belt("n-work", "n-mem"),
+            belt("n-mem", "n-review"),
+            belt("n-review", "n-out", "success"),
+            belt("n-review", "n-work", "fail"),
+        ],
+    )
+    written = documents(monkeypatch)
+    run = drive(orch)
+
+    assert run.status == "succeeded"
+    assert laps(run)["n-work"] == 2
+    body = written["codebase-index"]
+    assert body.count("## Research") == 1
+    assert "## Research · lap 2" in body
+    assert run.memory[0].sections == 1
+
+
+def test_a_memory_whose_writer_was_never_reached_delivers_no_pointer(
+    test_store: Store, orch: Orchestrator, repo: Path
+) -> None:
+    """The degradation that makes a dead belt safe: nothing ever claims a memory
+    exists except the pointer block, so a memory that was never written is a
+    reader that was simply never told about one — not a reader sent to a file
+    that is not there."""
+    from .test_memory_run import mem
+
+    save(
+        test_store,
+        [
+            node("n-in", "input"),
+            reviewer("n-review", "verdict-pass"),
+            agent("n-rescue"),
+            mem("n-mem", "Rescue notes"),
+            agent("n-read", fake_script="echo"),
+            # An ordinary worker after it, so the output node has a commit to
+            # make and the run's status is about the belts rather than about the
+            # echoing node having edited nothing.
+            agent("n-do"),
+            node("n-out", "output"),
+        ],
+        [
+            belt("n-in", "n-review"),
+            belt("n-review", "n-read", "success"),
+            # The rescue path, which a passing review never takes.
+            belt("n-review", "n-rescue", "fail"),
+            belt("n-rescue", "n-mem"),
+            belt("n-mem", "n-read"),
+            belt("n-read", "n-do"),
+            belt("n-do", "n-out"),
+        ],
+    )
+    run = drive(orch)
+
+    assert run.status == "succeeded"
+    assert statuses(run)["n-mem"] == "pending"  # never reached
+    assert run.memory == []
+    assert "Memory available" not in run.node_run("n-read").output_text

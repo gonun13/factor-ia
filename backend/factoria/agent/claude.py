@@ -172,6 +172,14 @@ def build_argv(session_id: str, run_config: RunConfig) -> list[str]:
     if mode != "default":
         argv += ["--permission-mode", mode]
     argv += ["--disallowedTools", ",".join(DENIED_TOOLS)]
+    # The run memories this node was wired to read (`memory.py`), each granted
+    # as a directory the agent may reach outside its worktree. Grouped with the
+    # deny list because it is the same kind of flag — what this node may touch,
+    # decided server-side — and placed before `--session-id` because the tests
+    # below assert on the argv *tail*, which is where an optional flag belongs
+    # last rather than first.
+    for path in run_config.add_dirs:
+        argv += ["--add-dir", path]
     # Minted, not discovered: the caller needs a correlation key before the
     # first byte arrives.
     argv += ["--session-id", session_id]

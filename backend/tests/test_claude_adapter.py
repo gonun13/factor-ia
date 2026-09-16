@@ -58,6 +58,34 @@ def test_argv_drives_the_cli_in_stream_json_both_ways() -> None:
     assert argv[-2:] == ["--session-id", "sess-1"]
 
 
+def test_no_add_dir_flag_when_the_node_reads_no_memory() -> None:
+    assert "--add-dir" not in build_argv("s", RunConfig())
+
+
+def test_each_memory_the_node_reads_is_granted_as_its_own_directory() -> None:
+    """One flag per memory, not one for the run's `_memory/`. The flag grants a
+    directory, so a shared one would let any node read every memory in the run
+    regardless of what the operator wired (`memory.py`)."""
+    argv = build_argv("s", RunConfig(add_dirs=["/workspace/_runs/r/_memory/a", "/b"]))
+    pairs = [(argv[i], argv[i + 1]) for i, v in enumerate(argv) if v == "--add-dir"]
+    assert pairs == [("--add-dir", "/workspace/_runs/r/_memory/a"), ("--add-dir", "/b")]
+
+
+def test_add_dir_does_not_disturb_the_flags_the_other_tests_read_off_the_tail() -> None:
+    """`--session-id` and `--model` are asserted as `argv[-2:]` throughout this
+    file, and a flag appended after them would break three tests for no reason."""
+    argv = build_argv("s", RunConfig(add_dirs=["/m"], model="haiku"))
+    assert argv[-2:] == ["--model", "haiku"]
+    assert argv.index("--add-dir") < argv.index("--session-id")
+
+
+def test_add_dirs_are_policy_and_cannot_be_named_by_a_node() -> None:
+    """The cwd boundary is the thing this would be a hole in."""
+    config = RunConfig.from_node_config({"add_dirs": ["/etc"], "model": "haiku"})
+    assert config.add_dirs == []
+    assert RunConfig.from_node_config({}, add_dirs=["/m"]).add_dirs == ["/m"]
+
+
 def test_no_model_flag_when_the_node_did_not_override_one() -> None:
     """The mechanism behind 'the default is the CLI's own' — an omitted flag.
 
