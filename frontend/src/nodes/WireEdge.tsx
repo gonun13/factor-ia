@@ -14,12 +14,10 @@ import { BaseEdge, getBezierPath, type EdgeProps } from "@xyflow/react";
  * and there is no version of the run where the work happened and the copy
  * should not exist. Thin, dashed and quiet, so the line reads as the line.
  *
- * The one thing it does say is **which kind of storage it reaches**, by colour,
- * because that is a difference in *lifetime*: a wire to a memory attaches
- * something this run discards, and a wire to a knowledge base attaches
- * something that was there before the factory was drawn and will outlive it.
- * `data.knowledge` is set by `graph.toFlowEdge`, which already had both ends in
- * hand — the wire is not handed a node id it would then have to look up.
+ * **And it says nothing about which storage it reaches.** A wire to a memory
+ * and a wire to a knowledge base are the same thing to the line — both attach
+ * storage, both decide nothing — so both are drawn identically, and the node on
+ * the end is what says whether what is filed there survives the run.
  */
 export function WireEdge({
   sourceX,
@@ -28,7 +26,6 @@ export function WireEdge({
   targetY,
   sourcePosition,
   targetPosition,
-  data,
 }: EdgeProps) {
   // A plain bezier, including when it runs backwards. A belt that runs
   // backwards is a loop and gets drawn as a return conveyor because material
@@ -43,12 +40,5 @@ export function WireEdge({
     sourcePosition,
     targetPosition,
   });
-  const knowledge = data?.knowledge === true;
-  return (
-    <BaseEdge
-      path={path}
-      className={`wire${knowledge ? " to-knowledge" : ""}`}
-      interactionWidth={16}
-    />
-  );
+  return <BaseEdge path={path} className="wire" interactionWidth={16} />;
 }

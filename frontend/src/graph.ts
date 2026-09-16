@@ -117,23 +117,20 @@ export function toFlowEdge(edge: GraphEdge, sources?: Map<string, NodeDefinition
     // normalised to `null` exactly as a memory's always has been. The
     // `targetHandle` is passed through either way, which is where a write
     // wire's `write` lives.
+    //
+    // Nothing is recorded about *which* storage this reaches. A wire to a
+    // memory and a wire to a base are the same thing to the line — they attach
+    // storage and decide nothing — so they are drawn identically, and the node
+    // on the end is what says which kind it is.
     const from = sources.get(edge.source);
-    const fromBase = from?.type === "knowledge";
-    const to = sources.get(edge.target);
     return {
       id: edge.id,
       source: edge.source,
       target: edge.target,
-      sourceHandle: fromBase ? "read" : null,
+      sourceHandle: from?.type === "knowledge" ? "read" : null,
       targetHandle: edge.target_handle,
       type: WIRE_EDGE,
-      data: {
-        kind: edge.payload.kind,
-        outcome: DEFAULT_EDGE_OUTCOME,
-        // Which *kind* of storage this reaches, for the wire's colour. A
-        // difference in lifetime, not in behaviour — see `WireEdge`.
-        knowledge: fromBase || to?.type === "knowledge",
-      },
+      data: { kind: edge.payload.kind, outcome: DEFAULT_EDGE_OUTCOME },
     };
   }
   const definition = sources?.get(edge.source);

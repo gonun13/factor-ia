@@ -87,8 +87,13 @@ export function MemoryGlyph() {
  * Deliberately not the memory spool. A spool is wound up and read back later,
  * which is exactly what a memory is and exactly what a base is not: a base was
  * filled before this run existed, outlives it, and is shared by every project.
- * Two node types that are both "storage" have to be told apart from across the
- * canvas, and a shelf is the thing you go *to* rather than the thing you wound.
+ *
+ * **This glyph is doing the whole job.** A base wears storage's colour, because
+ * that is what it is to the line — so the shape is the only thing on the canvas
+ * separating it from a memory, and it has to carry that from across the room. A
+ * shelf is the thing you go *to*; a spool is the thing you wound. If these two
+ * ever start reading as the same drawing, that is a bug in this file and not an
+ * argument for a second hue.
  */
 export function KnowledgeGlyph() {
   return (

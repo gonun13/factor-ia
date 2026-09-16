@@ -195,14 +195,27 @@ try {
     1,
   );
 
-  // Wires, not belts: nothing travels them and nothing waits on them.
+  // Wires, not belts: nothing travels them and nothing waits on them. And
+  // drawn exactly as a memory's wires are — both attach storage and decide
+  // nothing, so the canvas must not imply the two are different categories.
   check("the three wires are drawn as wires", await page.locator("path.wire").count(), 3);
-  check(
-    "…and in the knowledge colour, so the two kinds of storage are told apart",
-    await page.locator("path.wire.to-knowledge").count(),
-    3,
-  );
   check("the two belts are still belts", await page.locator(".belt-casing").count(), 2);
+  check(
+    "a base wears storage's colour, not one of its own",
+    await page.evaluate(() => {
+      // Resolved through a probe rather than read off `--knowledge`, which is
+      // an alias and comes back as the literal text "var(--memory)". Both sides
+      // have to be computed values or this compares a declaration to a colour.
+      const probe = document.createElement("span");
+      probe.style.color = "var(--memory)";
+      document.body.appendChild(probe);
+      const storage = getComputedStyle(probe).color;
+      probe.remove();
+      const base = document.querySelector(".node.type-knowledge");
+      return getComputedStyle(base).color === storage;
+    }),
+    true,
+  );
 
   check("nothing blocks this factory", await page.locator(".problem.blocker").count(), 0);
 

@@ -17,19 +17,21 @@
   --input: #f4b942;
   --agent: #5aa9ff;
   --memory: #c79bff;
-  /* **Not green.** The first attempt was a mint that sat 22 degrees off
-     --output and read as a second kind of "done"; a storage node must not
-     borrow the colour that means the run produced something.
+  /* **The same colour as --memory, on purpose.** Colour on this canvas encodes
+     what a node *is to the line* — a machine, something entering it, something
+     leaving it, or storage hanging off it — and a knowledge base is storage,
+     exactly as a memory is. Giving it a hue of its own would say the two are
+     different categories when what differs is their lifetime.
 
-     Magenta is the widest unused gap left in the palette — 94 degrees clear of
-     agent blue, 154 of output. What it is *not* clear of is --memory, 36
-     degrees below it, which is the one pairing that has to stay legible: both
-     are storage, both sit in the same palette group, and both shrink to a few
-     pixels on the minimap. So the separation there is carried by chroma rather
-     than hue — memory is a pale lavender, this is saturated — and, on the
-     canvas proper, by two glyphs that share nothing: a spool for the thing
-     wound up and read back, a shelf for the thing you go to. */
-  --knowledge: #e07ad8;
+     What tells them apart is the glyph (a spool for the thing wound up and read
+     back, a shelf for the thing you go to), the eyebrow, and the line under it.
+     That is the right division of labour: colour for the category, which has to
+     survive being four pixels wide on the minimap, and shape for the kind,
+     which does not.
+
+     An alias rather than a second hex so the two cannot drift, and so that if
+     they ever should diverge it is one line and a reason. */
+  --knowledge: var(--memory);
   /* A rose that belongs to no machine: a sign-off is the one node the line
      cannot execute by itself. Kept clear of --danger's salmon, which means a
      problem rather than a pause. Mirrored by NODE_COLOUR in FactoryCanvas, the

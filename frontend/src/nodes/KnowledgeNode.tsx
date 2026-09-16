@@ -81,7 +81,7 @@ export function KnowledgeNode({ id, data }: NodeProps<FlowNode>) {
       </label>
 
       {base ? (
-        <p className="filed-line is-knowledge" title={base.about}>
+        <p className="filed-line" title={base.about}>
           <span className="filed-dot" aria-hidden="true" />
           {base.scope} · {base.files} file{base.files === 1 ? "" : "s"} ·{" "}
           {size(base.bytes)}

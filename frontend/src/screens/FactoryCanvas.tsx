@@ -771,13 +771,11 @@ function CanvasInner({ projectId, onBack }: { projectId: string; onBack: () => v
 const NODE_COLOUR: Record<string, string> = {
   input: "#f4b942",
   agent: "#5aa9ff",
+  // Storage, both of them, and deliberately one colour: the minimap shows what
+  // a node is to the line, and at this size there is no glyph left to say which
+  // kind of storage it is. Keep in step with `--memory` / `--knowledge`.
   memory: "#c79bff",
-  // Keep in step with `--knowledge` in index.css. **The minimap is where this
-  // pays.** The two storage types are 36 degrees apart in hue, which is the
-  // closest pair in the palette, and here they are a few pixels each with no
-  // glyph and no label to fall back on — so what tells them apart at this size
-  // is chroma: a pale lavender beside a saturated magenta.
-  knowledge: "#e07ad8",
+  knowledge: "#c79bff",
   // Was falling through to the generic slate, which put the one node a person
   // has to attend to on the minimap as unremarkable grey. Keep in step with
   // `--human` in index.css.
