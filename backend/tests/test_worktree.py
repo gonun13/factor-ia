@@ -243,3 +243,82 @@ def test_fetch_reports_a_missing_remote_rather_than_failing(tmp_path):
 
     assert result.ok is False
     assert result.absent is True
+
+
+# ---- the run directory and its memory --------------------------------------
+
+
+def spaces_for(workspace: Path, run_id: str = "run-20260916T000000-abcdef"):
+    return worktree.RunWorkspaces(
+        run_id=run_id, branch=f"factor-ia/main/{run_id}", root=workspace
+    )
+
+
+def test_ensure_memory_dir_is_idempotent_and_outside_every_worktree(workspace):
+    spaces = spaces_for(workspace)
+    first = spaces.ensure_memory_dir("codebase-index")
+    second = spaces.ensure_memory_dir("codebase-index")
+
+    assert first == second and first.is_dir()
+    assert first.parent == worktree.memory_dir(spaces.run_id, workspace)
+    # The separation the whole design rests on: nothing written here can be
+    # picked up by a `git add` in a worktree.
+    assert worktree.worktree_path(spaces.run_id, "app", workspace) not in first.parents
+
+
+def test_cleanup_removes_the_memory_and_then_the_run_directory(workspace):
+    spaces = spaces_for(workspace)
+    spaces.ensure_memory_dir("codebase-index")
+
+    spaces.cleanup("succeeded")
+
+    assert not worktree.memory_dir(spaces.run_id, workspace).exists()
+    assert not worktree.run_dir(spaces.run_id, workspace).exists()
+    # The root stays, so its purpose is discoverable from the host.
+    assert worktree.runs_root(workspace).is_dir()
+
+
+def test_a_leftover_memory_directory_no_longer_blocks_the_run_directory(workspace):
+    """The regression. `cleanup` rmdirs the run directory only when it is empty,
+    inside a silent `except` — so for as long as `_memory/` was unaccounted for,
+    one memory node kept every run directory on the machine alive forever."""
+    spaces = spaces_for(workspace)
+    memory_file = spaces.ensure_memory_dir("codebase-index") / "codebase-index.md"
+    memory_file.write_text("---\nmemory: codebase-index\n---\n")
+    # And the tmp file an interrupted atomic write can leave beside it.
+    (memory_file.parent / ".codebase-index.md.abc.tmp").write_text("half")
+
+    spaces.cleanup("succeeded")
+
+    assert not worktree.run_dir(spaces.run_id, workspace).exists()
+
+
+def test_a_cancelled_run_discards_its_memory_too(workspace):
+    spaces = spaces_for(workspace)
+    spaces.ensure_memory_dir("codebase-index")
+    spaces.cleanup("cancelled")
+    assert not worktree.run_dir(spaces.run_id, workspace).exists()
+
+
+def test_a_failed_run_keeps_its_memory_for_the_post_mortem(workspace):
+    """What the agents believed is the first thing a failed run is asked."""
+    spaces = spaces_for(workspace)
+    path = spaces.ensure_memory_dir("codebase-index") / "codebase-index.md"
+    path.write_text("what research thought it knew")
+
+    spaces.cleanup("failed")
+
+    assert path.read_text() == "what research thought it knew"
+
+
+def test_an_unaccounted_for_leftover_is_left_where_it_can_be_seen(workspace):
+    """The emptiness guard is a safety property, not an oversight: a directory
+    this module did not create is an operator's, and deleting it silently is
+    the failure the guard exists to prevent."""
+    spaces = spaces_for(workspace)
+    stray = worktree.run_dir(spaces.run_id, workspace) / "somebody-elses"
+    stray.mkdir(parents=True)
+
+    spaces.cleanup("succeeded")
+
+    assert stray.is_dir()
