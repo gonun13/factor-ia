@@ -115,7 +115,15 @@ try {
   const plate = page.locator('.node.type-agent select[aria-label="skill"]');
   check("the plate starts empty, which is its normal state", await plate.inputValue(), "");
   await plate.selectOption(SKILL);
-  check("…and names what is in force once chosen",
+  // The description is hover-only now, like every other sentence on a node, so
+  // the check has to let go of the plate and then look the way a person does —
+  // a node still holding focus counts as looked at.
+  await plate.blur();
+  await page.mouse.move(0, 0);
+  check("the description stays off the resting node",
+    await page.locator(".node.type-agent .skill-what").isVisible(), false);
+  await page.locator(".node.type-agent").hover();
+  check("…and names what is in force once chosen, on hover",
     (await page.locator(".node.type-agent .skill-what").innerText()).startsWith("Reads a repository"), true);
 
   await page.keyboard.press("Meta+s");

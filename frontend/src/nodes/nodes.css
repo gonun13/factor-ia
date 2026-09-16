@@ -79,10 +79,23 @@
   outline: none;
 }
 
+/* What a machine is for, on hover and not before. The sentence is worth a line
+   when you go looking at one node, and never worth the height on all of them at
+   once — a canvas of chassis you can read the shape of beats a canvas of
+   paragraphs. `display` rather than a collapsed height because `.node-body` is
+   a grid: an item shrunk to nothing still takes its `gap`, a removed one does
+   not. `:focus-within` is the keyboard's hover — tabbing into a node's own
+   field is the same act of looking at it. */
 .node-note {
+  display: none;
   color: var(--ink-faint);
   font-size: 0.72rem;
   line-height: 1.4;
+}
+
+.node:hover .node-note,
+.node:focus-within .node-note {
+  display: block;
 }
 
 /* The status pip. Dark while `data.runtime` is null — which is every node you
@@ -538,8 +551,9 @@
 
 /* The skill plate reads like the model plate — both are properties of the
    machine rather than things flowing through it — but it carries a sentence as
-   well as a name, so the description is clamped: a node is a label on a
-   machine, not a place to read a document. */
+   well as a name, so the description hides with the rest of the prose and stays
+   clamped when it shows: a node is a label on a machine, not a place to read a
+   document. */
 .slot.skill {
   border-color: color-mix(in srgb, var(--ink-faint) 55%, transparent);
   background: color-mix(in srgb, var(--ink-faint) 8%, transparent);
@@ -552,14 +566,19 @@
 }
 
 .slot.skill .skill-what {
+  display: none;
   font-size: 0.72rem;
   line-height: 1.35;
   color: var(--ink-faint);
-  display: -webkit-box;
   -webkit-line-clamp: 2;
   line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
+}
+
+.node:hover .slot.skill .skill-what,
+.node:focus-within .slot.skill .skill-what {
+  display: -webkit-box;
 }
 
 /* ---- the two ports ------------------------------------------------------
