@@ -28,6 +28,7 @@ backend/     FastAPI app, uv-managed  (factoria.main:app)
              orchestrator.py  the walk, the state machine, cancel, the sweep
              gitwork.py  every git command, behind an allowlist
              worktree.py  one worktree per run, and its cleanup policy
+             memory.py  run memory: the document, the contract, the pointer
              summary.py  /data/runs/<id>/summary.md
              runcheck.py  run preconditions · runevents.py  the event envelope
              runlog.py  /data/runs, events.jsonl, the bus · runs_api.py  SSE

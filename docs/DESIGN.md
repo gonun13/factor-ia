@@ -401,7 +401,8 @@ On disk:
 ```
 /workspace/_factories/<project>/main.json             # the main factory — shared via git
 /workspace/_factories/<project>/<name>.json           # nested factories (later)
-/workspace/_factories/<project>/memory/*.md           # long-term memory, git-tracked
+/workspace/_factories/<project>/memory/*.md           # long-term memory, git-tracked (not built)
+/workspace/_runs/<run_id>/_memory/<slug>/<slug>.md    # run memory — RAM for one run (docs/MEMORY.md)
 /workspace/_skills/<name>.md                          # standing instructions — shared via git
 /data/projects.json                                   # machine-local registry
 /data/runs/<run_id>/events.jsonl                      # append-only event log
