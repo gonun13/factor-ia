@@ -16,12 +16,13 @@
 
 import type { ReactNode } from "react";
 import { Handle, Position } from "@xyflow/react";
-import { hasOutcomePorts, nodeKind, type NodeData } from "../graph";
+import { hasOutcomePorts, hasWriteHandle, nodeKind, type NodeData } from "../graph";
 import { useCanvas } from "../canvasContext";
 import {
   AgentGlyph,
   HumanGlyph,
   InputGlyph,
+  KnowledgeGlyph,
   MemoryGlyph,
   MergeGlyph,
   OutputGlyph,
@@ -35,6 +36,7 @@ const GLYPHS = {
   agent: AgentGlyph,
   human: HumanGlyph,
   memory: MemoryGlyph,
+  knowledge: KnowledgeGlyph,
   output: OutputGlyph,
 } as const;
 
@@ -59,6 +61,7 @@ const TYPE_NAME = {
   agent: "agent",
   human: "human",
   memory: "memory",
+  knowledge: "knowledge",
   output: "output",
 } as const;
 
@@ -86,7 +89,7 @@ export function NodeShell({
   data: NodeData;
   children?: ReactNode;
 }) {
-  const { patch, invalid } = useCanvas();
+  const { patch, invalid, knowledgeBases } = useCanvas();
   const variant = nodeKind(data.definition);
   const Glyph = KIND_GLYPHS[variant] ?? GLYPHS[kind];
   const name = KIND_NAME[variant] ?? TYPE_NAME[kind];
@@ -101,7 +104,29 @@ export function NodeShell({
       }${live ? " live" : ""}`}
       data-status={status}
     >
-      {kind !== "input" && <Handle type="target" position={Position.Left} />}
+      {/* **A knowledge node's target handle is its `write` handle**, and a
+          `principles` base does not render one.
+
+          Direction is the permission, which is the memory node's rule
+          unchanged: a wire *into* storage puts work there and a wire *out* of
+          it takes work away. So there is nothing to learn here — an arrow into
+          a base is a contribution, and a base that may not be contributed to
+          has nowhere for one to land. That is the whole mechanism behind
+          read-only, and it is enforced by the absence of a drop target rather
+          than by a rule somebody has to read. */}
+      {kind === "knowledge" ? (
+        hasWriteHandle(data.definition, knowledgeBases) && (
+          <Handle
+            id="write"
+            type="target"
+            position={Position.Left}
+            className="handle-write"
+            title="write — a machine wired in here may contribute to this base"
+          />
+        )
+      ) : (
+        kind !== "input" && <Handle type="target" position={Position.Left} />
+      )}
       <div className="node-head">
         <span className="glyph">
           <Glyph />
@@ -141,7 +166,18 @@ export function NodeShell({
           A worker's one way out is the whole of what "worker" means, so this
           asks the node rather than its type: both agent kinds are `type:
           "agent"` and answer differently. */}
-      {hasOutcomePorts(data.definition) ? (
+      {/* A base's source handle is its `read` handle: one wire out per machine
+          that may consult it. Always rendered — every base can be read, which
+          is what a `principles` base is *for*. */}
+      {kind === "knowledge" ? (
+        <Handle
+          id="read"
+          type="source"
+          position={Position.Right}
+          className="handle-read"
+          title="read — machines wired from here may consult this base"
+        />
+      ) : hasOutcomePorts(data.definition) ? (
         <>
           <Handle
             id="success"

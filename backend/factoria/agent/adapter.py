@@ -63,6 +63,28 @@ class RunConfig(BaseModel):
     #: exists to close. `from_node_config` therefore takes this as an argument
     #: and never reads it out of `config`.
     add_dirs: list[str] = Field(default_factory=list)
+    #: MCP servers to spawn alongside this run, in the CLI's `--mcp-config`
+    #: shape: `{name: {"command": ..., "args": [...], "env": {...}}}`.
+    #:
+    #: The one server factor-ia has is `knowledge` (`knowledge/mcp.py`), and
+    #: what it carries is *this node's* grant — which bases it may address and
+    #: which of them it may write. **Orchestrator policy, never node config**,
+    #: for the reason `add_dirs` is: a node that could name its own MCP server
+    #: would be the hole every other boundary exists to close.
+    mcp_servers: dict[str, Any] = Field(default_factory=dict)
+    #: Tools this run may call without asking. `DEFAULT_PERMISSION_MODE` is
+    #: `acceptEdits`, which pre-approves file edits and nothing else — so an MCP
+    #: tool that is not named here fails as an unanswered permission prompt
+    #: rather than running (`agent/claude.py`).
+    allowed_tools: list[str] = Field(default_factory=list)
+    #: Tools this run may not call, *on top of* the server-side `DENIED_TOOLS`
+    #: every spawn carries. The knowledge write tools land here for a node with
+    #: no write wire, and for every node wired to a `principles` base.
+    #:
+    #: Two mechanisms for one rule is not redundancy: the deny list stops the
+    #: call being made, and the server stops a call that was made anyway. **The
+    #: server is authoritative** — if they ever disagree, the flag is the bug.
+    disallowed_tools: list[str] = Field(default_factory=list)
 
     @classmethod
     def from_node_config(
@@ -72,6 +94,9 @@ class RunConfig(BaseModel):
         default_model: str | None = None,
         append_system_prompt: str | None = None,
         add_dirs: list[str] | None = None,
+        mcp_servers: dict[str, Any] | None = None,
+        allowed_tools: list[str] | None = None,
+        disallowed_tools: list[str] | None = None,
     ) -> "RunConfig":
         """Build from an agent node's freeform `config` dict, ignoring the rest.
 
@@ -103,6 +128,15 @@ class RunConfig(BaseModel):
             known["append_system_prompt"] = append_system_prompt
         if add_dirs:
             known["add_dirs"] = list(add_dirs)
+        # Passed in, never read out of `config`, for the reason the comment
+        # above `add_dirs` gives: what a node may reach is decided about the
+        # workspace, not on the node.
+        if mcp_servers:
+            known["mcp_servers"] = dict(mcp_servers)
+        if allowed_tools:
+            known["allowed_tools"] = list(allowed_tools)
+        if disallowed_tools:
+            known["disallowed_tools"] = list(disallowed_tools)
         return cls(**known)
 
 

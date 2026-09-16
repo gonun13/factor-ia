@@ -14,6 +14,8 @@ import {
   ATTACHED_TYPES,
   hasOutcomePorts,
   isWire,
+  knowledgeBase,
+  knowledgeWritable,
   memorySlug,
   nodeKind,
   type FlowEdge,
@@ -27,6 +29,7 @@ import {
   PUSHING_OUTPUT_KINDS,
   type Codebase,
   type CodebaseGit,
+  type KnowledgeBaseSummary,
 } from "./types";
 
 /**
@@ -96,6 +99,11 @@ export function runProblems(
   codebases: Codebase[],
   dirty: boolean,
   gitStates: Record<string, CodebaseGit> = {},
+  /** The workspace's knowledge library, so a node selecting a base that has
+   *  gone — or a write handle onto a `principles` base — is caught here rather
+   *  than on the Run button. Empty when it has not loaded yet, which suppresses
+   *  the base-specific rules rather than failing every node that uses one. */
+  bases: KnowledgeBaseSummary[] = [],
 ): Problem[] {
   const problems: Problem[] = [];
   const label = (node: FlowNode) => node.data.definition.label || node.id;
@@ -201,17 +209,29 @@ export function runProblems(
   // because these are mistakes made with a mouse, and finding out on the Run
   // button which connection was wrong is a worse way to learn a rule than
   // seeing it as you draw it.
-  const memories = nodes.filter((n) => ATTACHED_TYPES.has(n.data.definition.type));
+  const memories = nodes.filter((n) => n.data.definition.type === "memory");
   const nodeById = new Map(nodes.map((n) => [n.id, n]));
+  // **Knowledge wires belong to the block below, not to the memory rules.**
+  // Both node types are attached rather than on the line, so both of their
+  // edges arrive as wires — but a base is not a memory and almost every rule
+  // differs, so a knowledge wire caught here would be refused with a sentence
+  // about filing an answer, which is not what it is for. Mirrors the same split
+  // in `runcheck._wire_problems`.
+  const touchesKnowledge = (wire: FlowEdge) =>
+    [wire.source, wire.target].some(
+      (id) => nodeById.get(id)?.data.definition.type === "knowledge",
+    );
+  const knowledgeWires = wires.filter(touchesKnowledge);
+  const memoryWires = wires.filter((wire) => !touchesKnowledge(wire));
   const writers = new Map<string, FlowNode[]>(memories.map((n) => [n.id, []]));
   const readers = new Map<string, FlowNode[]>(memories.map((n) => [n.id, []]));
 
-  for (const wire of wires) {
+  for (const wire of memoryWires) {
     const source = nodeById.get(wire.source);
     const target = nodeById.get(wire.target);
     if (!source || !target) continue;
-    const sourceIsMemory = ATTACHED_TYPES.has(source.data.definition.type);
-    const targetIsMemory = ATTACHED_TYPES.has(target.data.definition.type);
+    const sourceIsMemory = source.data.definition.type === "memory";
+    const targetIsMemory = target.data.definition.type === "memory";
     if (sourceIsMemory && targetIsMemory) {
       problems.push({
         message: `“${label(source)}” is wired to “${label(target)}” and both are memories — a memory is written by a machine and read by one, so there is nothing at either end of this to do it.`,
@@ -308,11 +328,132 @@ export function runProblems(
     });
   }
 
+  // What a knowledge base may be wired to, and which base it may be — mirroring
+  // `runcheck._knowledge_problems` message for message.
+  //
+  // **The memory rule that does not carry over** is the one worth naming, since
+  // its absence looks like an omission: a reader needs no writer upstream. A
+  // base was filled before this run was drawn, so reading one nobody in this
+  // factory writes is the *normal* case — it is what a principles base is for.
+  //
+  // Everything else about a wire is the memory rule intact, including the one
+  // that reads most like boilerplate: direction decides, and a wire carries no
+  // outcome.
+  const knowledgeNodes = nodes.filter((n) => n.data.definition.type === "knowledge");
+  if (knowledgeNodes.length > 0) {
+    const library = new Map(bases.map((base) => [base.id, base]));
+    const loaded = bases.length > 0;
+    const selected = new Map<string, string>();
+    const byBase = new Map<string, FlowNode[]>();
+
+    for (const node of knowledgeNodes) {
+      const chosen = knowledgeBase(node.data.definition);
+      if (!chosen) {
+        problems.push({
+          message: `“${label(node)}” has no knowledge base selected — a knowledge node is a reference to a base that already exists, so an empty one points at nothing. Choose a base, or delete the node.`,
+          nodeIds: [node.id],
+        });
+        continue;
+      }
+      // Suppressed until the library has loaded: a canvas that opened before
+      // `/api/knowledge` answered must not tell the operator every base they
+      // chose has vanished.
+      if (loaded && !library.has(chosen)) {
+        problems.push({
+          message: `“${label(node)}”: knowledge base “${chosen}” is no longer in _knowledge/ — select another, or restore it.`,
+          nodeIds: [node.id],
+        });
+        continue;
+      }
+      selected.set(node.id, chosen);
+      byBase.set(chosen, [...(byBase.get(chosen) ?? []), node]);
+    }
+
+    // One shelf, one lock, one index — and, less cosmetically, two sets of
+    // handles that can disagree about whether this factory may write to it.
+    for (const [baseId, sharing] of byBase) {
+      if (sharing.length < 2) continue;
+      problems.push({
+        message: `${sharing.map((n) => `“${label(n)}”`).join(", ")} all select the knowledge base “${baseId}”. One base is one shelf with one lock and one index — put every wire on a single node, and delete the rest.`,
+        nodeIds: sharing.map((n) => n.id),
+      });
+    }
+
+    const reached = new Set<string>();
+    for (const wire of knowledgeWires) {
+      const source = nodeById.get(wire.source);
+      const target = nodeById.get(wire.target);
+      if (!source || !target) continue;
+      const sourceType = source.data.definition.type;
+      const targetType = target.data.definition.type;
+
+      // Storage does not talk to storage; a machine is always in between. Named
+      // ahead of the direction rule below, because "you drew this backwards" is
+      // unhelpful advice about a wire that has no right end.
+      if (ATTACHED_TYPES.has(sourceType) && ATTACHED_TYPES.has(targetType)) {
+        problems.push({
+          message: `“${label(source)}” is wired to “${label(target)}” and both are storage — a knowledge base is read and written by a machine, so there is nothing at either end of this to do it.`,
+          nodeIds: [source.id, target.id],
+        });
+        continue;
+      }
+      // **Direction is the permission**, which is the memory rule unchanged:
+      // a wire into the base is a contribution and a wire out of it is a
+      // consultation. So there is no handle to check and no wrong direction —
+      // both are meaningful, and which one you drew is what you asked for.
+      if (targetType === "knowledge") {
+        if (sourceType !== "agent") {
+          problems.push({
+            message: `“${label(target)}” is written to by “${label(source)}”, which is a ${sourceType} node — a base is contributed to by a machine, so only an agent may write to one.`,
+            nodeIds: [target.id, source.id],
+          });
+          continue;
+        }
+        if (wire.sourceHandle) {
+          problems.push({
+            message: `the wire from “${label(source)}” to “${label(target)}” leaves by an outcome port — a base is contributed to whatever the machine’s outcome, so a wire carries no outcome.`,
+            nodeIds: [source.id, target.id],
+          });
+        }
+        reached.add(target.id);
+        const chosen = selected.get(target.id);
+        const base = chosen ? library.get(chosen) : undefined;
+        if (base && !knowledgeWritable(base.scope)) {
+          problems.push({
+            message: `“${label(source)}” is wired to write to “${label(target)}”, which is a ${base.scope} base. Principles are what the machines are measured against, so nothing may edit them from inside a run — a machine that can edit the standard it is judged by is a machine that can pass its own review.`,
+            nodeIds: [source.id, target.id],
+          });
+        }
+        continue;
+      }
+      if (targetType !== "agent") {
+        problems.push({
+          message: `“${label(source)}” is read by “${label(target)}”, which is a ${targetType} node — a base hands out what it holds for a machine to read, so only an agent may read one.`,
+          nodeIds: [source.id, target.id],
+        });
+        continue;
+      }
+      reached.add(source.id);
+    }
+
+    // A base nothing reaches answers nobody's question. Deliberately *not* the
+    // memory rule above it: that one refuses a memory nothing **reads**, and a
+    // base with only a write wire is how a research machine fills a timeline
+    // the next project will read.
+    for (const node of knowledgeNodes) {
+      if (reached.has(node.id)) continue;
+      problems.push({
+        message: `nothing is wired to “${label(node)}” — wire it to the machines that may consult it, or delete it. A base nobody was given is a base nobody can read.`,
+        nodeIds: [node.id],
+      });
+    }
+  }
+
   const orphans = nodes.filter((n) => {
     const type = n.data.definition.type;
     if (type === "input") return !hasOutgoing.has(n.id);
     if (type === "output") return !hasIncoming.has(n.id);
-    // A memory is attached to the line, never on it — it has no belts by
+    // Storage is attached to the line, never on it — it has no belts by
     // construction, so this rule would refuse it for being what it is.
     if (ATTACHED_TYPES.has(type)) return false;
     return !hasIncoming.has(n.id) || !hasOutgoing.has(n.id);
@@ -483,7 +624,11 @@ export function runProblems(
         for (const wire of wires) {
           if (wire.source !== node.id) continue;
           const filed = nodeById.get(wire.target);
-          if (!filed || !ATTACHED_TYPES.has(filed.data.definition.type)) continue;
+          // Memories only. A base is not rewritten by a lap — it accumulates,
+          // which is the property that makes it a base — so this notice would
+          // be false of one, and a wire drawn agent-to-base is refused above
+          // rather than described here.
+          if (filed?.data.definition.type !== "memory") continue;
           problems.push({
             message: `“${label(node)}” is inside the loop that “${label(source)}” closes, so its section of “${label(filed)}” is rewritten on every lap rather than added to.`,
             nodeIds: [node.id, filed.id],

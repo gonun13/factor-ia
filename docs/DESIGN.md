@@ -157,15 +157,18 @@ Roughly in the order the design anticipates them:
 - **GitHub / GitLab integration** — open the PR, don't just leave the branch.
 - **Parallel fan-out** across agent nodes.
 - **Resume / replay** from a failed node.
-- **Long-term memory** surfaces as first-class Markdown the user can edit.
+- **Long-term memory** surfaces as first-class Markdown the user can edit — the
+  slot knowledge nodes are designed into (`docs/KNOWLEDGE.md`).
 - **Additional provider adapters** — `cursor`, `codex`, and friends, following
   `askill`'s list.
-- **Agent config management** — skills, MCP servers, settings. `agent-home` is a
-  named volume that is never bound, so anything in it is unreachable from the
-  host; reaching it needs either Overseer's staging channel (`_factoria/`, an
-  allowlisted one-directional copy — its §2) or, more likely here, the same
-  treatment factories got: a git repo under `/workspace`. Until then there is
-  nothing to stage and no staging directory.
+- **Agent config management** — skills, MCP servers, settings. The first concrete
+  MCP case is the knowledge server (`docs/KNOWLEDGE.md`), which this server
+  spawns and configures per run rather than leaving in agent config.
+  `agent-home` is a named volume that is never bound, so anything in it is
+  unreachable from the host; reaching it needs either Overseer's staging channel
+  (`_factoria/`, an allowlisted one-directional copy — its §2) or, more likely
+  here, the same treatment factories got: a git repo under `/workspace`. Until
+  then there is nothing to stage and no staging directory.
 
 ---
 
@@ -404,6 +407,8 @@ On disk:
 /workspace/_factories/<project>/memory/*.md           # long-term memory, git-tracked (not built)
 /workspace/_runs/<run_id>/_memory/<slug>/<slug>.md    # run memory — RAM for one run (docs/MEMORY.md)
 /workspace/_skills/<name>.md                          # standing instructions — shared via git
+/workspace/_knowledge/<id>/manifest.md                # a knowledge base — permanent, cross-project (docs/KNOWLEDGE.md, not built)
+/workspace/_knowledge/<id>/**/*.md                    # its content
 /data/projects.json                                   # machine-local registry
 /data/runs/<run_id>/events.jsonl                      # append-only event log
 /data/runs/<run_id>/summary.md                        # human-readable outcome

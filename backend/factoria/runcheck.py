@@ -71,6 +71,7 @@ from .models import (
     edge_outcome,
     has_outcome_ports,
     ATTACHED_TYPES,
+    node_base,
     node_kind,
     split_edges,
     node_remote,
@@ -141,6 +142,7 @@ def run_problems(
     problems += _outcome_problems(nodes, edges, label)
     problems += _duplicate_belt_problems(nodes, edges, label)
     problems += _wire_problems(nodes, edges, wires, label)
+    problems += _knowledge_problems(nodes, wires, label)
 
     for node in by_type.get("agent", []):
         attached = node.definition.codebase_id
@@ -345,6 +347,21 @@ def _wire_problems(
     memories = [node for node in nodes if node.definition.type == "memory"]
     if not memories:
         return problems
+    # **Knowledge wires are `_knowledge_problems`' to refuse.** Both node types
+    # are attached rather than on the line, so both of their edges arrive here
+    # as wires — but a base is not a memory and almost every rule differs, so a
+    # knowledge wire caught by the rules below would be refused with a sentence
+    # about filing an answer, which is not what it is for. Dropped by *touch*
+    # rather than by shape: a wire between a memory and a base touches both, and
+    # exactly one function must own it.
+    def touches_knowledge(wire: Edge) -> bool:
+        return any(
+            (node := by_id.get(end)) is not None
+            and node.definition.type == "knowledge"
+            for end in (wire.source, wire.target)
+        )
+
+    wires = [wire for wire in wires if not touches_knowledge(wire)]
 
     writers: dict[str, list[Node]] = {node.id: [] for node in memories}
     readers: dict[str, list[Node]] = {node.id: [] for node in memories}
@@ -440,6 +457,175 @@ def _wire_problems(
             problems.append(
                 f"“{label(sharing[0])}” comes out as {slug!r}, which is not a "
                 "usable file name — rename it."
+            )
+
+    return problems
+
+
+def _knowledge_problems(
+    nodes: list[Node],
+    wires: list[Edge],
+    label: Callable[[Node], str],
+) -> list[str]:
+    """What a knowledge base may be wired to, and which base it may be.
+
+    `docs/KNOWLEDGE.md`, Wiring one. Mirrored message for message in
+    `frontend/src/validation.ts`, for the reason every other rule there is: the
+    canvas has to be able to refuse a wire while it is still being drawn, and
+    only this decides whether a run starts.
+
+    **Direction is the permission**, exactly as it is for a memory: a wire into
+    the base is a contribution and a wire out of it is a consultation. The named
+    handles (`models.KnowledgeHandle`) exist so a `principles` base can *not
+    render* the one it must refuse; nothing here reads a handle name to decide
+    anything, because the ends of a wire are the one thing that cannot disagree
+    with the drawing.
+
+    **The memory rule that does not carry over** is the one worth naming, since
+    its absence looks like an omission:
+
+    > A reader needs no writer upstream. For a memory, a reader with no writer
+    > above it on the line is wiring that can never do anything, so it is
+    > refused. A knowledge base was filled before this run was drawn. Reading
+    > one nobody in this factory writes is the *normal* case — it is what a
+    > principles base is for.
+
+    So there is no `_ancestors` call here, and there never should be: a wire
+    carries no ordering and a base needs none.
+    """
+    from .knowledge import store as knowledge
+
+    problems: list[str] = []
+    by_id = {node.id: node for node in nodes}
+    bases = [node for node in nodes if node.definition.type == "knowledge"]
+    if not bases:
+        return problems
+
+    # Read once, not per node: `list_bases` walks every base in the workspace,
+    # and a factory wiring four of them would otherwise walk it four times.
+    library = {base.id: base for base in knowledge.list_bases()}
+
+    selected: dict[str, str] = {}
+    for node in bases:
+        chosen = node_base(node)
+        if not chosen:
+            problems.append(
+                f"“{label(node)}” has no knowledge base selected — a knowledge "
+                "node is a reference to a base that already exists, so an empty "
+                "one points at nothing. Choose a base, or delete the node."
+            )
+            continue
+        if chosen not in library:
+            problems.append(
+                f"“{label(node)}”: knowledge base {chosen!r} is no longer in "
+                "/workspace/_knowledge — select another, or restore it."
+            )
+            continue
+        selected[node.id] = chosen
+
+    # **One shelf, one lock, one index.** Two nodes on one base in one factory
+    # would be two names on the canvas for the same room — and, less cosmetically,
+    # two sets of handles that can disagree about whether this factory may write
+    # to it, which is a permission question with two answers.
+    by_base: dict[str, list[Node]] = {}
+    for node in bases:
+        chosen = selected.get(node.id)
+        if chosen:
+            by_base.setdefault(chosen, []).append(node)
+    for base_id, sharing in by_base.items():
+        if len(sharing) > 1:
+            names = ", ".join(f"“{label(node)}”" for node in sharing)
+            problems.append(
+                f"{names} all select the knowledge base {base_id!r}. One base is "
+                "one shelf with one lock and one index — put every wire on a "
+                "single node, and delete the rest."
+            )
+
+    reached: set[str] = set()
+    for wire in wires:
+        source, target = by_id.get(wire.source), by_id.get(wire.target)
+        if source is None or target is None:
+            continue  # `validate_graph` already refused a dangling edge
+        source_kind = source.definition.type
+        target_kind = target.definition.type
+        if "knowledge" not in (source_kind, target_kind):
+            continue
+
+        # **Storage does not talk to storage; a machine is always in between.**
+        # Named ahead of the direction rule below, because "you drew this
+        # backwards" is unhelpful advice about a wire that has no right end.
+        if source_kind in ATTACHED_TYPES and target_kind in ATTACHED_TYPES:
+            problems.append(
+                f"“{label(source)}” is wired to “{label(target)}” and both are "
+                "storage — a knowledge base is read and written by a machine, so "
+                "there is nothing at either end of this to do it."
+            )
+            continue
+
+        # **Direction is the permission**, which is the memory node's rule
+        # unchanged: a wire *into* storage is a write and a wire *out* of it is
+        # a read. So there is no handle to validate here and no "you drew this
+        # backwards" — both directions are meaningful, and which one you drew is
+        # what you asked for.
+        if target_kind == "knowledge":
+            # Into the base: a contribution.
+            if source_kind != "agent":
+                problems.append(
+                    f"“{label(target)}” is written to by “{label(source)}”, which "
+                    f"is a {source_kind} node — a base is contributed to by a "
+                    "machine, so only an agent may write to one."
+                )
+                continue
+            if edge_outcome(wire) != DEFAULT_EDGE_OUTCOME:
+                # The memory rule, and it carries over intact: storage is filed
+                # whatever the machine's outcome, so there is no version of the
+                # run where the work happened and the contribution should not.
+                problems.append(
+                    f"the wire from “{label(source)}” to “{label(target)}” leaves "
+                    "by an outcome port — a base is contributed to whatever the "
+                    "machine's outcome, so a wire carries no outcome."
+                )
+            reached.add(target.id)
+            chosen = selected.get(target.id)
+            if chosen and not knowledge.is_writable(library[chosen].scope):
+                # Refused as you draw it — a `principles` base renders no write
+                # handle, so there is nothing to drop a wire onto — and refused
+                # again here, because the canvas is not a security boundary and
+                # `main.json` is a file a human edits in a pull request. The
+                # spawn refuses it a third time by naming the write tools on
+                # `--disallowedTools`, and the MCP server a fourth. Of those
+                # four, the server is the authoritative one.
+                problems.append(
+                    f"“{label(source)}” is wired to write to “{label(target)}”, "
+                    f"which is a {library[chosen].scope} base. Principles are what "
+                    "the machines are measured against, so nothing may edit them "
+                    "from inside a run — a machine that can edit the standard it "
+                    "is judged by is a machine that can pass its own review."
+                )
+            continue
+
+        # Out of the base: a machine that may consult it.
+        if target_kind != "agent":
+            problems.append(
+                f"“{label(source)}” is read by “{label(target)}”, which is a "
+                f"{target_kind} node — a base hands out what it holds for a "
+                "machine to read, so only an agent may read one."
+            )
+            continue
+        reached.add(source.id)
+
+    # A base nothing reaches is a node that costs an index block on nobody's
+    # prompt and answers nobody's question. Deliberately *not* the memory rule
+    # above it — that one refuses a memory nothing **reads**, because a memory
+    # nobody was told about saves no work. This refuses one nothing touches at
+    # all: a base with only a write wire is perfectly sensible, and is how a
+    # research machine fills a timeline the next project will read.
+    for node in bases:
+        if node.id not in reached:
+            problems.append(
+                f"nothing is wired to “{label(node)}” — wire it to the machines "
+                "that may consult it, or delete it. A base nobody was given is a "
+                "base nobody can read."
             )
 
     return problems

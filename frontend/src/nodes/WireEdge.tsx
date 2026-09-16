@@ -1,7 +1,7 @@
 import { BaseEdge, getBezierPath, type EdgeProps } from "@xyflow/react";
 
 /**
- * A wire: a thin dashed line to a memory. Deliberately not a belt.
+ * A wire: a thin dashed line to storage. Deliberately not a belt.
  *
  * The distinction it has to carry, at a glance and from across the canvas:
  * **nothing travels down this and nothing waits on it.** A belt is control
@@ -13,6 +13,13 @@ import { BaseEdge, getBezierPath, type EdgeProps } from "@xyflow/react";
  * travel, no outcome tint — a memory is filed whatever the machine's outcome,
  * and there is no version of the run where the work happened and the copy
  * should not exist. Thin, dashed and quiet, so the line reads as the line.
+ *
+ * The one thing it does say is **which kind of storage it reaches**, by colour,
+ * because that is a difference in *lifetime*: a wire to a memory attaches
+ * something this run discards, and a wire to a knowledge base attaches
+ * something that was there before the factory was drawn and will outlive it.
+ * `data.knowledge` is set by `graph.toFlowEdge`, which already had both ends in
+ * hand — the wire is not handed a node id it would then have to look up.
  */
 export function WireEdge({
   sourceX,
@@ -21,6 +28,7 @@ export function WireEdge({
   targetY,
   sourcePosition,
   targetPosition,
+  data,
 }: EdgeProps) {
   // A plain bezier, including when it runs backwards. A belt that runs
   // backwards is a loop and gets drawn as a return conveyor because material
@@ -35,5 +43,12 @@ export function WireEdge({
     sourcePosition,
     targetPosition,
   });
-  return <BaseEdge path={path} className="wire" interactionWidth={16} />;
+  const knowledge = data?.knowledge === true;
+  return (
+    <BaseEdge
+      path={path}
+      className={`wire${knowledge ? " to-knowledge" : ""}`}
+      interactionWidth={16}
+    />
+  );
 }

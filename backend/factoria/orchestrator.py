@@ -77,13 +77,19 @@ project exists to avoid.
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import os
+import sys
 import uuid
 from pathlib import Path
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 from . import config, gitwork, memory, runcheck, skills, summary, worktree
+from .knowledge import index as knowledge_index
+from .knowledge import mcp as knowledge_mcp
+from .knowledge import store as knowledge_store
 from .agent.adapter import AgentAdapter, AgentRun, RunConfig
 from .agent.claude import ClaudeAdapter, PermissionDenied, resolve_permission_mode
 from .agent.fake import FAKE_COST_USD, SCRIPTS as FAKE_SCRIPTS, FakeAdapter
@@ -107,11 +113,14 @@ from .models import (
     edge_outcome,
     split_edges,
     has_outcome_ports,
+    KnowledgeBase,
+    node_base,
     node_kind,
     node_prompt,
     node_remote,
     utcnow,
 )
+from .paths import PathEscape, is_safe_name
 from .runcheck import NotRunnable
 from .skills import SkillError
 from .runevents import (
@@ -357,6 +366,25 @@ class ActiveRun:
     #: folded in by `_set_node` because a memory failure is not a status, and
     #: every path out of `_run_agent` passes through that one function.
     memory_notes: dict[str, str] = field(default_factory=dict)
+
+
+def _spawn_stem(node_id: str, lap: int) -> str:
+    """A filename for one node's grant and journal on one lap.
+
+    Keyed by lap as well as node, so a reviewer that sends a writer round again
+    gets a fresh journal. Without it, lap 1's refused write would fail lap 2 —
+    a node held red by something it already fixed, which is the loop bug that is
+    hardest to see from the canvas.
+
+    Node ids are minted by the canvas and are ordinary, but `main.json` is a
+    file a human edits in a pull request, so an id that is not a usable filename
+    falls back to a hash of itself rather than being refused. The full id is in
+    the grant document either way, which is what a person debugging one reads.
+    """
+    stem = node_id if is_safe_name(node_id) else hashlib.sha256(
+        node_id.encode("utf-8")
+    ).hexdigest()[:16]
+    return f"{stem}.lap{max(1, lap)}"
 
 
 class Orchestrator:
@@ -1339,10 +1367,24 @@ class Orchestrator:
         # what it was before this existed.
         reviewer = node_kind(node) == "reviewer"
         writes, reads = self._memory_neighbours(state, node)
+        # The bases this node's wires reach, and — per base — whether the
+        # operator drew a write handle onto it. Resolved before the prompt is
+        # composed, because the index block *is* part of the prompt: an agent
+        # told which files exist goes straight to one rather than guessing
+        # whether a base is worth a call (`knowledge/index.py`).
+        attached_bases = self._knowledge_neighbours(state, node)
+        (
+            mcp_servers,
+            allowed_tools,
+            disallowed_tools,
+            knowledge_block,
+            knowledge_journal,
+        ) = self._knowledge_spawn(state, node, attached_bases, lap=node_run.lap)
         appended = verdict.compose_system_prompt(
             appended,
             reviewer=reviewer,
             memory=memory.WRITER_CONTRACT if writes else None,
+            knowledge=knowledge_block,
         )
         # One directory per memory this node's belts were drawn from, granted
         # with `--add-dir` because a memory deliberately lives outside every
@@ -1378,6 +1420,9 @@ class Orchestrator:
                 default_model=state.settings.default_model,
                 append_system_prompt=appended,
                 add_dirs=add_dirs,
+                mcp_servers=mcp_servers,
+                allowed_tools=allowed_tools,
+                disallowed_tools=disallowed_tools,
             ),
         )
         state.agent_run = agent_run
@@ -1453,6 +1498,23 @@ class Orchestrator:
                 await self._set_node(
                     state, node.id, "failed", detail or f"agent exited: {cause}"
                 )
+            return
+
+        # **A refused knowledge write fails the node**, whatever the agent went
+        # on to say about it — see `_knowledge_failures` for why this is the
+        # inverse of what a failed memory write does. Placed after the crash
+        # path so a node that died keeps the more informative reason, and before
+        # every success so neither a worker nor a passing reviewer can go green
+        # over a source of truth it did not actually change.
+        refused = self._knowledge_failures(knowledge_journal)
+        if refused:
+            state.halt.add(node.id)
+            await self._set_node(
+                state,
+                node.id,
+                "failed",
+                "knowledge was not recorded: " + "; ".join(refused[:3]),
+            )
             return
 
         if not reviewer:
@@ -1597,6 +1659,207 @@ class Orchestrator:
                     seen.add(other.id)
                     reads.append(other)
         return writes, reads
+
+    def _knowledge_neighbours(
+        self, state: ActiveRun, node: Node
+    ) -> list[tuple[Node, "KnowledgeBase", bool]]:
+        """`(the knowledge node, the base it selects, may this node write)`.
+
+        Read off the **wires**, like `_memory_neighbours`, and off their
+        *direction*, like `_memory_neighbours` — a base is a memory's shape on
+        the canvas and a different lifetime behind it. A wire from the base to
+        this node says it may consult it; a wire from this node to the base says
+        it may contribute.
+
+        Nothing here reads a handle name. The named handles
+        (`models.KnowledgeHandle`) exist so a `principles` base can refuse to
+        render the one it must, which is a fact about what can be *drawn*; what
+        a wire *means* is which end of it the machine is on, and that is the one
+        reading that cannot disagree with the picture.
+
+        **A static graph question**, deliberately, exactly as the memory one is:
+        what a machine may reach is a property of the factory the operator drew,
+        not of how far the run has got. And unlike a memory there is nothing to
+        wait for — a base was filled before this run was drawn, so reading one
+        nobody in this factory writes is the normal case.
+
+        A base that has gone missing since the run check is skipped rather than
+        fatal: `runcheck` proved it readable subprocesses ago, and a directory
+        can go in between. The machine then runs without it and the index block
+        never claims otherwise, which is the same degradation a memory whose
+        write failed already has.
+        """
+        by_id = {other.id: other for other in state.factory.nodes}
+        _belts, wires = split_edges(state.factory.nodes, state.factory.edges)
+        writable: dict[str, bool] = {}
+        order: list[str] = []
+
+        def reached(other: Node) -> None:
+            """First mention wins the position, so the order is the operator's
+            edge order and two spawns of one factory agree byte for byte."""
+            if other.id not in writable:
+                order.append(other.id)
+                writable[other.id] = False
+
+        for wire in wires:
+            # Out of a base, into this node: it may consult it.
+            if wire.target == node.id:
+                other = by_id.get(wire.source)
+                if other is not None and other.definition.type == "knowledge":
+                    reached(other)
+            # Out of this node, into a base: it may contribute to it.
+            #
+            # Set rather than or-ed, and never cleared: a machine wired both
+            # ways to one base reads *and* writes, and the order the two wires
+            # happen to sit in the file must not decide which.
+            if wire.source == node.id:
+                other = by_id.get(wire.target)
+                if other is not None and other.definition.type == "knowledge":
+                    reached(other)
+                    writable[other.id] = True
+
+        found: list[tuple[Node, "KnowledgeBase", bool]] = []
+        for node_id in order:
+            other = by_id[node_id]
+            base_id = node_base(other)
+            if not base_id:
+                continue
+            try:
+                base = knowledge_store.get_base(base_id)
+            except (knowledge_store.KnowledgeError, PathEscape):
+                continue
+            # **Scope has the final word, and no wire can lift it.** A
+            # `principles` base is read-only to every machine, so a write wire
+            # drawn onto one — which `runcheck` refuses, and which a hand-edited
+            # factory file can still carry — grants nothing here either.
+            found.append(
+                (other, base, writable[node_id] and knowledge_store.is_writable(base.scope))
+            )
+        return found
+
+    def _knowledge_spawn(
+        self,
+        state: ActiveRun,
+        node: Node,
+        attached: list[tuple[Node, "KnowledgeBase", bool]],
+        *,
+        lap: int,
+    ) -> tuple[dict[str, object], list[str], list[str], str | None, Path | None]:
+        """Everything a spawn needs to reach its bases: the server, the flags,
+        the prompt block and where the write journal will land.
+
+        The grant document is written here and named in the server's own
+        environment, which is the boundary: this process decides what a machine
+        may reach, writes it down once, and the child can address nothing else
+        for its whole life. Nothing an agent can say — no argument, no injection
+        carried in a base it *can* read — reaches a base outside that file.
+
+        **`RunConfig`'s three new fields are orchestrator policy, never node
+        config**, for the identical reason `add_dirs` is (`agent/adapter.py`). A
+        node that could name its own MCP server or its own allowed tools would
+        be the hole every other boundary exists to close.
+        """
+        if not attached:
+            return {}, [], [], None, None
+
+        assert state.workspaces is not None
+        directory = state.workspaces.ensure_knowledge_dir()
+        stem = _spawn_stem(node.id, lap)
+        grant_path = directory / f"{stem}.grant.json"
+        journal_path = directory / f"{stem}.journal.jsonl"
+
+        writable_anywhere = any(writable for _node, _base, writable in attached)
+        grant = {
+            "run_id": state.run.id,
+            "node_id": node.id,
+            "journal": str(journal_path),
+            "bases": [
+                {
+                    "id": base.id,
+                    "root": str(knowledge_store.base_path(base.id)),
+                    "scope": base.scope,
+                    "format": base.format,
+                    "title": base.title,
+                    "writable": writable,
+                }
+                for _other, base, writable in attached
+            ],
+        }
+        grant_path.write_text(json.dumps(grant, indent=2), encoding="utf-8")
+
+        servers = {
+            knowledge_mcp.SERVER_NAME: {
+                # `sys.executable -m`, not a bare `python`: the server imports
+                # this package, so it has to be the interpreter this package is
+                # installed under and not whatever is first on the child's PATH.
+                "command": sys.executable,
+                "args": ["-m", "factoria.knowledge.mcp"],
+                "env": {knowledge_mcp.GRANT_ENV: str(grant_path)},
+            }
+        }
+        allowed = knowledge_mcp.allowed_tool_names(writable=writable_anywhere)
+        # Named on the deny list whenever *nothing* here is writable, which
+        # covers both cases the design names: a node with no write wire, and one
+        # whose only wires reach `principles` bases. A node with a write wire
+        # onto one base and a read wire onto another cannot have the write tools
+        # denied — the server is what refuses the per-base half, which is why it
+        # is the authoritative one.
+        denied = [] if writable_anywhere else knowledge_mcp.denied_tool_names()
+        block = knowledge_index.compose(
+            [
+                knowledge_index.base_block(
+                    base, knowledge_store.base_path(base.id), writable=writable
+                )
+                for _other, base, writable in attached
+            ]
+        )
+        return servers, allowed, denied, block, journal_path
+
+    def _knowledge_failures(self, journal: Path | None) -> list[str]:
+        """Write failures this spawn's MCP server recorded, as sentences.
+
+        **A failed knowledge write fails the node** — the deliberate inverse of
+        memory, where a failed write is a note beside an outcome
+        (`_file_memories`). The inverse is right because the two are different
+        things. A memory is an optimisation, so losing one costs a repeated
+        question. A knowledge write is *the work*: a machine told to record a
+        decision, which reports success while recording nothing, hands the next
+        project a gap that reads as "no decision was made". That is a lie with a
+        long half-life, and it is worth a red node now.
+
+        Read from the journal rather than from the stream because the agent is
+        the wrong witness: it was told about the failure by a typed error in the
+        same turn, and the case this protects against is precisely an agent that
+        decided to carry on regardless.
+
+        A journal that cannot be read is **no failures**, not a failure. The
+        server writes it best-effort (`mcp.Server._journal`), so an unreadable
+        one is far more likely to be a run with no writes in it than a lost
+        record — and failing a node over its own bookkeeping is the worse trade.
+        """
+        if journal is None:
+            return []
+        try:
+            lines = journal.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            return []
+        failures: list[str] = []
+        for line in lines:
+            if not line.strip():
+                continue
+            try:
+                entry = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if entry.get("ok"):
+                continue
+            where = entry.get("path") or "the base"
+            failures.append(
+                f"{entry.get('tool', 'a knowledge write')} to "
+                f"{entry.get('base', '?')} ({where}) was refused: "
+                f"{entry.get('code', 'unknown')}"
+            )
+        return failures
 
     def _codebase(self, node: Node) -> Codebase:
         wanted = node.definition.codebase_id

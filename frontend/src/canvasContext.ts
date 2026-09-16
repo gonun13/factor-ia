@@ -12,6 +12,7 @@ import { createContext, useContext } from "react";
 import type {
   Codebase,
   CodebaseGit,
+  KnowledgeBaseSummary,
   ModelOffer,
   NodeDefinition,
   ProjectSettings,
@@ -86,6 +87,20 @@ export type CanvasContextValue = {
    * a file, but "is there anything in it".
    */
   memories: Record<string, RunArtifact>;
+  /**
+   * The workspace's knowledge library, by base id, fetched once per canvas.
+   *
+   * A `Map` rather than the array the API returns, because every reader of it
+   * asks the same question — *what is the base this node selected* — and a
+   * linear scan per node per render to answer it would be the canvas paying for
+   * a shape nobody wanted.
+   *
+   * Empty until `/api/knowledge` answers, and that emptiness is load-bearing:
+   * it is what makes `validation` suppress the base-specific rules rather than
+   * telling the operator every base they chose has vanished, and what makes
+   * `hasWriteHandle` keep both handles rather than dropping edges on load.
+   */
+  knowledgeBases: Map<string, KnowledgeBaseSummary>;
 };
 
 export const CanvasContext = createContext<CanvasContextValue>({
@@ -98,6 +113,7 @@ export const CanvasContext = createContext<CanvasContextValue>({
   projectSettings: { default_provider: null, default_model: null },
   skills: [],
   memories: {},
+  knowledgeBases: new Map(),
 });
 
 export const useCanvas = () => useContext(CanvasContext);

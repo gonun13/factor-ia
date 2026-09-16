@@ -37,16 +37,18 @@ the same question.**
 
 The two are easy to confuse and they are opposites.
 
-| | Skill | Memory |
-|---|---|---|
-| Answers | how this agent should *behave* | what is already *known* |
-| Authority | unconditional — it is instruction | reference — the agent may check it or ignore it |
-| Lifetime | reviewed in git, outlives every run | written during one run, discarded at the end |
-| Written by | a person, in `_skills/` | a machine, down a belt |
-| Delivered as | its body, in the system prompt | a path, in the prompt |
+| | Skill | Memory | Knowledge |
+|---|---|---|---|
+| Answers | how this agent should *behave* | what is already *known* | what is *durably true* |
+| Authority | unconditional — it is instruction | reference — the agent may check it or ignore it | source of truth, above a memory |
+| Lifetime | reviewed in git, outlives every run | written during one run, discarded at the end | permanent, and shared across projects |
+| Written by | a person, in `_skills/` | a machine, down a belt | a person or a machine, over months |
+| Delivered as | its body, in the system prompt | a path, in the prompt | tools, plus an index in the system prompt |
 
 A memory is **RAM for a run**. It is not a knowledge base, nothing accumulates
-across runs, and no agent should be told to "save" anything to it.
+across runs, and no agent should be told to "save" anything to it. The third
+column is the thing that *does* accumulate, and it is a separate system with
+separate rules — `docs/KNOWLEDGE.md` (designed, not built).
 
 The consequence worth stating plainly: a memory that cannot be written does not
 fail anything. The machine did its work and the answer is real whether or not a

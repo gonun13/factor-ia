@@ -11,6 +11,8 @@ import type {
   Factory,
   GraphWrite,
   Health,
+  KnowledgeBase,
+  KnowledgeBaseSummary,
   LoginState,
   Project,
   Run,
@@ -75,6 +77,30 @@ export const api = {
     }),
   deleteSkill: (name: string) =>
     request<void>(`/api/skills/${encodeURIComponent(name)}`, { method: "DELETE" }),
+
+  /** The workspace's knowledge bases. A directory walk, like `skills()`, and
+      cheap enough to sit in the canvas's own load. */
+  knowledge: () => request<KnowledgeBaseSummary[]>("/api/knowledge"),
+  knowledgeBase: (id: string) =>
+    request<KnowledgeBase>(`/api/knowledge/${encodeURIComponent(id)}`),
+  /** Create a base, or import a `manifest.md` the browser already read.
+      **No `overwrite`**, unlike a skill import: replacing a base would silently
+      re-scope a store other projects are reading. */
+  createKnowledgeBase: (body: {
+    id: string;
+    title?: string;
+    scope?: string;
+    about?: string;
+    text?: string;
+  }) =>
+    request<KnowledgeBase>("/api/knowledge", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  /** Deletes the directory and everything in it. The one recursive delete in
+      the library, and it is a button only because git is the undo. */
+  deleteKnowledgeBase: (id: string) =>
+    request<void>(`/api/knowledge/${encodeURIComponent(id)}`, { method: "DELETE" }),
 
   projects: () => request<Project[]>("/api/projects"),
   createProject: (name: string, codebaseIds: string[] = []) =>

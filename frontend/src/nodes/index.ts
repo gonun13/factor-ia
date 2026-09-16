@@ -4,6 +4,7 @@ import { HumanNode } from "./HumanNode";
 import { BeltEdge } from "./BeltEdge";
 import { WireEdge } from "./WireEdge";
 import { InputNode } from "./InputNode";
+import { KnowledgeNode } from "./KnowledgeNode";
 import { MemoryNode } from "./MemoryNode";
 import { OutputNode } from "./OutputNode";
 import { BELT_EDGE, WIRE_EDGE } from "../graph";
@@ -14,6 +15,7 @@ export const nodeTypes: NodeTypes = {
   agent: AgentNode,
   human: HumanNode,
   memory: MemoryNode,
+  knowledge: KnowledgeNode,
   output: OutputNode,
 };
 
@@ -25,6 +27,7 @@ export {
   OutputGlyph,
   CodebaseGlyph,
   HumanGlyph,
+  KnowledgeGlyph,
   MemoryGlyph,
   ReviewerGlyph,
 } from "./Glyphs";

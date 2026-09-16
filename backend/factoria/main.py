@@ -12,6 +12,7 @@ from fastapi.staticfiles import StaticFiles
 
 from . import __version__, config
 from .api import router as api_router
+from .knowledge_api import router as knowledge_router
 from .orchestrator import get_orchestrator
 from .runs_api import router as runs_router
 from .security import OriginCheckMiddleware
@@ -76,6 +77,11 @@ app.include_router(runs_router)
 # are scoped to the workspace rather than to a project, and are markdown a
 # human wrote rather than JSON the store owns.
 app.include_router(skills_router)
+# Knowledge bases: the workspace's permanent, curated stores. Beside skills for
+# the same reason — scoped to the workspace rather than to a project, and files
+# a human keeps rather than JSON the store owns — and separate from them because
+# almost every rule differs (`docs/KNOWLEDGE.md`).
+app.include_router(knowledge_router)
 
 
 # Static last: this mount matches everything, and Starlette resolves routes in

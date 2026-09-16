@@ -47,6 +47,7 @@ import { api } from "../api";
 import { CanvasContext } from "../canvasContext";
 import {
   BELT_EDGE,
+  hasWriteHandle,
   loadGraph,
   newEdgeId,
   newNode,
@@ -60,6 +61,7 @@ import {
   AgentGlyph,
   HumanGlyph,
   InputGlyph,
+  KnowledgeGlyph,
   MemoryGlyph,
   MergeGlyph,
   OutputGlyph,
@@ -81,6 +83,7 @@ import type {
   NodeRun,
   NodeType,
   Project,
+  KnowledgeBaseSummary,
   SkillSummary,
 } from "../types";
 
@@ -167,6 +170,11 @@ const PALETTE_GROUPS: {
     Glyph: MemoryGlyph,
     items: [
       { type: "memory", kind: "", label: "Memory", hint: "parks work for a later machine to read", Glyph: MemoryGlyph },
+      // Beside the memory, because both are off the line and a person looking
+      // for "somewhere to put things" looks in one place. The hints are written
+      // against each other on purpose: the difference between the two is
+      // *lifetime*, and it is the only thing anybody has to get right here.
+      { type: "knowledge", kind: "", label: "Knowledge", hint: "a permanent store the machines consult", Glyph: KnowledgeGlyph },
     ],
   },
 ];
@@ -199,6 +207,7 @@ function CanvasInner({ projectId, onBack }: { projectId: string; onBack: () => v
   const [factory, setFactory] = useState<Factory | null>(null);
   const [codebases, setCodebases] = useState<Codebase[]>([]);
   const [skills, setSkills] = useState<SkillSummary[]>([]);
+  const [bases, setBases] = useState<KnowledgeBaseSummary[]>([]);
   const [gitStates, setGitStates] = useState<Record<string, CodebaseGit>>({});
   const [agent, setAgent] = useState<AgentStatus | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -227,14 +236,19 @@ function CanvasInner({ projectId, onBack }: { projectId: string; onBack: () => v
       // problem with `_skills/` must not turn a good factory into an error
       // screen, it must turn the skill picker into an empty one.
       api.skills().catch(() => [] as SkillSummary[]),
+      // Beside the skills, and with the same `.catch`: an unreadable
+      // `_knowledge/` must turn the base picker into an empty one, never a good
+      // factory into an error screen.
+      api.knowledge().catch(() => [] as KnowledgeBaseSummary[]),
     ])
-      .then(([loadedProject, loadedFactory, discovered, library]) => {
+      .then(([loadedProject, loadedFactory, discovered, library, knowledge]) => {
         if (!live) return;
         const graph = loadGraph(loadedFactory);
         setProject(loadedProject);
         setFactory(loadedFactory);
         setCodebases(discovered);
         setSkills(library);
+        setBases(knowledge);
         setNodes(graph.nodes);
         setEdges(graph.edges);
         baseline.current = JSON.stringify(serialize(graph.nodes, graph.edges));
@@ -421,9 +435,63 @@ function CanvasInner({ projectId, onBack }: { projectId: string; onBack: () => v
     if (run.status && !run.live) refreshGit(codebases.map((codebase) => codebase.id));
   }, [run.status, run.live, codebases, refreshGit]);
 
+  /** The library by id — the shape every reader of it actually wants. */
+  const baseIndex = useMemo(
+    () => new Map(bases.map((base) => [base.id, base])),
+    [bases],
+  );
+
+  /**
+   * Switching a node to a `principles` base takes its write handle away — so
+   * every wire that *arrived* at it has to go too, **visibly**.
+   *
+   * This is the one place the canvas deletes something the operator drew, and
+   * it is here because the alternative is worse. React Flow *silently drops* an
+   * edge whose `sourceHandle` names a handle its source node does not render
+   * (`graph.toFlowEdge` documents the same trap one direction down): not a
+   * warning, not a broken line — the wire is simply not on screen, while the
+   * file still carries it and the server still reads it. That is an edge you
+   * cannot fix from the canvas, because you cannot see the thing to delete.
+   *
+   * So: remove it, say so, and leave the graph dirty. An invisible edge is
+   * worse than a refused one.
+   */
+  const [normalised, setNormalised] = useState<string | null>(null);
+  useEffect(() => {
+    if (baseIndex.size === 0) return;
+    const writeless = new Set(
+      nodes
+        .filter(
+          (node) =>
+            node.data.definition.type === "knowledge" &&
+            !hasWriteHandle(node.data.definition, baseIndex),
+        )
+        .map((node) => node.id),
+    );
+    if (writeless.size === 0) return;
+    setEdges((existing) => {
+      // By target, because `write` is the base's **target** handle: the wire
+      // arrives from the contributing machine. Matched on the end rather than
+      // on the handle name — a wire into a base is a write whatever it is
+      // called, and a `targetHandle` that a hand-edited file left null must not
+      // survive as an invisible edge.
+      const orphaned = existing.filter((edge) => writeless.has(edge.target));
+      if (orphaned.length === 0) return existing;
+      const names = orphaned
+        .map((edge) => nodes.find((node) => node.id === edge.source))
+        .map((node) => (node ? node.data.definition.label || node.id : "a machine"));
+      setNormalised(
+        `${orphaned.length === 1 ? "A write wire" : `${orphaned.length} write wires`} from ${names
+          .map((name) => `“${name}”`)
+          .join(", ")} ${orphaned.length === 1 ? "was" : "were"} removed: a principles base is read-only to every machine. Save to keep the change.`,
+      );
+      return existing.filter((edge) => !orphaned.includes(edge));
+    });
+  }, [nodes, baseIndex, setEdges]);
+
   const problems = useMemo(
-    () => runProblems(nodes, edges, codebases, dirty, gitStates),
-    [nodes, edges, codebases, dirty, gitStates],
+    () => runProblems(nodes, edges, codebases, dirty, gitStates, bases),
+    [nodes, edges, codebases, dirty, gitStates, bases],
   );
   const invalid = useMemo(
     // Blockers only: a notice ("this one pushes") is something to read, not a
@@ -458,8 +526,9 @@ function CanvasInner({ projectId, onBack }: { projectId: string; onBack: () => v
       },
       skills,
       memories: run.memories,
+      knowledgeBases: baseIndex,
     }),
-    [codebases, gitStates, invalid, patch, agent, project, skills, run.memories],
+    [codebases, gitStates, invalid, patch, agent, project, skills, run.memories, baseIndex],
   );
 
   return (
@@ -497,6 +566,21 @@ function CanvasInner({ projectId, onBack }: { projectId: string; onBack: () => v
       </header>
 
       {error && <div className="error" style={{ margin: "0.75rem 1rem 0" }}>{error}</div>}
+      {/* Not an error: the canvas did something the operator did not ask for,
+          and this is it saying so. Dismissable, because the change it describes
+          is already on screen — the wire is gone. */}
+      {normalised && (
+        <div className="notice" style={{ margin: "0.75rem 1rem 0" }}>
+          {normalised}
+          <button
+            className="link-button"
+            onClick={() => setNormalised(null)}
+            aria-label="Dismiss"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
 
       <div className="workbench">
         {/* React Flow is mounted only once the graph is in hand: `fitView` latches
@@ -688,6 +772,12 @@ const NODE_COLOUR: Record<string, string> = {
   input: "#f4b942",
   agent: "#5aa9ff",
   memory: "#c79bff",
+  // Keep in step with `--knowledge` in index.css. **The minimap is where this
+  // pays.** The two storage types are 36 degrees apart in hue, which is the
+  // closest pair in the palette, and here they are a few pixels each with no
+  // glyph and no label to fall back on — so what tells them apart at this size
+  // is chroma: a pale lavender beside a saturated magenta.
+  knowledge: "#e07ad8",
   // Was falling through to the generic slate, which put the one node a person
   // has to attend to on the minimap as unremarkable grey. Keep in step with
   // `--human` in index.css.

@@ -14,6 +14,7 @@ export type NodeType =
   | "output"
   | "human"
   | "memory"
+  | "knowledge"
   | "factory-ref";
 
 /**
@@ -93,6 +94,90 @@ export type Codebase = {
   path: string;
   branch: string | null;
 };
+
+/**
+ * What one knowledge base holds — `models.KnowledgeScope`.
+ *
+ * **Not a kind.** A kind is how one node type varies and lives in the node's
+ * config; a scope is a property of the *base*, declared in its manifest and true
+ * of it in every factory that selects it. A scope on the node would be a second
+ * place the answer lives, and the first time the two disagreed the canvas would
+ * be showing a permission the server does not grant.
+ *
+ * It controls exactly two things: whether an agent may write
+ * (`KNOWLEDGE_READ_ONLY_SCOPES`), and precedence when sources disagree.
+ */
+export type KnowledgeScope = "principles" | "project" | "codebase" | "general";
+
+export const KNOWLEDGE_SCOPES: KnowledgeScope[] = [
+  "principles",
+  "project",
+  "codebase",
+  "general",
+];
+
+/** One line each, for the library and the node's picker. */
+export const KNOWLEDGE_SCOPE_NOTE: Record<KnowledgeScope, string> = {
+  principles: "how work should be done, everywhere, always",
+  project: "what is true of one project",
+  codebase: "what is true of one repository, across the projects that touch it",
+  general: "durable reference belonging to no project and no repo",
+};
+
+/** Scopes no agent may ever write to, with no per-base override — `models.READ_ONLY_SCOPES`. */
+export const KNOWLEDGE_READ_ONLY_SCOPES = new Set<string>(["principles"]);
+
+/**
+ * A knowledge node's two handles, and the direction each one implies —
+ * `models.KnowledgeHandle`.
+ *
+ * `write` is the node's **target** handle: a wire arrives there from the machine
+ * that may contribute. `read` is its **source** handle: a wire leaves there for
+ * each machine that may consult it.
+ *
+ * **Direction is the permission**, which is the memory node's rule unchanged —
+ * an arrow into storage is a write and an arrow out of it is a read, and that
+ * is readable off the picture without learning what a handle colour means.
+ *
+ * Knowledge needs the handles *named* where a memory does not, but only so a
+ * base can take one away: a `principles` base renders no `write` handle, so a
+ * contributing wire has nowhere to land. Nothing reads the name to decide a
+ * permission — the ends of a wire are what decide, and they cannot disagree
+ * with the drawing.
+ */
+export type KnowledgeHandle = "read" | "write";
+
+/** One file in a base, as the library and the node list it. */
+export type KnowledgeEntry = {
+  path: string;
+  bytes: number;
+  /** The file's opening markdown heading, read off disk rather than written. */
+  summary: string;
+};
+
+/**
+ * A knowledge base's manifest, as metadata — `models.KnowledgeBaseSummary`.
+ *
+ * Discovered rather than owned, like a codebase and a skill: the directory is
+ * the record and git is the history. The directory name is the id, and the id
+ * is what a knowledge node selects it by.
+ */
+export type KnowledgeBaseSummary = {
+  id: string;
+  title: string;
+  scope: string;
+  format: string;
+  /** The manifest's prose: shown here, and given to the agent in its index. */
+  about: string;
+  files: number;
+  bytes: number;
+  /** Derived from `scope` server-side, never stored and never trusted from here. */
+  writable: boolean;
+  updated_at: string;
+};
+
+/** A base with its contents listed — what a picker opens. */
+export type KnowledgeBase = KnowledgeBaseSummary & { entries: KnowledgeEntry[] };
 
 /**
  * A standing-instructions document in the workspace's `_skills/`.

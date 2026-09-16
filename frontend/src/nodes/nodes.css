@@ -669,3 +669,87 @@
 .react-flow__handle.handle-fail:hover {
   background: var(--danger);
 }
+
+/* ---- the knowledge node -------------------------------------------------
+   A base is storage like a memory is, and is drawn in its own colour because
+   the two are *not* the same thing and sit in the same palette group: a memory
+   empties when the run does, and nothing in a base is ever cleaned up. Same
+   square dot, same "this is a shelf, not a station" vocabulary — a different
+   hue, because the lifetimes differ and that is the fact worth seeing from
+   across the canvas. */
+
+.filed-line.is-knowledge {
+  color: var(--knowledge);
+}
+
+.filed-line.is-knowledge .filed-dot {
+  background: var(--knowledge);
+}
+
+/* Read-only is a *property*, not a warning: it is the ordinary and correct
+   state of every principles base, so it is faint rather than coloured. */
+.filed-locked {
+  color: var(--ink-faint);
+}
+
+.slot.base select {
+  border-color: color-mix(in srgb, var(--knowledge) 45%, transparent);
+  background: color-mix(in srgb, var(--knowledge) 8%, #10141b);
+}
+
+/* The scope in words, on hover and on focus like the skill's description — it
+   is the one thing about a base that changes what a wire to it means, and it is
+   the manifest's word rather than anything set here. */
+.node .scope-note {
+  display: none;
+  color: var(--knowledge);
+}
+
+.node:hover .scope-note,
+.node:focus-within .scope-note {
+  display: block;
+}
+
+/* ---- the two knowledge handles ------------------------------------------
+   One a side, because **direction is the permission**: `write` is the target
+   handle on the left, where a contributing machine's wire arrives, and `read`
+   is the source handle on the right, where a consulting machine's leaves. So
+   neither needs the vertical offsets `success`/`fail` need to be told apart —
+   they are already on opposite edges of the node, which is the same thing the
+   arrows are saying.
+
+   `write` is the warmer of the two on purpose. Of the two wires a base can
+   carry, it is the one worth noticing on a factory you did not draw: a machine
+   that may *change* a source of truth other projects read. */
+
+.react-flow__handle.handle-read,
+.react-flow__handle.handle-write {
+  height: 14px;
+}
+
+.react-flow__handle.handle-read {
+  background: color-mix(in srgb, var(--knowledge) 45%, var(--belt-casing));
+}
+
+.react-flow__handle.handle-write {
+  background: color-mix(in srgb, var(--input) 45%, var(--belt-casing));
+}
+
+.react-flow__handle.handle-read:hover {
+  background: var(--knowledge);
+}
+
+.react-flow__handle.handle-write:hover {
+  background: var(--input);
+}
+
+/* A wire to a base. Everything `.wire` is — thin, dashed, no direction of
+   travel, nothing waiting on it — in the knowledge colour, so the two kinds of
+   storage on one canvas are told apart by their wires as well as their nodes. */
+.wire.to-knowledge {
+  stroke: color-mix(in srgb, var(--knowledge) 65%, transparent);
+}
+
+.react-flow__edge.selected .wire.to-knowledge {
+  stroke: var(--knowledge);
+}

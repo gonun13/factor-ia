@@ -46,17 +46,29 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 # cannot detect for itself.
 SCHEMA_VERSION = 1
 
-NodeType = Literal["input", "agent", "output", "human", "memory", "factory-ref"]
-"""`input`/`agent`/`output`/`human`/`memory` are live. `factory-ref` exists in
-the union with no UI and no execution support — see module docstring.
+NodeType = Literal[
+    "input", "agent", "output", "human", "memory", "knowledge", "factory-ref"
+]
+"""`input`/`agent`/`output`/`human`/`memory`/`knowledge` are live.
+`factory-ref` exists in the union with no UI and no execution support — see
+module docstring.
 
-`memory` is the one member added since this file was written, and it is a
-member rather than a kind for the reason the kind vocabularies below give in
-reverse: a kind is how one node *type* varies, and the orchestrator dispatches
-on `definition.type` (`orchestrator._run_node`). A node that parks a machine's
-output in a document and hands the next machine a pointer to it does not do an
-agent's work, an output's work, or a human's, so it has nowhere to be a kind
-*of*. See `memory.py`."""
+`memory` and `knowledge` are the two members added since this file was written,
+and both are members rather than kinds for the reason the kind vocabularies
+below give in reverse: a kind is how one node *type* varies, and the
+orchestrator dispatches on `definition.type` (`orchestrator._run_node`). A node
+that parks a machine's output in a document and hands the next machine a
+pointer to it does not do an agent's work, an output's work, or a human's, so
+it has nowhere to be a kind *of*. See `memory.py`.
+
+`knowledge` is not a *kind of* memory either, which is the distinction worth
+stating in the one place a reader meets both names. A memory answers "what did
+this run find out" and empties when the run does; a base answers "what is
+durably true", is filled before the run exists, outlives it, and is shared
+across every project. Almost every rule differs — who may write, what a failed
+write means, what happens at the end of a run — and a single type carrying both
+sets would be a type nobody could state. See `knowledge/` and
+`docs/KNOWLEDGE.md`."""
 
 PayloadKind = Literal["text"]
 """Open question 4: freeform text for v1. A typed artifact (diff / file set /
@@ -156,6 +168,71 @@ exactly what it meant before this existed.
 DEFAULT_EDGE_OUTCOME: EdgeOutcome = "success"
 EDGE_OUTCOMES: frozenset[str] = frozenset({"success", "fail"})
 
+KnowledgeScope = Literal["principles", "project", "codebase", "general"]
+"""What one knowledge base holds, and the only thing that varies between bases.
+
+**Not a kind**, although it looks like one: `node_kind` reads a *node's* config,
+and this is a property of the base itself, declared in its manifest and true of
+it in every factory that selects it. A scope on the node would be a second
+place the answer lives, and the first time the two disagreed the canvas would be
+showing a permission the server does not grant.
+
+- `principles` — how work should be done, everywhere, always.
+- `project` — what is true of one project: its decisions, its long-term research.
+- `codebase` — what is true of one repository, across the projects touching it.
+- `general` — durable reference belonging to no project and no repo.
+
+Scope controls exactly two things, and the omissions are deliberate
+(`docs/KNOWLEDGE.md`, Scope): whether an agent may **write** (`READ_ONLY_SCOPES`),
+and **precedence** when sources disagree (`knowledge/index.PRECEDENCE`). It does
+not validate bindings — attaching a `project` base to a second project is
+allowed, because "this was written for alpha and beta needs it too" is exactly
+how a base earns a wider scope — and it does not constrain the *shape* of a
+write, which is a convention a base's manifest describes to the agent rather
+than a schema this code enforces. Both are easy to add later and hard to remove
+once something depends on them.
+"""
+
+KNOWLEDGE_SCOPES: frozenset[str] = frozenset(
+    {"principles", "project", "codebase", "general"}
+)
+
+#: Scopes no agent may ever write to, with no per-base override.
+#:
+#: Principles are what the agents are measured against; a machine that can edit
+#: the standard it is judged by is a machine that can pass its own review. The
+#: canvas refuses the write handle as you draw it, the spawn names the write
+#: tools on `--disallowedTools`, and the MCP server refuses the call anyway —
+#: three mechanisms for one rule, of which **the server is authoritative**.
+READ_ONLY_SCOPES: frozenset[str] = frozenset({"principles"})
+
+KnowledgeHandle = Literal["read", "write"]
+"""A knowledge node's two handles — and **the direction each one implies**.
+
+- `write` is the node's **target** handle. A wire arrives there from the machine
+  that may contribute, because contributing puts work *into* the base.
+- `read` is its **source** handle. A wire leaves there for each machine that may
+  consult it, because consulting takes work *out*.
+
+**Direction is the permission**, which is the memory node's rule unchanged
+(`memory.py`): an arrow into storage is a write and an arrow out of it is a
+read, and a reviewer of a factory reads that off the picture without learning
+what a handle colour means. Knowledge needs *named* handles where a memory does
+not, but only so a base can take one of them away: a `principles` base renders
+no `write` handle at all, so a write wire cannot be drawn onto one in the first
+place.
+
+The name therefore rides `Edge.target_handle` on a write wire and
+`Edge.source_handle` on a read one — whichever end the base is — and nothing
+reads it to decide a permission. It is there so React Flow can address the
+handle and so the canvas can colour it. **The ends of the wire are what decide**,
+which is the one reading that cannot disagree with the drawing.
+
+A write wire also carries no outcome, exactly as a memory's does not: it leaves
+the machine by its ordinary way out, not by `success` or `fail`, because a base
+is contributed to whatever the machine's outcome.
+"""
+
 Slug = Annotated[str, Field(pattern=r"^[a-z0-9][a-z0-9-]{0,63}$")]
 
 
@@ -214,6 +291,54 @@ class Skill(SkillSummary):
     """
 
     body: str
+
+
+class KnowledgeEntry(Base):
+    """One file in a base, as the index and the library list it.
+
+    `summary` is the file's opening markdown heading, read off disk
+    (`knowledge.store._first_line`) rather than written by anyone: an index of
+    bare paths would leave an agent guessing whether a file is worth a call, and
+    asking a human to restate a heading they already wrote is how an index goes
+    stale.
+    """
+
+    path: str
+    bytes: int = 0
+    summary: str = ""
+
+
+class KnowledgeBaseSummary(Base):
+    """A knowledge base's manifest, as metadata.
+
+    *Discovered* rather than owned, like `Codebase` and `SkillSummary`: the
+    directory is the record, git is the history, and this server only reads it.
+    The directory name is the id — see `knowledge/store.py` for why that is
+    stricter than a path segment needs to be.
+    """
+
+    id: str
+    title: str
+    scope: str
+    format: str = "markdown"
+    #: The manifest's prose: what the base is, what belongs in it, what does
+    #: not. Shown to the user in the library **and** given to the agent in its
+    #: index block, so it is written once for both readers.
+    about: str = ""
+    files: int = 0
+    bytes: int = 0
+    #: Derived from `scope`, never stored. Carried on the wire so the canvas can
+    #: refuse a write handle without knowing the scope rules, and recomputed
+    #: server-side on every spawn so a stale browser cannot grant anything.
+    writable: bool = True
+    updated_at: datetime
+
+
+class KnowledgeBase(KnowledgeBaseSummary):
+    """A base with its contents listed. What a picker opens, and what the index
+    block is rendered from."""
+
+    entries: list[KnowledgeEntry] = Field(default_factory=list)
 
 
 class CodebaseGit(Base):
@@ -323,6 +448,25 @@ def node_remote(node_or_definition: "Node | NodeDefinition") -> str:
     return str(raw).strip() if raw and str(raw).strip() else DEFAULT_REMOTE
 
 
+def node_base(node_or_definition: "Node | NodeDefinition") -> str:
+    """Which knowledge base a `knowledge` node selects. Empty unless it says.
+
+    **The node's one piece of configuration**, and the difference from a memory
+    node, which has none. A memory's label *is* its identity — it is the
+    filename, and a second hidden name would only be a way for the canvas and
+    the disk to disagree. A knowledge node is a *reference* to something that
+    already exists and already has a name, so the label is free text for the
+    canvas and the base id is the fact.
+    """
+    definition = (
+        node_or_definition.definition
+        if isinstance(node_or_definition, Node)
+        else node_or_definition
+    )
+    raw = definition.config.get("base")
+    return str(raw).strip() if raw else ""
+
+
 def node_prompt(node_or_definition: "Node | NodeDefinition") -> str:
     """The question a `human` node puts to the operator. Empty unless it says."""
     definition = (
@@ -416,20 +560,26 @@ class Edge(Base):
 
 #: Node types that are attached to the line rather than standing on it.
 #:
-#: **The distinction the whole memory design rests on.** A belt is control flow:
-#: it decides what runs next, and a node on the end of one can gate the run or
-#: stop it. A wire is not — it says where data is filed and where it is read,
-#: and a memory on the end of one is storage the line reaches past. Storage is
-#: never the reason something runs, and never the reason something stops.
+#: **The distinction the whole storage design rests on.** A belt is control
+#: flow: it decides what runs next, and a node on the end of one can gate the
+#: run or stop it. A wire is not — it says where data is filed and where it is
+#: read, and a memory or a knowledge base on the end of one is storage the line
+#: reaches past. Storage is never the reason something runs, and never the
+#: reason something stops.
 #:
 #: Kept as a set of *types* rather than a flag on the edge because it must be
 #: impossible to disagree with: an edge is a wire because of what it touches,
 #: which every reader can see, and not because of a field somebody set.
-ATTACHED_TYPES: frozenset[str] = frozenset({"memory"})
+#:
+#: `knowledge` joins `memory` here without any of the rules below changing,
+#: which is the check on both designs: a base is a different *lifetime* from a
+#: memory and the same *shape* on the canvas. Delete every attached node from a
+#: factory and the run still runs, in the same order, to the same end.
+ATTACHED_TYPES: frozenset[str] = frozenset({"memory", "knowledge"})
 
 
 def is_wire(edge: "Edge", by_id: dict[str, "Node"]) -> bool:
-    """Whether this edge attaches a memory rather than carrying the line.
+    """Whether this edge attaches storage rather than carrying the line.
 
     An edge with an end this factory does not contain is **not** a wire: a
     dangling edge is a broken belt, and calling it a wire would hide it from

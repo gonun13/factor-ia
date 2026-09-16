@@ -48,6 +48,14 @@ wants a *policy*, not a prompt with no human behind it, so:
   active"*). The refusal is here as well as in `runcheck`, so no code path can
   spawn around it, and the run carries `dangerous: true` for the canvas.
 
+- **MCP servers are named by the orchestrator and never by a node.** The one
+  server is `knowledge` (`knowledge/mcp.py`), spawned per node with a grant
+  document naming only the bases that node's wires reach. Its read tools are
+  named on `--allowedTools` because an MCP call is not a file edit and
+  `acceptEdits` does not cover it; its write tools are named on
+  `--disallowedTools` for any node without a write wire. The server refuses the
+  same writes independently, and **the server is authoritative**.
+
 **What the spawn deliberately omits:**
 
 - `--permission-prompt-tool stdio` — there is still nobody to ask; the policy
@@ -171,7 +179,24 @@ def build_argv(session_id: str, run_config: RunConfig) -> list[str]:
     # and a node that could edit it would be the hole it closes.
     if mode != "default":
         argv += ["--permission-mode", mode]
-    argv += ["--disallowedTools", ",".join(DENIED_TOOLS)]
+    # **The deny list is the server's, plus whatever this node is refused.** The
+    # additions are the knowledge write tools on a node with no write wire
+    # (`knowledge/mcp.denied_tool_names`), and they are *appended* rather than
+    # replacing: a caller that could shrink `DENIED_TOOLS` would be the hole that
+    # list exists to close.
+    denied = list(DENIED_TOOLS) + [
+        name for name in run_config.disallowed_tools if name not in DENIED_TOOLS
+    ]
+    argv += ["--disallowedTools", ",".join(denied)]
+    # **MCP servers, and the tools they bring, decided server-side.** An MCP
+    # tool is not a file edit, so `acceptEdits` does not pre-approve it and an
+    # unnamed one fails as a permission prompt nobody is there to answer — see
+    # the module docstring. The config is a JSON document rather than a path
+    # because this function is pure and a test asserts the flags.
+    if run_config.mcp_servers:
+        argv += ["--mcp-config", json.dumps({"mcpServers": run_config.mcp_servers})]
+    if run_config.allowed_tools:
+        argv += ["--allowedTools", ",".join(run_config.allowed_tools)]
     # The run memories this node was wired to read (`memory.py`), each granted
     # as a directory the agent may reach outside its worktree. Grouped with the
     # deny list because it is the same kind of flag — what this node may touch,

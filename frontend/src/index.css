@@ -17,6 +17,19 @@
   --input: #f4b942;
   --agent: #5aa9ff;
   --memory: #c79bff;
+  /* **Not green.** The first attempt was a mint that sat 22 degrees off
+     --output and read as a second kind of "done"; a storage node must not
+     borrow the colour that means the run produced something.
+
+     Magenta is the widest unused gap left in the palette — 94 degrees clear of
+     agent blue, 154 of output. What it is *not* clear of is --memory, 36
+     degrees below it, which is the one pairing that has to stay legible: both
+     are storage, both sit in the same palette group, and both shrink to a few
+     pixels on the minimap. So the separation there is carried by chroma rather
+     than hue — memory is a pale lavender, this is saturated — and, on the
+     canvas proper, by two glyphs that share nothing: a spool for the thing
+     wound up and read back, a shelf for the thing you go to. */
+  --knowledge: #e07ad8;
   /* A rose that belongs to no machine: a sign-off is the one node the line
      cannot execute by itself. Kept clear of --danger's salmon, which means a
      problem rather than a pause. Mirrored by NODE_COLOUR in FactoryCanvas, the
@@ -397,6 +410,72 @@ button:focus-visible {
   margin-bottom: 1rem;
 }
 
+/* Deliberately not `.error`, and deliberately not silent. The canvas changed
+   something the operator did not ask for — a write wire onto a base that turned
+   out to be read-only — and this is it saying so. Nothing went wrong, so it is
+   in the knowledge colour rather than the danger one. */
+.notice {
+  display: flex;
+  align-items: baseline;
+  gap: 0.75rem;
+  color: var(--knowledge);
+  border: 1px solid color-mix(in srgb, var(--knowledge) 35%, transparent);
+  background: color-mix(in srgb, var(--knowledge) 9%, var(--bg));
+  border-radius: 8px;
+  padding: 0.6rem 0.8rem;
+  margin-bottom: 1rem;
+}
+
+.notice .link-button {
+  margin-left: auto;
+  flex: 0 0 auto;
+}
+
+/* A labelled control in the knowledge library's form.
+
+   Deliberately not `.slot`, which is the node chassis's dashed, codebase-tinted
+   box: that reads as "a plate on a machine", and this is a form on a page. Same
+   idea — a name above a control — with none of the node vocabulary. */
+.field {
+  display: grid;
+  gap: 0.3rem;
+  text-align: left;
+  margin-bottom: 0.4rem;
+}
+
+.field-name {
+  font-size: 0.62rem;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+
+.knowledge-section .hint {
+  margin: 0 0 0.9rem;
+  font-size: 0.78rem;
+  line-height: 1.45;
+  color: var(--ink-faint);
+}
+
+/* The scope on a base's card in the library. A tag rather than prose: it is the
+   one property of a base that changes what wiring to it means, and it is the
+   thing somebody scans the list for. `principles` is the only one that is
+   coloured, because it is the only one that carries a *restriction* — every
+   other scope behaves the same way and a palette of four would be decoration. */
+.scope-tag {
+  font-variant: small-caps;
+  letter-spacing: 0.04em;
+}
+
+.scope-tag.scope-principles {
+  color: var(--knowledge);
+}
+
+.knowledge-card .name {
+  color: var(--knowledge);
+}
+
 .footnote {
   margin-top: 2.5rem;
   padding-top: 1rem;
@@ -659,6 +738,10 @@ button:focus-visible {
 /* Off the agent/output axis on purpose: a memory is neither a machine that does
    work nor a thing the run produces, and colouring it like either would say it
    is. Matches `NODE_COLOUR.memory` in FactoryCanvas, which the minimap reads. */
+.type-knowledge {
+  color: var(--knowledge);
+}
+
 .type-memory {
   color: var(--memory);
 }

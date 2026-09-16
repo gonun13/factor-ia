@@ -300,31 +300,39 @@ def _max_laps_raw(node_or_definition: Any) -> Any:
 
 
 def compose_system_prompt(
-    skill_body: str | None, *, reviewer: bool, memory: str | None = None
+    skill_body: str | None,
+    *,
+    reviewer: bool,
+    memory: str | None = None,
+    knowledge: str | None = None,
 ) -> str | None:
     """The standing instructions one agent node runs under, composed once.
 
-    The **only** place a skill's body, the memory contract and the verdict
-    contract are joined, and deliberately on this side of the adapter seam:
-    `RunConfig` takes a composed string and no adapter ever learns what a
-    reviewer is (`agent/adapter.py`).
+    The **only** place a skill's body, the memory contract, the knowledge index
+    and the verdict contract are joined, and deliberately on this side of the
+    adapter seam: `RunConfig` takes a composed string and no adapter ever learns
+    what a reviewer is (`agent/adapter.py`).
 
-    Order is **skill, then memory, then verdict**, and each step of that ladder
-    is the same argument: the thing the agent was told most recently is the
-    thing it may not negotiate. A skill cannot be read as overriding how this
-    node's output will be stored, and neither the skill nor the memory contract
-    can be read as excusing the verdict fence — which matters, because the
-    memory contract says "no sign-off" and a reviewer's verdict is the one thing
-    that looks like one and is not.
+    Order is **skill, then memory, then knowledge, then verdict**, and each step
+    of that ladder is the same argument: the thing the agent was told most
+    recently is the thing it may not negotiate. A skill cannot be read as
+    overriding how this node's output will be stored; neither of those can be
+    read as overriding what the knowledge section says outranks what — which is
+    the point of putting a `principles` base *above this project's own docs*,
+    and would be worth nothing if a skill could wave it away. And none of the
+    three excuses the verdict fence, which matters because the memory contract
+    says "no sign-off" and a reviewer's verdict is the one thing that looks like
+    one and is not.
 
-    `memory` arrives already rendered (`memory.WRITER_CONTRACT`) so this module
-    learns nothing about where memories live, exactly as it learns nothing about
-    where skills live. `None` when there is nothing to say, which is what keeps
-    a worker with no skill spawning exactly as it did before this existed.
+    `memory` and `knowledge` both arrive already rendered
+    (`memory.WRITER_CONTRACT`, `knowledge.index.compose`) so this module learns
+    nothing about where either lives, exactly as it learns nothing about where
+    skills live. `None` when there is nothing to say, which is what keeps a
+    worker with no skill spawning exactly as it did before this existed.
     """
     parts = [
         part.strip()
-        for part in (skill_body, memory, CONTRACT if reviewer else None)
+        for part in (skill_body, memory, knowledge, CONTRACT if reviewer else None)
         if part
     ]
     if not parts:

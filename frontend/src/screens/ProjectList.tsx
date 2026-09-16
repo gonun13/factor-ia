@@ -10,11 +10,27 @@
  * them: not a project's contents, and not a sibling of one either. A skill
  * belongs to nothing — any agent in any factory in any project can wear one —
  * so the only screen that can honestly hold it is the one above them all.
+ *
+ * The knowledge library sits beside it for exactly the same reason, and the
+ * two are deliberately not merged: a skill tells an agent *how to behave* and
+ * is unconditional once attached; a base holds *what is durably true* and is a
+ * source consulted through tools. One screen, two sections, because they are
+ * managed by the same person at the same moment and are otherwise nothing
+ * alike.
  */
 
 import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
-import type { Codebase, Health, Project, SkillSummary } from "../types";
+import {
+  KNOWLEDGE_SCOPES,
+  KNOWLEDGE_SCOPE_NOTE,
+  type Codebase,
+  type Health,
+  type KnowledgeBaseSummary,
+  type KnowledgeScope,
+  type Project,
+  type SkillSummary,
+} from "../types";
 
 export function ProjectList({ onOpen }: { onOpen: (projectId: string) => void }) {
   const [projects, setProjects] = useState<Project[] | null>(null);
@@ -226,6 +242,7 @@ export function ProjectList({ onOpen }: { onOpen: (projectId: string) => void })
           )}
 
           <SkillLibrary />
+          <KnowledgeLibrary />
 
           <div className="footnote">
             <span>
@@ -537,6 +554,265 @@ function SkillLibrary() {
                   aria-label={`Delete ${skill.name}`}
                   title="Delete skill"
                   onClick={() => setConfirming(skill.name)}
+                >
+                  ×
+                </button>
+              </div>
+            ),
+          )}
+        </div>
+      )}
+    </section>
+  );
+}
+
+/**
+ * The workspace's knowledge bases: what is in `_knowledge/`, and the way to
+ * start one.
+ *
+ * **Creating and deleting, and nothing between.** There is no edit form here
+ * and there will not be one: the files are the record, git is the history, and
+ * a server that offered an edit endpoint over a document git already owns would
+ * be a second authority — the two would disagree the first time somebody
+ * pulled. So a base is created here, filled in the workspace or by the machines
+ * wired to it, and deleted here.
+ *
+ * **And no replace.** A skill import can overwrite; this cannot. Replacing a
+ * base would silently re-scope a store other projects are reading, and a
+ * `principles` base that became `general` under a factory which had been
+ * refused a write handle is the one change nothing downstream could detect.
+ */
+function KnowledgeLibrary() {
+  const [bases, setBases] = useState<KnowledgeBaseSummary[] | null>(null);
+  const [creating, setCreating] = useState(false);
+  const [id, setId] = useState("");
+  const [title, setTitle] = useState("");
+  const [scope, setScope] = useState<KnowledgeScope>("general");
+  const [about, setAbout] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [problem, setProblem] = useState<string | null>(null);
+  const [confirming, setConfirming] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState<string | null>(null);
+  const idInput = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    let live = true;
+    api
+      .knowledge()
+      .then((loaded) => live && setBases(loaded))
+      // An unreadable `_knowledge/` is an empty library, not a broken page —
+      // the same bargain the skills list strikes one section up.
+      .catch(() => live && setBases([]));
+    return () => {
+      live = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (creating) idInput.current?.focus();
+  }, [creating]);
+
+  function reset() {
+    setCreating(false);
+    setId("");
+    setTitle("");
+    setScope("general");
+    setAbout("");
+    setProblem(null);
+  }
+
+  async function create() {
+    setBusy(true);
+    setProblem(null);
+    try {
+      const made = await api.createKnowledgeBase({
+        id: id.trim(),
+        title: title.trim() || id.trim(),
+        scope,
+        about,
+      });
+      setBases((current) =>
+        [...(current ?? []).filter((one) => one.id !== made.id), made].sort((a, b) =>
+          a.id.localeCompare(b.id),
+        ),
+      );
+      reset();
+    } catch (cause) {
+      setProblem(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function remove(baseId: string) {
+    setDeleting(baseId);
+    setProblem(null);
+    try {
+      await api.deleteKnowledgeBase(baseId);
+      setBases((current) => (current ?? []).filter((one) => one.id !== baseId));
+      setConfirming(null);
+    } catch (cause) {
+      setProblem(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setDeleting(null);
+    }
+  }
+
+  return (
+    <section className="skills-section knowledge-section">
+      <h2>Knowledge</h2>
+      <p className="lede">
+        Permanent, curated stores the machines can consult — and, where you wire
+        it, add to. Unlike a run's memory, nothing here is ever cleaned up: a
+        base is filled before a run exists and outlives it, and every project
+        wired to it reads the same one. They live in <code>_knowledge/</code> in
+        your workspace and are committed with the team.
+      </p>
+
+      {problem && <div className="error">{problem}</div>}
+
+      {creating ? (
+        <div className="skill-import panel">
+          <label className="field">
+            <span className="field-name">id</span>
+            <input
+              ref={idInput}
+              value={id}
+              spellCheck={false}
+              placeholder="acme-api-timeline"
+              aria-label="Base id"
+              onChange={(event) => setId(event.target.value)}
+            />
+          </label>
+          <p className="hint">
+            The directory name, and the name every node selects it by. Lowercase
+            letters, digits and hyphens — the workspace is cloned onto
+            case-insensitive filesystems, where two ids differing only in case
+            are one directory on one machine and two on another.
+          </p>
+
+          <label className="field">
+            <span className="field-name">title</span>
+            <input
+              value={title}
+              placeholder="Acme API timeline"
+              aria-label="Base title"
+              onChange={(event) => setTitle(event.target.value)}
+            />
+          </label>
+
+          <label className="field">
+            <span className="field-name">scope</span>
+            <select
+              value={scope}
+              aria-label="Base scope"
+              onChange={(event) => setScope(event.target.value as KnowledgeScope)}
+            >
+              {KNOWLEDGE_SCOPES.map((one) => (
+                <option key={one} value={one}>
+                  {one}
+                </option>
+              ))}
+            </select>
+          </label>
+          <p className="hint">
+            {KNOWLEDGE_SCOPE_NOTE[scope]}.{" "}
+            {scope === "principles"
+              ? "Read-only to every machine, permanently: principles are what the agents are measured against, and one that could edit the standard it is judged by could pass its own review."
+              : "Machines may write to it where you draw a write wire, and only there."}
+          </p>
+
+          <label className="field">
+            <span className="field-name">what it holds</span>
+            <textarea
+              value={about}
+              rows={4}
+              aria-label="What this base holds"
+              placeholder="What belongs in this base, what does not, and — if machines may write — what a good entry looks like."
+              onChange={(event) => setAbout(event.target.value)}
+            />
+          </label>
+          <p className="hint">
+            Shown here <em>and</em> given to every machine wired to this base, so
+            it is written once for both readers.
+          </p>
+
+          <div className="row">
+            <button
+              type="button"
+              className="primary"
+              disabled={busy || !id.trim() || !about.trim()}
+              onClick={() => void create()}
+            >
+              {busy ? "Creating…" : "Create base"}
+            </button>
+            <button type="button" className="link-button" onClick={reset} disabled={busy}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      ) : (
+        <button type="button" className="primary" onClick={() => setCreating(true)}>
+          New knowledge base
+        </button>
+      )}
+
+      {bases === null ? (
+        <p className="muted">Reading the workspace…</p>
+      ) : bases.length === 0 ? (
+        <p className="muted">
+          None yet. A base is a directory under <code>_knowledge/</code> with a{" "}
+          <code>manifest.md</code> in it — create one here, or drop one in and
+          commit it.
+        </p>
+      ) : (
+        <div className="skill-grid">
+          {bases.map((base) =>
+            confirming === base.id ? (
+              <div key={base.id} className="skill-card is-confirming" role="alertdialog">
+                <span className="name">Delete {base.id}?</span>
+                <span className="desc">
+                  Removes <code>_knowledge/{base.id}/</code> and everything in it
+                  — {base.files} file{base.files === 1 ? "" : "s"}. Any node still
+                  selecting it will refuse to run, by name. It is in the
+                  workspace repo, so git is the undo.
+                </span>
+                <span className="row">
+                  <button
+                    type="button"
+                    className="danger"
+                    onClick={() => void remove(base.id)}
+                    disabled={deleting !== null}
+                  >
+                    {deleting === base.id ? "Deleting…" : "Delete"}
+                  </button>
+                  <button
+                    type="button"
+                    className="link-button"
+                    onClick={() => setConfirming(null)}
+                    disabled={deleting !== null}
+                  >
+                    Cancel
+                  </button>
+                </span>
+              </div>
+            ) : (
+              <div key={base.id} className="skill-card knowledge-card">
+                <span className="name">{base.title}</span>
+                <span className="desc">{base.about}</span>
+                <span className="meta">
+                  <span className={`scope-tag scope-${base.scope}`}>{base.scope}</span>
+                  {" · "}
+                  {base.files} file{base.files === 1 ? "" : "s"} ·{" "}
+                  {Math.max(1, Math.round(base.bytes / 1024))} kB
+                  {!base.writable && " · read-only to machines"}
+                </span>
+                <button
+                  type="button"
+                  className="card-delete"
+                  aria-label={`Delete ${base.id}`}
+                  title="Delete knowledge base"
+                  onClick={() => setConfirming(base.id)}
                 >
                   ×
                 </button>

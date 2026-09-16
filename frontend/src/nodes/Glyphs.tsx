@@ -81,6 +81,25 @@ export function MemoryGlyph() {
   );
 }
 
+/**
+ * Knowledge: a shelf of bound volumes.
+ *
+ * Deliberately not the memory spool. A spool is wound up and read back later,
+ * which is exactly what a memory is and exactly what a base is not: a base was
+ * filled before this run existed, outlives it, and is shared by every project.
+ * Two node types that are both "storage" have to be told apart from across the
+ * canvas, and a shelf is the thing you go *to* rather than the thing you wound.
+ */
+export function KnowledgeGlyph() {
+  return (
+    <svg viewBox="0 0 16 16" aria-hidden>
+      <path d="M2.4 2.6h2.6v10.8H2.4zM6.2 2.6h2.4v10.8H6.2z" {...stroke} />
+      <path d="m10.4 3.3 2.5.6-2.3 9.6-2.5-.6z" {...stroke} />
+      <path d="M2.4 14.6h11.2" {...stroke} />
+    </svg>
+  );
+}
+
 /** PRD: a document with a title rule and lines of requirement. */
 export function PrdGlyph() {
   return (

@@ -119,6 +119,17 @@ def branch_name(factory_id: str, run_id: str) -> str:
 #: `paths.safe_name` also permits to start with one but discovery never does.
 MEMORY_DIRNAME = "_memory"
 
+#: Where a run parks what it hands its knowledge MCP servers: one grant document
+#: per agent spawn, and the journal those servers append a line to per write
+#: (`knowledge/mcp.py`).
+#:
+#: **The bases themselves are nowhere near here.** They live in
+#: `/workspace/_knowledge/`, are filled before the run exists and outlive it —
+#: nothing under `_runs/` is ever a base. What this directory holds is the
+#: *grant*: the per-spawn statement of which bases a machine may address, which
+#: is run-scoped in exactly the way a base is not, and so goes with the run.
+KNOWLEDGE_DIRNAME = "_knowledge"
+
 
 def run_dir(run_id: str, root: Path | None = None) -> Path:
     """`<workspace>/_runs/<run-id>/` — everything one run owns, under one path.
@@ -150,6 +161,17 @@ def memory_dir(run_id: str, root: Path | None = None) -> Path:
     Never inside a worktree. See `MEMORY_DIRNAME`.
     """
     return run_dir(run_id, root) / MEMORY_DIRNAME
+
+
+def knowledge_dir(run_id: str, root: Path | None = None) -> Path:
+    """`<workspace>/_runs/<run-id>/_knowledge/` — grants and the write journal.
+
+    Never inside a worktree and **never granted with `--add-dir`**: an agent
+    that could read its own grant document could read which bases it was
+    refused, and one that could write it would be writing its own permissions.
+    The MCP server reads it; the agent never sees it.
+    """
+    return run_dir(run_id, root) / KNOWLEDGE_DIRNAME
 
 
 #: Branch names we will never cut a new run from. A codebase left checked out
@@ -333,6 +355,21 @@ class RunWorkspaces:
         path.mkdir(parents=True, exist_ok=True)
         return path
 
+    def ensure_knowledge_dir(self) -> Path:
+        """`_knowledge/`, created if it is not there. Idempotent.
+
+        One directory for the whole run, where memory gets one per slug — and
+        the difference is what `--add-dir` grants. A memory's directory is
+        handed to an agent, so a shared one would let any node read every memory
+        in the run regardless of what the operator wired. Nothing here is ever
+        handed to an agent: the grant documents are read by the MCP server the
+        *orchestrator* configured, so there is nothing for a per-node directory
+        to protect.
+        """
+        path = knowledge_dir(self.run_id, self.root)
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
     def ensure(self, codebase: Codebase) -> RunWorktree:
         """The worktree for this codebase in this run, creating it if needed.
 
@@ -486,6 +523,15 @@ class RunWorkspaces:
                 shutil.rmtree(memory_dir(self.run_id, self.root), ignore_errors=True)
             except Exception:  # noqa: BLE001 — see docstring
                 pass
+            # The run's grants and its knowledge write journal, by the same
+            # policy. **What the bases themselves hold is untouched**, which is
+            # the whole difference between the two systems: a memory empties
+            # with the run and nothing in a base is ever cleaned up. Only the
+            # statement of what this run was allowed to reach goes.
+            try:
+                shutil.rmtree(knowledge_dir(self.run_id, self.root), ignore_errors=True)
+            except Exception:  # noqa: BLE001 — see docstring
+                pass
             # The per-run directory is ours and should now be empty; the `_runs`
             # root stays so its purpose is discoverable from the host.
             #
@@ -495,7 +541,8 @@ class RunWorkspaces:
             # leftovers — it fails silently by design — so every directory this
             # run creates has to be accounted for above. `_memory/` was not, and
             # for as long as it was not, one memory node kept every run
-            # directory on the machine alive forever.
+            # directory on the machine alive forever. `_knowledge/` is the
+            # second entry in that list and was added with it in mind.
             try:
                 path = run_dir(self.run_id, self.root)
                 if path.is_dir() and not any(path.iterdir()):

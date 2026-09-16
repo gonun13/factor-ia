@@ -30,9 +30,11 @@ import {
   DEFAULT_INPUT_KIND,
   DEFAULT_MAX_LAPS,
   DEFAULT_OUTPUT_KIND,
+  KNOWLEDGE_READ_ONLY_SCOPES,
   MAX_LAPS_LIMIT,
   type Factory,
   type GraphEdge,
+  type KnowledgeBaseSummary,
   type GraphNode,
   type NodeDefinition,
   type NodeRuntime,
@@ -59,7 +61,7 @@ export const BELT_EDGE = "belt";
 export const WIRE_EDGE = "wire";
 
 /** Node types attached to the line rather than standing on it. `models.ATTACHED_TYPES`. */
-export const ATTACHED_TYPES = new Set<string>(["memory"]);
+export const ATTACHED_TYPES = new Set<string>(["memory", "knowledge"]);
 
 export function isWire(
   edge: { source: string; target: string },
@@ -106,14 +108,32 @@ export function toFlowEdge(edge: GraphEdge, sources?: Map<string, NodeDefinition
   // A wire first, because none of a belt's normalisation applies to it: it has
   // no outcome port to be orphaned from, and nothing travels it.
   if (sources && isWire(edge, sources)) {
+    // **The base's handle is kept; the machine's is dropped.**
+    //
+    // A *read* wire leaves the base, so its `sourceHandle` is the base's own
+    // `read` and naming it is what stops React Flow dropping the wire. A
+    // *write* wire leaves the **machine**, whose source handle is an outcome
+    // port or nothing at all — and a wire carries no outcome, so that end is
+    // normalised to `null` exactly as a memory's always has been. The
+    // `targetHandle` is passed through either way, which is where a write
+    // wire's `write` lives.
+    const from = sources.get(edge.source);
+    const fromBase = from?.type === "knowledge";
+    const to = sources.get(edge.target);
     return {
       id: edge.id,
       source: edge.source,
       target: edge.target,
-      sourceHandle: null,
+      sourceHandle: fromBase ? "read" : null,
       targetHandle: edge.target_handle,
       type: WIRE_EDGE,
-      data: { kind: edge.payload.kind, outcome: DEFAULT_EDGE_OUTCOME },
+      data: {
+        kind: edge.payload.kind,
+        outcome: DEFAULT_EDGE_OUTCOME,
+        // Which *kind* of storage this reaches, for the wire's colour. A
+        // difference in lifetime, not in behaviour — see `WireEdge`.
+        knowledge: fromBase || to?.type === "knowledge",
+      },
     };
   }
   const definition = sources?.get(edge.source);
@@ -227,6 +247,64 @@ function slugify(name: string): string {
 }
 
 /**
+ * Which knowledge base a node selects — `models.node_base`.
+ *
+ * **The node's one piece of configuration**, and the difference from a memory
+ * node, which has none. A memory's label *is* its identity: it is the filename,
+ * and a second hidden name would only be a way for the canvas and the disk to
+ * disagree. A knowledge node is a *reference* to something that already exists
+ * and already has a name, so the label is free text for the canvas and the base
+ * id is the fact.
+ */
+export function knowledgeBase(definition: NodeDefinition): string {
+  const raw = definition.config?.base;
+  return typeof raw === "string" ? raw.trim() : "";
+}
+
+/**
+ * Whether a base of this scope may be written by any machine, ever.
+ *
+ * Mirrors `knowledge.store.is_writable`, and the mirror is load-bearing rather
+ * than convenient: it is what lets the canvas refuse a write handle onto a
+ * `principles` base *as you draw it*, instead of letting someone draw a wire
+ * that the run check then refuses and the spawn then refuses again. The server
+ * is still the authority — this is a courtesy, like every other rule in
+ * `validation.ts`.
+ */
+export function knowledgeWritable(scope: string | undefined): boolean {
+  return !KNOWLEDGE_READ_ONLY_SCOPES.has(scope ?? "");
+}
+
+/**
+ * Whether a knowledge node renders its `write` handle — its **target** handle,
+ * the one a contributing machine's wire arrives at.
+ *
+ * **The trap this exists for is React Flow's**, and it is the same one
+ * `toFlowEdge` documents: an edge naming a handle its node does not render is
+ * *silently dropped* — not a warning, not a broken line, simply not there,
+ * while the server goes on treating it as live. So switching a node's base to
+ * one with `principles` scope must **normalise the write wires away**, visibly
+ * and with a notice, rather than leaving wires pointing at a handle that has
+ * gone. An invisible wire is worse than a refused one. `FactoryCanvas` is where
+ * that normalisation happens; this is the predicate both it and `NodeShell`
+ * read.
+ */
+export function hasWriteHandle(
+  definition: NodeDefinition,
+  bases: Map<string, KnowledgeBaseSummary>,
+): boolean {
+  if (definition.type !== "knowledge") return false;
+  const selected = knowledgeBase(definition);
+  // A node with no base chosen yet keeps the handle. It is what drawing looks
+  // like, and taking a drop target away over a choice nobody has made would
+  // make the ordinary order of work — drop the node, wire it, then pick the
+  // base — impossible.
+  if (!selected) return true;
+  const base = bases.get(selected);
+  return base === undefined || knowledgeWritable(base.scope);
+}
+
+/**
  * Whether this node splits its outcome across `success` and `fail` ports.
  *
  * **A question about the node, not its type**, which is why it is a function
@@ -258,6 +336,7 @@ export const DEFAULT_LABELS: Record<string, string> = {
   reviewer: "Reviewer",
   approval: "Sign-off",
   memory: "Memory",
+  knowledge: "Knowledge",
   commit: "Commit",
   "commit-push": "Commit & push",
   "commit-merge": "Commit & merge",
