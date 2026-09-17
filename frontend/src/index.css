@@ -898,6 +898,14 @@ button:focus-visible {
   border-color: #a94141;
 }
 
+/* Amber, sitting between the green that starts fresh work and the red that
+   stops it: resuming is neither, and a second green button in the same corner
+   would be read as "Run" by a thumb that is not reading. */
+.runbox button.run.resume {
+  background: linear-gradient(180deg, #9a6a1f, #744e14);
+  border-color: #c08a2e;
+}
+
 .runbox .problems-note {
   font-size: 0.78rem;
   color: var(--danger);

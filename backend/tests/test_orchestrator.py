@@ -461,3 +461,188 @@ def test_a_project_default_provider_reaches_the_run_record(
     _set_settings(test_store, default_provider="fake")
     run = asyncio.run(orch.start("demo", "main"))
     assert run.adapter == "fake"
+
+
+# ---- a spent allowance, and picking the run back up ------------------------
+
+
+def _blocked_run(orch: Orchestrator, factory: Factory, test_store: Store):
+    """A run that walked as far as the wall and stopped there."""
+    factory.nodes[1].definition.config = {"fake_script": "usage-limit", "fake_cost": 0.25}
+    test_store.save_factory(factory)
+
+    async def go():
+        run = await orch.start("demo", "main")
+        await orch.submit_input(run.id, "tidy the readme")
+        await asyncio.wait_for(orch._active[run.id].task, 10)
+        return orch.get(run.id)
+
+    return asyncio.run(go())
+
+
+def test_a_usage_limit_blocks_the_run_rather_than_crashing_it(
+    orch: Orchestrator, factory: Factory, test_store: Store
+) -> None:
+    run = _blocked_run(orch, factory, test_store)
+    assert run.status == "failed"
+    assert run.node_run("n-agent").status == "failed"
+    # The node it stopped at, and the provider's own sentence — both, because a
+    # resume needs the first and an operator needs the second.
+    assert run.blocked_node_id == "n-agent"
+    assert "session limit" in run.blocked_reason
+    assert "11:40pm" in run.blocked_reason
+    assert "stopped" in (run.detail or "")
+    # The work it did not reach is pending, not failed.
+    assert run.node_run("n-out").status == "pending"
+    # Kept, like every failure's — and the resume depends on it.
+    assert run.worktrees and run.worktrees[0].kept is True
+
+
+def test_resume_finishes_the_run_without_re_running_what_already_ran(
+    orch: Orchestrator, factory: Factory, test_store: Store
+) -> None:
+    blocked = _blocked_run(orch, factory, test_store)
+    spent = blocked.total_cost_usd
+    assert spent > 0
+
+    # The allowance is back: the same node, now able to finish. Edited on the
+    # factory file rather than in memory, which is also what proves the resume
+    # re-reads it.
+    factory.nodes[1].definition.config = {"fake_script": "success", "fake_cost": 0.1}
+    test_store.save_factory(factory)
+
+    async def go():
+        run = await orch.resume(blocked.id)
+        await asyncio.wait_for(orch._active[run.id].task, 10)
+        return orch.get(run.id)
+
+    run = asyncio.run(go())
+    assert run.status == "succeeded"
+    assert run.node_run("n-agent").status == "succeeded"
+    assert run.node_run("n-out").status == "succeeded"
+    # The block is spent, and the record says it was picked up again.
+    assert run.blocked_node_id is None
+    assert run.blocked_reason == ""
+    assert run.resumed_count == 1
+    # What the first walk spent is still counted. A resume that forgot it would
+    # be a run record that lies about what it cost.
+    assert run.total_cost_usd > spent
+    # One log, not two: the whole story in the order it happened.
+    kinds = [event["type"] for event in events_of(run.id)]
+    assert kinds.count("run.status") >= 3
+
+
+def test_resume_replays_a_finished_node_instead_of_paying_for_it_again(
+    orch: Orchestrator, factory: Factory, test_store: Store, workspace: Path
+) -> None:
+    """Two agents in a line, the second one blocked. The first must not run
+    twice — that is the entire economic argument for the feature."""
+    loaded = test_store.get_factory("demo", "main")  # the `factory` fixture made the repo
+    loaded.nodes = [
+        Node(id="n-in", definition=NodeDefinition(type="input", label="Request")),
+        Node(
+            id="n-first",
+            definition=NodeDefinition(
+                type="agent",
+                label="First",
+                codebase_id="project-a",
+                config={"fake_script": "echo", "fake_cost": 0.5},
+            ),
+        ),
+        Node(
+            id="n-second",
+            definition=NodeDefinition(
+                type="agent",
+                label="Second",
+                codebase_id="project-a",
+                config={"fake_script": "usage-limit", "fake_cost": 0.25},
+            ),
+        ),
+        Node(id="n-out", definition=NodeDefinition(type="output", label="Commit")),
+    ]
+    loaded.edges = [
+        Edge(id="e1", source="n-in", target="n-first"),
+        Edge(id="e2", source="n-first", target="n-second"),
+        Edge(id="e3", source="n-second", target="n-out"),
+    ]
+    factory = test_store.save_factory(loaded)
+
+    async def first():
+        run = await orch.start("demo", "main")
+        await orch.submit_input(run.id, "tidy the readme")
+        await asyncio.wait_for(orch._active[run.id].task, 10)
+        return orch.get(run.id)
+
+    blocked = asyncio.run(first())
+    assert blocked.blocked_node_id == "n-second"
+    first_cost = blocked.node_run("n-first").cost_usd
+    first_session = blocked.node_run("n-first").session_id
+    first_text = blocked.node_run("n-first").output_text
+    assert first_cost > 0
+
+    factory.nodes[2].definition.config = {"fake_script": "success", "fake_cost": 0.1}
+    test_store.save_factory(factory)
+
+    async def second():
+        run = await orch.resume(blocked.id)
+        await asyncio.wait_for(orch._active[run.id].task, 10)
+        return orch.get(run.id)
+
+    run = asyncio.run(second())
+    assert run.status == "succeeded"
+    # Untouched: same money, same session, same words. It did not run.
+    replayed = run.node_run("n-first")
+    assert replayed.cost_usd == first_cost
+    assert replayed.session_id == first_session
+    assert replayed.output_text == first_text
+    assert replayed.lap == 1
+
+
+def test_only_a_blocked_run_may_be_resumed(
+    orch: Orchestrator, factory: Factory, test_store: Store
+) -> None:
+    """A crash is still not resumable — you cannot retry your way out of a CLI
+    that dies, which is the rule `_run_agent` has always stated."""
+    factory.nodes[1].definition.config = {"fake_script": "failure"}
+    test_store.save_factory(factory)
+
+    async def go():
+        run = await orch.start("demo", "main")
+        await orch.submit_input(run.id, "break it")
+        await asyncio.wait_for(orch._active[run.id].task, 10)
+        crashed = orch.get(run.id)
+        assert crashed.status == "failed"
+        assert crashed.blocked_node_id is None
+        with pytest.raises(RunConflict):
+            await orch.resume(crashed.id)
+
+    asyncio.run(go())
+
+
+def test_resume_refuses_a_run_whose_node_is_gone(
+    orch: Orchestrator, factory: Factory, test_store: Store
+) -> None:
+    blocked = _blocked_run(orch, factory, test_store)
+    factory.nodes = [node for node in factory.nodes if node.id != "n-agent"]
+    factory.edges = []
+    test_store.save_factory(factory)
+
+    async def go():
+        with pytest.raises(RunConflict):
+            await orch.resume(blocked.id)
+
+    asyncio.run(go())
+
+
+def test_a_cancelled_run_withdraws_its_offer_to_resume(
+    orch: Orchestrator, factory: Factory, test_store: Store
+) -> None:
+    """A cancel is a decision to stop, and it outranks the block."""
+    run = _blocked_run(orch, factory, test_store)
+    assert run.blocked_node_id == "n-agent"
+
+    async def go():
+        with pytest.raises(RunConflict):
+            await orch.cancel(run.id)  # already terminal
+
+    asyncio.run(go())

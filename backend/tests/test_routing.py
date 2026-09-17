@@ -332,3 +332,47 @@ def test_a_fail_belt_that_loops_back_is_still_refused(
     problems = runcheck.run_problems(factory)
 
     assert any("loop" in problem for problem in problems), problems
+
+
+# ---- a spent allowance routes nowhere --------------------------------------
+
+
+def test_a_usage_limit_refuses_the_fail_belt_a_crash_would_have_taken(
+    test_store: Store, orch: Orchestrator, repo: Path
+) -> None:
+    """The load-bearing half of treating a limit apart from a crash.
+
+    A crash here is an *outcome*: the graph drew a belt for it and the run goes
+    down it, ending `succeeded` with a red machine on it — that is the test
+    directly above this one. A spent allowance must not, because the rescue at
+    the other end of that belt is another session against the same exhausted
+    account. It would fail identically, one node further from the cause, and
+    the run would end up blaming the rescue.
+    """
+    save(
+        test_store,
+        [
+            node("n-in", "input"),
+            agent("n-review", reviewer=True, fake_script="usage-limit"),
+            agent("n-rescue"),
+            node("n-out", "output"),
+        ],
+        [
+            belt("n-in", "n-review"),
+            belt("n-review", "n-out", "success"),
+            belt("n-review", "n-rescue", "fail"),
+            belt("n-rescue", "n-out"),
+        ],
+    )
+    run = drive(orch)
+
+    assert run.status == "failed"
+    assert statuses(run) == {
+        "n-in": "succeeded",
+        "n-review": "failed",
+        # The belt was there and was refused. This is the assertion.
+        "n-rescue": "pending",
+        "n-out": "pending",
+    }
+    assert run.blocked_node_id == "n-review"
+    assert "session limit" in run.blocked_reason

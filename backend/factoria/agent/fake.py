@@ -63,6 +63,11 @@ Script = Literal[
 #: reader of an event log should never have to wonder whether a run was real.
 FAKE_MODEL = "fake-model-1"
 
+USAGE_LIMIT_MESSAGE = "You've hit your session limit · resets 11:40pm (Europe/Lisbon)"
+"""Worded as the real CLI words it, reset time and all, because the detail is
+carried through to the operator verbatim and a test that used a tidier sentence
+would not notice if that stopped being true."""
+
 #: What a scripted turn reports it cost: nothing, for the reason in the module
 #: docstring. Raise it per adapter (`FakeAdapter(cost_usd=…)`) or per node
 #: (`fake_cost` in an agent's config) when the cost path itself is under test.
@@ -160,6 +165,37 @@ def failure_script(session_id: str, cwd: str, prompt: str, cost: float) -> Itera
         session_id=session_id, message="the run did not complete", recoverable=False
     )
     yield ev.Exit(session_id=session_id, cause="crash", code=1, detail="agent reported failure")
+
+
+def usage_limit_script(
+    session_id: str, cwd: str, prompt: str, cost: float
+) -> Iterable[AgentEvent]:
+    """A turn that gets somewhere and is then cut off by a spent allowance.
+
+    It bills, says a little, and exits `usage-limit` — in that order, because
+    that is the order the real thing does it and the order is the whole
+    difficulty: the cost is real, the partial output is real, and the only thing
+    that failed is the clock. A script that exited before saying anything would
+    make the resume path look easier than it is.
+    """
+    yield _init(session_id, cwd)
+    yield ev.TextDelta(session_id=session_id, text="I'll start by reading the key files.")
+    yield ev.TurnEnd(
+        session_id=session_id,
+        model=FAKE_MODEL,
+        usage=ev.Usage(input_tokens=400, output_tokens=60),
+        total_cost_usd=cost,
+        duration_ms=1100,
+        num_turns=1,
+    )
+    yield ev.Error(
+        session_id=session_id,
+        message=USAGE_LIMIT_MESSAGE,
+        recoverable=True,
+    )
+    yield ev.Exit(
+        session_id=session_id, cause="usage-limit", code=1, detail=USAGE_LIMIT_MESSAGE
+    )
 
 
 def streaming_script(session_id: str, cwd: str, prompt: str, cost: float) -> Iterable[AgentEvent]:
@@ -318,6 +354,10 @@ SCRIPTS: dict[str, Callable[[str, str, str, float], Iterable[AgentEvent]]] = {
     # rather than only what it produced.
     "echo": echo_script,
     "failure": failure_script,
+    # The wall. Distinct from `failure` on purpose: one is the agent failing at
+    # the work, the other is the account running out of allowance, and the whole
+    # of `Orchestrator.resume` hangs on the orchestrator treating them apart.
+    "usage-limit": usage_limit_script,
     "streaming": streaming_script,
     # The two a loop is built out of. `verdict-fail` sends the work back;
     # `verdict-pass` releases it.

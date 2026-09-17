@@ -181,7 +181,15 @@ class Error(EventBase):
     recoverable: bool = True
 
 
-ExitCause = Literal["completed", "user", "crash", "auth-failure", "spawn-failed"]
+ExitCause = Literal[
+    "completed", "user", "crash", "usage-limit", "auth-failure", "spawn-failed"
+]
+"""Why a run ended. **`usage-limit` is not a crash**, and the distinction is the
+whole reason it is here: a provider that says "you have spent your allowance,
+it comes back at 11:40pm" has not failed at anything, and the work it was in
+the middle of is still good. A crash means *do not try this again*; a usage
+limit means *try this again later*, which is a different instruction to give
+the orchestrator and a different sentence to show an operator."""
 
 
 class Exit(EventBase):

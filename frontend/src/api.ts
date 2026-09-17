@@ -213,6 +213,12 @@ export const api = {
   /** Explicit cancel — closing the tab is not a decision to stop work. */
   cancelRun: (runId: string) =>
     request<Run>(`/api/runs/${runId}/cancel`, { method: "POST" }),
+  /** Pick a run back up after the provider's allowance cut it short.
+   *
+   * The only call that reopens a finished run, and the server decides whether
+   * a given one may be — a crash and a cancel are both refused with a 409. */
+  resumeRun: (runId: string) =>
+    request<Run>(`/api/runs/${runId}/resume`, { method: "POST" }),
   run: (runId: string) => request<Run>(`/api/runs/${runId}`),
   runs: () => request<Run[]>("/api/runs"),
 

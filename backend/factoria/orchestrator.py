@@ -188,6 +188,12 @@ working either way, and the terminal transition always reaches the stream.
 """
 
 
+DID_NOT_FINISH = "did not finish"
+"""What the finalizer writes over a node that was still working when the walk
+broke under it. Named because `resume` has to tell it apart from a node that
+reached a real outcome: one gets replayed, the other gets run again."""
+
+
 class RunBusy(Exception):
     """One run at a time. Carries the id of the run holding the slot."""
 
@@ -425,6 +431,16 @@ class ActiveRun:
     taken: set[str] = field(default_factory=set)
     dead: set[str] = field(default_factory=set)
     settled: set[str] = field(default_factory=set)
+    #: Outcomes a **resumed** walk replays instead of running, by node id —
+    #: `"success"` or `"fail"`, exactly as `_settle` would have returned them
+    #: the first time. Empty on every ordinary run, which is what keeps a
+    #: resume from being a second code path through the walk: the walk is the
+    #: same walk, and the nodes that already happened simply answer instantly.
+    #:
+    #: Popped as it is consumed, so a node that a loop sends round again runs
+    #: for real on its second visit. Replaying it twice would be replaying an
+    #: outcome from a lap that no longer applies.
+    replay: dict[str, str] = field(default_factory=dict)
     #: Nodes that failed in a way nothing may route around: a crash, a cancel,
     #: a reviewer that produced no verdict, a reviewer that has spent its laps.
     #: Distinct from a `failed` status, which is an *outcome* a belt can carry —
@@ -838,6 +854,174 @@ class Orchestrator:
             pass
         return state.run
 
+    async def resume(self, run_id: str) -> Run:
+        """Pick a blocked run back up where the provider's allowance ran out.
+
+        **The narrow door.** `DESIGN.md`'s durability rule — *"a run interrupted
+        mid-flight is marked failed on restart, never silently resumed"* — is
+        untouched by this, and the two words that keep it true are *silently*
+        and *interrupted*. Nothing here happens on its own: an operator presses
+        a button, at a time they chose, having read the sentence the provider
+        wrote about when the allowance comes back. And the run this reopens was
+        not interrupted; it stopped, deliberately, at a node the walk marked in
+        the record (`_blocked`). A crash is still not resumable, a cancel is
+        still not resumable, and a restart still is not.
+
+        **What it does not do is re-run anything that already ran.** The walk is
+        the same `_walk` — there is no second traversal to keep in step with
+        this one — and the nodes that finished answer out of `state.replay`
+        instead of spawning an agent. So a resume costs exactly the work that
+        did not happen, which is the whole point: this run had spent $2.57 on
+        research and scoping before the wall, and paying it twice would make
+        the button worse than useless.
+
+        Three things are re-read rather than carried over, and each is
+        deliberate:
+
+        - **the factory file**, because that is what `start` reads and a run
+          resumed against a stale in-memory copy would be a second source of
+          truth. If it has been edited so that a node in the record is gone, the
+          resume is refused rather than guessed at;
+        - **the project settings**, same reason, and with the same consequence
+          the docstring on `ActiveRun.settings` describes: the run record says
+          what actually happened, and after a resume that is honestly two sets
+          of defaults, which is why `resumed_count` is on the record;
+        - **the worktrees**, adopted from disk (`RunWorkspaces.adopt`). The run
+          failed, so they were kept, and the branch they hold is the branch this
+          walk must go on committing to.
+
+        Raises `RunBusy` (→ 409) if anything else is in flight, and
+        `RunConflict` (→ 409) if this run is not one that may be resumed.
+        """
+        async with self._lock:
+            if self._active_run_id is not None:
+                raise RunBusy(self._active_run_id)
+            run = self._runs.read(run_id)
+            if run is None:
+                raise RunConflict(f"no such run: {run_id}")
+            if run.status != "failed" or not run.blocked_node_id:
+                raise RunConflict(
+                    f"run {run_id} is {run.status} and was not stopped by a usage "
+                    "limit — only a run the provider cut short can be resumed"
+                )
+            try:
+                factory = await asyncio.to_thread(
+                    self.store.get_factory, run.project_id, run.factory_id
+                )
+            except NotFound as exc:
+                raise RunConflict(
+                    f"the factory {run.factory_id} this run came from is gone"
+                ) from exc
+            live = {node.id: node for node in factory.nodes}
+            if run.blocked_node_id not in live:
+                raise RunConflict(
+                    "the node this run stopped at is no longer in the factory — "
+                    "start a fresh run instead"
+                )
+            missing = [
+                node_run.node_id
+                for node_run in run.node_runs
+                if node_run.node_id not in live
+            ]
+            if missing:
+                raise RunConflict(
+                    "the factory has changed since this run: "
+                    + ", ".join(sorted(missing))
+                    + " no longer exist — start a fresh run instead"
+                )
+            try:
+                project = await asyncio.to_thread(self.store.get_project, run.project_id)
+                settings = project.settings
+            except NotFound:
+                settings = ProjectSettings()  # see `start` for why this is not fatal
+
+            blocked_id = run.blocked_node_id
+            replay: dict[str, str] = {}
+            reopened: list[str] = []
+            for node_run in run.node_runs:
+                if node_run.node_id == blocked_id:
+                    continue
+                if node_run.status == "succeeded":
+                    replay[node_run.node_id] = "success"
+                elif node_run.status == "failed" and node_run.detail != DID_NOT_FINISH:
+                    # A node that failed *on its own terms* — a reviewer that
+                    # said no, a push that was refused — is an outcome the first
+                    # walk already routed on, and replaying it is what makes the
+                    # second walk take the same belts. `DID_NOT_FINISH` is the
+                    # opposite case: the finalizer wrote it over a node that was
+                    # still working when the walk broke, and that node never
+                    # reached an outcome at all.
+                    replay[node_run.node_id] = "fail"
+                elif node_run.status in ("failed", "running", "waiting_input"):
+                    reopened.append(node_run.node_id)
+
+            # The blocked node runs again from the top, so its record is cleared
+            # back to `pending` — **except `cost_usd` and `lap`**. The money was
+            # spent whether or not the turn produced anything, and a run record
+            # that forgets it is a run record that lies about what it cost; the
+            # lap counter is never reset by anything (`_walk`, on termination),
+            # and a resume is not the one exception that would make the lap cap
+            # a hope again.
+            for node_id in [blocked_id, *reopened]:
+                node_run = run.node_run(node_id)
+                if node_run is None:
+                    continue
+                node_run.status = "pending"
+                node_run.detail = None
+                node_run.started_at = None
+                node_run.ended_at = None
+                node_run.output_text = ""
+
+            run.status = "running"
+            run.detail = None
+            run.ended_at = None
+            run.blocked_node_id = None
+            run.blocked_reason = ""
+            run.resumed_count += 1
+            for record in run.memory:
+                record.kept = False  # in flight again; the policy decides at the end
+
+            workspaces = RunWorkspaces(run_id=run.id, branch=run.branch or "")
+            workspaces.adopt(run.worktrees)
+            # The same channel and therefore the same `events.jsonl`, appended
+            # to rather than restarted. One run is one log: a viewer replaying
+            # from seq 0 sees the first walk, the wall, and the second walk in
+            # the order they happened, which is the only account that explains
+            # the gap in the timestamps.
+            channel = self._channels.get(run.id) or RunChannel(run.id)
+            self._channels[run.id] = channel
+            state = ActiveRun(
+                run=run,
+                factory=factory,
+                channel=channel,
+                settings=settings,
+                workspaces=workspaces,
+                replay=replay,
+            )
+            self._active[run.id] = state
+            self._active_run_id = run.id
+
+        # Before the walk, and before anything can write: a resumed run that
+        # filed a memory section without this would render a fresh document
+        # over the one the first walk built. See `_rehydrate_memories`.
+        self._rehydrate_memories(state)
+        await self._persist(state)
+        await state.channel.emit(
+            RunStatusEvent(
+                run_id=run.id,
+                status="running",
+                detail=f"resumed at “{live[blocked_id].definition.label or blocked_id}”",
+            )
+        )
+        # The reopened nodes go back to `pending` on the stream too, so a canvas
+        # watching this log does not keep showing yesterday's red pip over a
+        # node that is about to run.
+        for node_id in [blocked_id, *reopened]:
+            await self._set_node(state, node_id, "pending")
+        state.input_ready.set()
+        state.task = asyncio.create_task(self._walk(state), name=f"run:{run.id}")
+        return run
+
     # ---- the walk ---------------------------------------------------------
 
     async def _walk(self, state: ActiveRun) -> None:
@@ -1019,6 +1203,23 @@ class Orchestrator:
                     continue
                 state.taken.discard(edge.id)
                 state.dead.discard(edge.id)
+                # **Another back-edge inside this body starts dead again**, for
+                # exactly the reason `_walk` seeds every back-edge dead before
+                # the first node: a node runs when every belt into it has been
+                # decided, and a back-edge into the top of a loop cannot be
+                # decided until the reviewer at the bottom has run — which
+                # cannot happen until the top does.
+                #
+                # It is reachable because a body is computed over *all* edges
+                # (`runcheck.back_edges`), so the moment a factory has two
+                # reviewers the inner one's body contains the outer one's fail
+                # belt. Undeciding it and leaving it undecided deadlocks the
+                # walk: `ready` comes up empty, the loop breaks with no failure
+                # to report, and the run ends **succeeded having committed
+                # nothing** — the same silent failure this method's docstring
+                # was written about, one graph shape further on.
+                if edge.id in state.back_edges:
+                    state.dead.add(edge.id)
         for node_id in reset:
             node_run = state.run.node_run(node_id)
             if node_run is None or node_run.status == "pending":
@@ -1049,6 +1250,15 @@ class Orchestrator:
         # too, and would have returned here without running anything.
         if node_run is None or node_run.type == "input":
             return "success"  # an input node, already done by submit_input
+        # **A resumed walk replays what already happened.** Popped rather than
+        # read, so a loop that sends this node round again gets a real run the
+        # second time (`ActiveRun.replay`). Nothing is emitted: the outcome is
+        # already in `events.jsonl` from the first walk, and a resume appends to
+        # that same log — re-announcing a transition would make one node look
+        # like it succeeded twice.
+        replayed = state.replay.pop(node.id, None)
+        if replayed is not None:
+            return replayed
         try:
             await self._run_node(state, node)
         except (WorktreeError, gitwork.GitError) as exc:
@@ -1071,10 +1281,20 @@ class Orchestrator:
                     state,
                     node_run.node_id,
                     "failed",
-                    "cancelled" if state.cancelled else "did not finish",
+                    "cancelled" if state.cancelled else DID_NOT_FINISH,
                 )
         if state.cancelled:
             status, detail = "cancelled", "cancelled"
+            # A cancel is a decision to stop, so it withdraws the offer to
+            # carry on. Clearing it here rather than refusing in `resume()`
+            # keeps "is this resumable" a property of the record.
+            state.run.blocked_node_id = None
+            state.run.blocked_reason = ""
+        elif failure and state.run.blocked_node_id:
+            # Worded as a pause, not a fault, and it carries the provider's own
+            # sentence because the reset time in it is the actionable part.
+            status = "failed"
+            detail = f"“{failure}” stopped — {state.run.blocked_reason}"
         elif failure:
             status, detail = "failed", f"“{failure}” failed"
         else:
@@ -1127,6 +1347,57 @@ class Orchestrator:
             if node_run is not None:
                 node_run.output_text = incoming
             await self._set_node(state, node.id, "succeeded")
+
+    def _rehydrate_memories(self, state: ActiveRun) -> None:
+        """Rebuild the memory documents a resumed run already wrote.
+
+        **Without this, resuming destroys memory.** A `MemoryDoc` lives in
+        process and the file is its *rendering*, rewritten whole on every write
+        (`memory.py`) — so a second walk that starts with no documents and then
+        files one section would render a one-section document over the top of
+        whatever the first walk had built. The first walk's research would be
+        gone, replaced by a file that looks complete.
+
+        Rebuilt from the **run record**, not parsed back out of the markdown.
+        The record holds each node's `output_text`, which is the same text
+        `_file_memories` was handed the first time, so replaying `record()` over
+        it reconstructs the document rather than reverse-engineering it — and
+        there is no parser to keep in step with the renderer.
+
+        In memory only: nothing is written and no artifact is emitted, because
+        nothing has changed on disk. The file already says this. It is the next
+        *real* write that must find the document it is adding to.
+        """
+        by_id = {node.id: node for node in state.factory.nodes}
+        _belts, wires = split_edges(state.factory.nodes, state.factory.edges)
+        for node in state.factory.nodes:  # factory order — the belts' order
+            if node.id not in state.replay:
+                continue
+            node_run = state.run.node_run(node.id)
+            if node_run is None or not node_run.output_text.strip():
+                continue
+            for wire in wires:
+                if wire.source != node.id:
+                    continue
+                target = by_id.get(wire.target)
+                if target is None or target.definition.type != "memory":
+                    continue
+                slug = memory.memory_slug(target)
+                doc = state.memories.get(target.id)
+                if doc is None:
+                    doc = memory.MemoryDoc(
+                        run_id=state.run.id,
+                        node_id=target.id,
+                        slug=slug,
+                        label=target.definition.label or slug,
+                    )
+                    state.memories[target.id] = doc
+                doc.record(
+                    node_id=node.id,
+                    label=node.definition.label or node.id,
+                    lap=node_run.lap,
+                    text=node_run.output_text,
+                )
 
     async def _file_memories(self, state: ActiveRun, node: Node, text: str) -> None:
         """File one agent's output into every memory wired to it. Side effect.
@@ -1481,6 +1752,12 @@ class Orchestrator:
         node_run.output_text = "".join(collected).strip()
 
         if cause != "completed":
+            if cause == "usage-limit":
+                # Same rule as a worker's, and it matters more here: a scope
+                # node's fail belt runs forward into work that would proceed on
+                # a questionnaire nobody ever saw.
+                await self._blocked(state, node, detail)
+                return
             if cause == "user":
                 await self._set_node(state, node.id, "failed", "cancelled")
             else:
@@ -1804,6 +2081,37 @@ class Orchestrator:
                 reported.append(f"fast-forwarded {remote}/{merge_into}")
         return "; ".join(reported) if reported else None
 
+    async def _blocked(self, state: ActiveRun, node: Node, detail: str | None) -> None:
+        """A node that stopped because the account's allowance is spent.
+
+        **The one failure that is not evidence of anything.** Every other way a
+        node fails says something about the work — the agent crashed, the
+        reviewer said no, the push was refused — and the graph is entitled to
+        route on it. A spent allowance says only that the clock has not come
+        round yet, and routing on it would be acting on a fact about billing as
+        though it were a fact about the code.
+
+        So it **halts**, always, and `state.halt` is exactly the right set: it
+        already means "a failure nothing may route around", and it already
+        refuses every belt including a rescue. That refusal is the load-bearing
+        part here — a `fail` belt into a rescue agent would spawn a second
+        session against the same exhausted account, which fails identically and
+        one node further from the cause.
+
+        What it leaves behind is the whole of the resume feature: the node it
+        stopped at, and the provider's sentence about when to come back. Both
+        go on the run record (`models.Run.blocked_node_id`), and `resume()`
+        reads them there.
+        """
+        state.halt.add(node.id)
+        # First writer wins. A walk can only be blocked once — `halt` breaks it
+        # at this node — but a second run through this function would mean a
+        # resume that hit the wall again, and *that* one should overwrite,
+        # which it does because the field is cleared when a resume starts.
+        state.run.blocked_node_id = node.id
+        state.run.blocked_reason = detail or "the provider's usage limit is spent"
+        await self._set_node(state, node.id, "failed", state.run.blocked_reason)
+
     async def _run_agent(self, state: ActiveRun, node: Node, prompt: str) -> None:
         node_run = state.run.node_run(node.id)
         assert node_run is not None
@@ -1954,6 +2262,11 @@ class Orchestrator:
                 if edge.source == node.id
             ):
                 state.halt.add(node.id)
+            # Checked before the belt logic above has any say, because a spent
+            # allowance halts on **every** belt and not only a looping one.
+            if cause == "usage-limit":
+                await self._blocked(state, node, detail)
+                return
             if cause == "user":
                 await self._set_node(state, node.id, "failed", "cancelled")
             else:

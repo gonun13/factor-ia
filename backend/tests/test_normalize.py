@@ -217,3 +217,62 @@ def test_error_frame_becomes_an_error_event() -> None:
     events = normalizer.feed(b'{"type":"error","message":"stream broke"}\n')
     assert types_of(events) == ["error"]
     assert events[0].recoverable is True
+
+
+# ---- a spent allowance is not a crash --------------------------------------
+
+
+def test_a_session_limit_in_the_result_frame_is_recorded_as_a_usage_limit() -> None:
+    """The frame the real run actually produced, verbatim.
+
+    `is_error` with the limit in `result`, after a turn that billed — which is
+    why the exit code alone cannot classify it: it is 1, like every other
+    unhappy ending.
+    """
+    normalizer = StreamNormalizer("s-1")
+    line = json.dumps(
+        {
+            "type": "result",
+            "is_error": True,
+            "result": "You've hit your session limit · resets 11:40pm (Europe/Lisbon)",
+            "total_cost_usd": 0.3759,
+        }
+    )
+    normalizer.feed(line + "\n")
+    assert normalizer.usage_limit == (
+        "You've hit your session limit · resets 11:40pm (Europe/Lisbon)"
+    )
+    # Not confused with the other non-crash ending it sits beside.
+    assert normalizer.auth_failed is False
+
+
+def test_a_usage_limit_on_the_error_frame_is_seen_too() -> None:
+    """The second door, for the reason `auth_failed` has two."""
+    normalizer = StreamNormalizer("s-1")
+    normalizer.feed(
+        json.dumps({"type": "error", "message": "usage limit reached for this account"})
+        + "\n"
+    )
+    assert normalizer.usage_limit == "usage limit reached for this account"
+
+
+def test_an_ordinary_failure_is_not_read_as_a_usage_limit() -> None:
+    """The expensive direction is the false positive that offers a resume for a
+    run that will fail the same way again, so the match has to be narrow."""
+    normalizer = StreamNormalizer("s-1")
+    normalizer.feed(
+        json.dumps({"type": "result", "is_error": True, "result": "tool failed: Bash exited 1"})
+        + "\n"
+    )
+    assert normalizer.usage_limit is None
+
+
+def test_a_rate_limit_is_deliberately_not_a_usage_limit() -> None:
+    """One clears in seconds and wants a backoff; the other clears tomorrow and
+    wants an operator. Naming them the same thing would park a run for a day
+    over a hiccup."""
+    normalizer = StreamNormalizer("s-1")
+    normalizer.feed(
+        json.dumps({"type": "error", "message": "rate limit exceeded, retry shortly"}) + "\n"
+    )
+    assert normalizer.usage_limit is None

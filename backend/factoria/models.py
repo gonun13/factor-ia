@@ -952,6 +952,27 @@ class Run(Base):
     ended_at: datetime | None = None
     total_cost_usd: float = 0.0
     node_runs: list[NodeRun] = Field(default_factory=list)
+    #: The node a spent allowance stopped the run at, and the provider's own
+    #: words about it. Set **only** for a `usage-limit` exit, which is the one
+    #: failure that is not the run's fault and not a reason to distrust what
+    #: came before it (`agent/events.ExitCause`).
+    #:
+    #: Two fields rather than a `resumable` bool, because a resume needs the
+    #: *node* — replaying a walk that stops in the wrong place would re-run
+    #: finished work or skip unfinished work — and an operator needs the reset
+    #: time, which lives in the sentence. `resumable` is derived from these by
+    #: the orchestrator rather than stored, so the answer cannot drift from the
+    #: reason for it.
+    #:
+    #: Additive: a `run.json` written before this existed loads with both
+    #: empty, which reads as "this run was never blocked", and is right.
+    blocked_node_id: str | None = None
+    blocked_reason: str = ""
+    #: How many times this run has been resumed. Kept because a run record has
+    #: to describe the run that actually happened, and "this one was picked up
+    #: again the next morning" is part of that — the timings alone imply a gap
+    #: nothing else explains.
+    resumed_count: int = 0
 
     def node_run(self, node_id: str) -> NodeRun | None:
         for node_run in self.node_runs:

@@ -814,6 +814,8 @@ function RunBox({
       answers: Record<string, string>,
     ) => Promise<void>;
     cancel: () => Promise<void>;
+    resume: () => Promise<void>;
+    resumable: boolean;
     clear: () => void;
   };
 }) {
@@ -827,6 +829,30 @@ function RunBox({
         {run.live ? (
           <button className="run cancel" onClick={() => void run.cancel()} disabled={run.busy}>
             ■ Cancel
+          </button>
+        ) : run.resumable ? (
+          // **Instead of Run, not beside it.** A blocked run is the run on this
+          // canvas, and offering both would put the cheap answer and the
+          // expensive one under the same thumb — starting fresh re-pays for
+          // every node that already finished. `clear` is still how an operator
+          // says they want a new one, and it is a deliberate act.
+          //
+          // The provider's own sentence is the tooltip, reset time and all,
+          // because "can I resume yet" is a question only that sentence
+          // answers.
+          <button
+            className="run resume"
+            onClick={() => void run.resume()}
+            disabled={run.busy}
+            title={[
+              "Pick this run back up where it stopped",
+              run.run?.blocked_reason ?? "",
+              "Nothing that already finished runs again.",
+            ]
+              .filter(Boolean)
+              .join("\n")}
+          >
+            ▶ Resume
           </button>
         ) : (
           <button

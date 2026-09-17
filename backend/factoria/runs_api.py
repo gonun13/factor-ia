@@ -195,6 +195,25 @@ async def cancel_run(run_id: str) -> Run:
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
 
 
+@router.post("/runs/{run_id}/resume", response_model=Run)
+async def resume_run(run_id: str) -> Run:
+    """Pick a run back up after the provider's allowance cut it short.
+
+    POST, and therefore behind the Origin check, for the reason every other
+    control verb here is: this spends money and moves a repository. It is also
+    the only endpoint that reopens a terminal run, which is why the orchestrator
+    and not this function decides whether a given run may be — see
+    `Orchestrator.resume` for the rule and for why it does not contradict the
+    durability promise about never resuming silently.
+    """
+    try:
+        return await orchestrator().resume(run_id)
+    except RunBusy as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+    except RunConflict as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+
+
 def _frame(record: dict[str, Any]) -> str:
     """One SSE frame. `id:` is the seq — the whole reconnection contract.
 

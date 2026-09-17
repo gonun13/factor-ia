@@ -434,6 +434,14 @@ class ClaudeRun:
             return "user", code, None
         if self._normalizer.auth_failed:
             return "auth-failure", code, "the container is not signed in"
+        # **Before the exit code, and before `crash`.** A spent allowance exits
+        # 1 like every other unhappy ending, so the code cannot tell them apart
+        # — and being told apart is the entire point: a crash breaks the run,
+        # a usage limit parks it somewhere an operator can resume from.
+        # The provider's own sentence is the detail, reset time and all,
+        # because it is the only part that says when resuming would work.
+        if self._normalizer.usage_limit:
+            return "usage-limit", code, self._normalizer.usage_limit
         if code == 0:
             return "completed", code, None
         detail = "\n".join(self._stderr_tail).strip() or None

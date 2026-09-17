@@ -562,3 +562,80 @@ def test_a_memory_whose_writer_was_never_reached_delivers_no_pointer(
     assert statuses(run)["n-rescue"] == "pending"  # never reached
     assert run.memory == []
     assert "Memory available" not in run.node_run("n-read").output_text
+
+
+# ---- two loops, one inside the other ---------------------------------------
+
+
+def nested_factory(test_store: Store, inner: list[str], outer: list[str]) -> Factory:
+    """Two reviewers, each with a fail belt back up the line — the inner one's
+    body containing the outer one's back-edge.
+
+        n-in ──► n-plan ──► n-work ──► n-inner ──success──► n-outer ──► n-out
+                    ▲          ▲           │                   │
+                    │          └───fail────┘                   │
+                    └──────────────────fail────────────────────┘
+
+    The shape a real factory reaches as soon as it has both a tester and a
+    reviewer, and the one `back_edges` documents when it says ancestry is
+    computed over all edges because "a second back-edge inside the body is part
+    of it".
+    """
+    return save(
+        test_store,
+        [
+            node("n-in", "input"),
+            agent("n-plan"),
+            agent("n-work"),
+            reviewer("n-inner", *inner),
+            reviewer("n-outer", *outer),
+            node("n-out", "output"),
+        ],
+        [
+            belt("n-in", "n-plan"),
+            belt("n-plan", "n-work"),
+            belt("n-work", "n-inner"),
+            belt("n-inner", "n-outer", "success"),
+            belt("n-inner", "n-work", "fail"),
+            belt("n-outer", "n-out", "success"),
+            belt("n-outer", "n-plan", "fail"),
+        ],
+    )
+
+
+def test_an_inner_loop_turning_does_not_strand_the_outer_loop_s_back_edge(
+    test_store: Store, orch: Orchestrator, repo: Path
+) -> None:
+    """**The same silent failure as the guard above, one graph shape further on.**
+
+    The inner reviewer's body contains the *outer* reviewer's back-edge, because
+    ancestry is computed over every edge. Resetting that body un-decides every
+    belt out of every node in it — and that includes the outer back-edge, which
+    was seeded `dead` at the start of the walk and has nothing to re-seed it.
+    `n-plan` then waits forever on a belt from `n-outer`, which can only run
+    after `n-plan`, so `ready` comes up empty, the walk breaks with no failure
+    to report, and the run ends `succeeded` having committed nothing.
+
+    `_walk` already states the rule this depends on — *"a back-edge starts
+    dead, or nothing ever starts"* — and it holds just as much after a reset as
+    before the first node.
+    """
+    nested_factory(test_store, inner=["verdict-fail", "verdict-pass"], outer=["verdict-pass"])
+    run = drive(orch)
+
+    assert run.status == "succeeded", run.detail
+    assert statuses(run)["n-out"] == "succeeded", "the loop passed into a dead line"
+    assert laps(run) == {
+        "n-in": 0,
+        # **Two, and that is the documented rule rather than a surprise.** The
+        # inner body is `descendants(target) ∩ ancestors(source)` over *all*
+        # edges, and the outer reviewer's fail belt puts `n-plan` on a path from
+        # `n-work` back to `n-inner`. So it is on the inner loop's body and runs
+        # again with it. Asserted rather than glossed over: if the body rule
+        # ever narrows, this is the number that says so.
+        "n-plan": 2,
+        "n-work": 2,
+        "n-inner": 2,
+        "n-outer": 1,
+        "n-out": 1,
+    }

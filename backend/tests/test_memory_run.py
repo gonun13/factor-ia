@@ -12,6 +12,7 @@ so a node's *input* becomes assertable instead of only its output.
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 import pytest
@@ -486,3 +487,69 @@ def test_a_failed_run_keeps_its_memory_and_the_summary_says_where(
     rendered = summary.render(run)
     assert "## What it remembered" in rendered
     assert run.memory[0].path in rendered
+
+
+# ---- resuming must not destroy what was already filed -----------------------
+
+
+def test_a_resumed_run_adds_to_the_memory_it_already_wrote(
+    test_store: Store, orch: Orchestrator, repo: Path, monkeypatch
+) -> None:
+    """The destructive case, and the reason `_rehydrate_memories` exists.
+
+    Two writers into one memory, with the second one stopped by a spent
+    allowance. The resume runs only the second — and its section must land
+    *beside* the first one, not on top of it. A `MemoryDoc` lives in process and
+    the file is its rendering, rewritten whole, so a second walk that started
+    with an empty document would render a one-section file over a two-section
+    one and lose the first walk's research for good.
+    """
+    factory = save(
+        test_store,
+        [
+            node("n-in", "input"),
+            writer("n-a", "Research"),
+            writer("n-b", "Survey", fake_script="usage-limit"),
+            mem("n-mem", "Index"),
+            agent("n-read", fake_script="echo"),
+            node("n-out", "output"),
+        ],
+        [
+            belt("n-in", "n-a"),
+            belt("n-a", "n-b"),
+            belt("n-b", "n-read"),
+            belt("n-read", "n-out"),
+            wire("n-a", "n-mem"),
+            wire("n-b", "n-mem"),
+            wire("n-mem", "n-read"),
+        ],
+    )
+    blocked = drive(orch)
+    assert blocked.blocked_node_id == "n-b"
+    # Two already: a node that stopped still files what it managed to say
+    # (`_file_memories`), so the wall landed *after* a partial Survey section.
+    # That is what makes this the destructive case rather than a lucky one —
+    # there is a real document here for a second walk to overwrite.
+    assert blocked.memory[0].sections == 2
+
+    factory.nodes[2].definition.config = {"fake_script": "success"}
+    test_store.save_factory(factory)
+
+    written = documents(monkeypatch)
+
+    async def go():
+        run = await orch.resume(blocked.id)
+        await asyncio.wait_for(orch._active[run.id].task, 10)
+        return orch.get(run.id)
+
+    run = asyncio.run(go())
+    assert run.status == "succeeded"
+
+    body = written["index"]
+    # **The assertion.** Without rehydration the resumed `n-b` would render a
+    # document containing only its own section, and `## Research` — which no
+    # node on this walk produced, because `n-a` was replayed — would be gone
+    # from the file for good.
+    assert "## Research" in body and "## Survey" in body
+    assert body.index("## Research") < body.index("## Survey")
+    assert run.memory[0].sections == 2

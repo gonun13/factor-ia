@@ -404,6 +404,24 @@ class RunWorkspaces:
         path.mkdir(parents=True, exist_ok=True)
         return path
 
+    def adopt(self, made: list[RunWorktree]) -> None:
+        """Take ownership of worktrees a previous walk of this run created.
+
+        The resume path, and the reason `ensure` can stay strict. A failed run
+        keeps its worktrees and its branch (the cleanup policy above), so the
+        second walk must **not** create them again — `ensure` refuses a branch
+        that already exists, and that refusal is worth keeping, because outside
+        a resume a taken branch name really is a run that should not start.
+
+        Only what is still on disk is adopted. A directory an operator deleted
+        between the two walks is not an error here: it drops out, and `ensure`
+        then builds it the ordinary way — which is also why the branch check it
+        does is still reachable and still right.
+        """
+        for worktree in made:
+            if worktree.path and Path(worktree.path).is_dir():
+                self._made[worktree.codebase_id] = worktree
+
     def ensure(self, codebase: Codebase) -> RunWorktree:
         """The worktree for this codebase in this run, creating it if needed.
 

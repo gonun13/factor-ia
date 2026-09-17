@@ -545,6 +545,19 @@ export type Run = {
   ended_at: string | null;
   total_cost_usd: number;
   node_runs: NodeRun[];
+  /** The node a spent provider allowance stopped this run at, and the
+   * provider's own sentence about it — reset time included, which is the part
+   * that tells an operator whether resuming now is worth trying.
+   *
+   * **Set only for a usage limit**, never for a crash or a cancel. Together
+   * they are the whole of what makes the Resume button appear: a failed run
+   * with a `blocked_node_id` is one the provider cut short, and nothing about
+   * the work it had done is in doubt. `models.Run` has the rest. */
+  blocked_node_id: string | null;
+  blocked_reason: string;
+  /** How many times this run was picked back up. Shown so the gap in the
+   * timings has an explanation on the record. */
+  resumed_count: number;
 };
 
 /** The adapter's normalized union, as it arrives inside an `agent` envelope.

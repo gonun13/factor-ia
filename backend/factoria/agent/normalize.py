@@ -67,6 +67,35 @@ def _as_str_list(value: Any) -> list[str]:
     return out
 
 
+USAGE_LIMIT_PHRASES: tuple[str, ...] = (
+    "session limit",
+    "usage limit",
+    "limit reached",
+)
+"""What the CLI says when the account's allowance is spent, matched on the one
+fragment of each sentence that is about the *limit* rather than about when it
+comes back. The observed wording is `"You've hit your session limit · resets
+11:40pm (Europe/Lisbon)"`, and the reset time is exactly the part that will not
+be stable enough to match on.
+
+Matched case-insensitively on a substring, which is loose on purpose: a false
+positive ends a run as `usage-limit` instead of `crash` — both fail the node,
+both keep the worktree, and the difference is that one offers a resume the
+operator can decline. A false *negative* is the expensive direction, because it
+is the bug this list exists to fix: a spent allowance read as a crash, taking a
+fail belt into a rescue agent that cannot run either.
+
+Deliberately **not** here: "rate limit". A rate limit clears in seconds and the
+answer to one is a backoff inside the adapter, not a run an operator resumes by
+hand tomorrow.
+"""
+
+
+def _is_usage_limit(text: str) -> bool:
+    lowered = text.lower()
+    return any(phrase in lowered for phrase in USAGE_LIMIT_PHRASES)
+
+
 def _text_from_content(content: Any) -> str:
     if not isinstance(content, list):
         return ""
@@ -98,7 +127,10 @@ class StreamNormalizer:
       `assistant` frames do;
     - **`auth_failed`**, read by the adapter to classify the exit — an auth
       failure exits non-zero and would otherwise be indistinguishable from a
-      crash.
+      crash;
+    - **`usage_limit`**, for the same reason and with the same shape: a spent
+      allowance also exits non-zero, and reading it as a crash is what let one
+      node's exhausted quota kill a whole run's worth of finished work.
     """
 
     def __init__(self, session_id: str = "") -> None:
@@ -106,6 +138,12 @@ class StreamNormalizer:
         self._buffer = b""
         self.emitted_text = False
         self.auth_failed = False
+        #: The provider's own words when it refused for want of allowance, or
+        #: `None`. Read by the adapter to classify the exit, exactly as
+        #: `auth_failed` is — and kept as the *message* rather than a bool
+        #: because the reset time in it is the only thing that tells an
+        #: operator when resuming is worth trying.
+        self.usage_limit: str | None = None
         self.last_model: str | None = None
         self._tool_ids_by_index: dict[int, str] = {}
 
@@ -178,10 +216,20 @@ class StreamNormalizer:
         if kind == "result":
             return self._result(obj)
         if kind == "error":
+            message = (
+                obj.get("message")
+                if isinstance(obj.get("message"), str)
+                else "stream error"
+            )
+            # The second door, for the same reason `auth_failed` has two: only
+            # one of the two frames is guaranteed to survive a format change,
+            # and the cost of reading it in both places is nothing.
+            if _is_usage_limit(message):
+                self.usage_limit = message
             return (
                 ev.Error(
                     session_id=self.session_id,
-                    message=obj.get("message") if isinstance(obj.get("message"), str) else "stream error",
+                    message=message,
                     recoverable=obj.get("is_error") is not True,
                 ),
             )
@@ -400,6 +448,12 @@ class StreamNormalizer:
             # guaranteed to survive a format change.
             if "not logged in" in detail.lower():
                 self.auth_failed = True
+            # The `result` frame is where a spent allowance actually lands: the
+            # CLI finishes the turn it was on, reports `is_error` with the
+            # limit in `result`, and *then* exits 1. So this is read here rather
+            # than off the exit code, which says only "non-zero".
+            elif _is_usage_limit(detail):
+                self.usage_limit = detail
             if not self.emitted_text:
                 self.emitted_text = True
                 out.append(ev.TextDelta(session_id=self.session_id, text=detail))

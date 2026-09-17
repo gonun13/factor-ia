@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import copy
 import time
 from pathlib import Path
 
@@ -594,3 +595,72 @@ def test_an_answer_to_a_question_that_is_not_open_is_409(
     assert blank.status_code == 409
 
     runnable.post(f"/api/runs/{run['id']}/cancel")
+
+
+# ---- resume ----------------------------------------------------------------
+
+
+def _blocked(client: TestClient, script: str = "usage-limit") -> dict:
+    """Walk a run into the provider's wall and hand back the failed record."""
+    graph = copy.deepcopy(GRAPH)
+    graph["nodes"][1]["definition"]["config"] = {"fake_script": script}
+    assert client.put("/api/projects/demo/factories/main", json=graph).status_code == 200
+    run = start(client)["id"]
+    client.post(f"/api/runs/{run}/input", json={"text": "tidy the readme"})
+    for _ in range(100):
+        record = client.get(f"/api/runs/{run}").json()
+        if record["status"] in ("failed", "succeeded", "cancelled"):
+            return record
+        time.sleep(0.05)
+    raise AssertionError("the run never finished")
+
+
+def test_a_blocked_run_says_so_on_the_record_the_button_reads(
+    runnable: TestClient,
+) -> None:
+    """The two fields the Resume button is drawn from, over the wire."""
+    record = _blocked(runnable)
+    assert record["status"] == "failed"
+    assert record["blocked_node_id"] == "n-agent"
+    assert "session limit" in record["blocked_reason"]
+    assert record["resumed_count"] == 0
+
+
+def test_resume_carries_a_blocked_run_to_the_end(runnable: TestClient) -> None:
+    record = _blocked(runnable)
+
+    # The allowance is back, and the node can finish now.
+    graph = copy.deepcopy(GRAPH)
+    graph["nodes"][1]["definition"]["config"] = {"fake_script": "success"}
+    assert runnable.put("/api/projects/demo/factories/main", json=graph).status_code == 200
+
+    resumed = runnable.post(f"/api/runs/{record['id']}/resume")
+    assert resumed.status_code == 200, resumed.text
+    assert resumed.json()["status"] == "running"
+    assert resumed.json()["resumed_count"] == 1
+
+    for _ in range(100):
+        final = runnable.get(f"/api/runs/{record['id']}").json()
+        if final["status"] != "running":
+            break
+        time.sleep(0.05)
+    assert final["status"] == "succeeded"
+    assert final["blocked_node_id"] is None
+    # One run, one log — the second walk appended to the first one's story.
+    events = read_stream(runnable, f"/api/runs/{record['id']}/events")
+    assert [event["seq"] for event in events] == list(range(1, len(events) + 1))
+    assert any("resumed at" in (event.get("detail") or "") for event in events)
+
+
+def test_resume_refuses_a_run_that_merely_crashed(runnable: TestClient) -> None:
+    """409, not 200: a crash is not a thing you retry your way out of."""
+    record = _blocked(runnable, script="failure")
+    assert record["status"] == "failed"
+    assert record["blocked_node_id"] is None
+    assert runnable.post(f"/api/runs/{record['id']}/resume").status_code == 409
+
+
+def test_resume_of_an_unknown_run_is_a_conflict_not_a_crash(
+    runnable: TestClient,
+) -> None:
+    assert runnable.post("/api/runs/run-nope/resume").status_code == 409

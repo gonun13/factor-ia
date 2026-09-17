@@ -540,6 +540,32 @@ export function useRun(projectId: string, factoryId: string) {
     }
   }, [state.run?.id]);
 
+  /** Pick this run back up where the provider's allowance ran out.
+   *
+   * Deliberately **not** folded into `start`, though the two do almost the same
+   * thing afterwards: `start` creates a run and clears the screen for it, and
+   * this one reopens the run already on screen. Clearing state here would throw
+   * away the transcript of the first walk, which is the half of the story that
+   * explains why there is a second one.
+   */
+  const resume = useCallback(async () => {
+    const runId = state.run?.id;
+    if (!runId) return;
+    setState((previous) => ({ ...previous, busy: true, error: null, problems: [] }));
+    try {
+      const run = await api.resumeRun(runId);
+      setState((previous) => ({ ...previous, run, status: run.status, busy: false }));
+      // The same run id, so the same log: the stream reconnects and carries on
+      // appending rather than starting a second account of one run.
+      watch(run.id);
+    } catch (cause) {
+      // 409 is the ordinary answer here, and it is a sentence: the run was not
+      // blocked, or the factory has changed under it, or something else is in
+      // flight. Shown as-is rather than translated into "could not resume".
+      setState((previous) => ({ ...previous, busy: false, error: message(cause) }));
+    }
+  }, [state.run?.id, watch]);
+
   const clear = useCallback(() => {
     disconnect();
     setState(EMPTY);
@@ -548,6 +574,18 @@ export function useRun(projectId: string, factoryId: string) {
   const live = useMemo(
     () => state.status !== null && !isTerminal(state.status),
     [state.status],
+  );
+
+  /** Whether this run is one the operator may pick back up.
+   *
+   * Read off the record rather than inferred from the status, because "failed"
+   * covers both the run that broke and the run that merely ran out of
+   * allowance, and only the second is resumable. The server decides the same
+   * question the same way and has the final say — this is what draws the
+   * button, not what authorises the act. */
+  const resumable = useMemo(
+    () => state.status === "failed" && Boolean(state.run?.blocked_node_id),
+    [state.status, state.run?.blocked_node_id],
   );
 
   return {
@@ -561,6 +599,8 @@ export function useRun(projectId: string, factoryId: string) {
     decide,
     answer,
     cancel,
+    resume,
+    resumable,
     watch,
     clear,
   };
