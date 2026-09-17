@@ -308,12 +308,21 @@ def test_patching_something_else_leaves_the_settings_alone(client: TestClient) -
 
 
 def test_an_unknown_provider_is_refused(client: TestClient) -> None:
-    """The provider is a closed set — there are two adapters, and that is all."""
+    """The provider is a closed set — claude, cursor, fake."""
     client.post("/api/projects", json={"name": "Demo"})
     response = client.patch(
         "/api/projects/demo", json={"settings": {"default_provider": "gpt"}}
     )
     assert response.status_code == 422
+
+
+def test_cursor_is_an_allowed_project_provider(client: TestClient) -> None:
+    client.post("/api/projects", json={"name": "Demo"})
+    response = client.patch(
+        "/api/projects/demo", json={"settings": {"default_provider": "cursor"}}
+    )
+    assert response.status_code == 200
+    assert response.json()["settings"]["default_provider"] == "cursor"
 
 
 def test_a_blank_model_is_stored_as_unset(client: TestClient) -> None:

@@ -18,6 +18,7 @@ import type { ReactNode } from "react";
 import { Handle, Position } from "@xyflow/react";
 import { hasOutcomePorts, hasWriteHandle, nodeKind, type NodeData } from "../graph";
 import { useCanvas } from "../canvasContext";
+import { useHoverNote } from "./NodeNote";
 import {
   AgentGlyph,
   HumanGlyph,
@@ -85,14 +86,29 @@ export function NodeShell({
   id,
   kind,
   data,
+  note,
   children,
 }: {
   id: string;
   kind: ShellKind;
   data: NodeData;
+  /** What this machine is for, shown under the pointer after a second's
+      dwell (`NodeNote`) rather than inside the chassis. */
+  note?: ReactNode;
   children?: ReactNode;
 }) {
   const { patch, invalid, knowledgeBases } = useCanvas();
+  const { handlers, popup } = useHoverNote(note);
+  // The two handle sentences. They are descriptions like any other and answer
+  // the pointer the same way — a handle is 10px across, and a bubble that
+  // opened somewhere off to the side of one was the worst of the three
+  // behaviours this replaced.
+  const writeNote = useHoverNote(
+    "write — a machine wired in here may contribute to this base",
+  );
+  const readNote = useHoverNote(
+    "read — machines wired from here may consult this base",
+  );
   const variant = nodeKind(data.definition);
   const Glyph = KIND_GLYPHS[variant] ?? GLYPHS[kind];
   const name = KIND_NAME[variant] ?? TYPE_NAME[kind];
@@ -106,7 +122,9 @@ export function NodeShell({
         invalid.has(id) ? " invalid" : ""
       }${live ? " live" : ""}`}
       data-status={status}
+      {...handlers}
     >
+      {popup}
       {/* **A knowledge node's target handle is its `write` handle**, and a
           `principles` base does not render one.
 
@@ -119,13 +137,17 @@ export function NodeShell({
           than by a rule somebody has to read. */}
       {kind === "knowledge" ? (
         hasWriteHandle(data.definition, knowledgeBases) && (
-          <Handle
-            id="write"
-            type="target"
-            position={Position.Left}
-            className="handle-write"
-            title="write — a machine wired in here may contribute to this base"
-          />
+          <>
+            {writeNote.popup}
+            <Handle
+              id="write"
+              type="target"
+              position={Position.Left}
+              className="handle-write"
+              aria-label="write — a machine wired in here may contribute to this base"
+              {...writeNote.handlers}
+            />
+          </>
         )
       ) : (
         kind !== "input" && <Handle type="target" position={Position.Left} />
@@ -173,13 +195,17 @@ export function NodeShell({
           that may consult it. Always rendered — every base can be read, which
           is what a `principles` base is *for*. */}
       {kind === "knowledge" ? (
-        <Handle
-          id="read"
-          type="source"
-          position={Position.Right}
-          className="handle-read"
-          title="read — machines wired from here may consult this base"
-        />
+        <>
+          {readNote.popup}
+          <Handle
+            id="read"
+            type="source"
+            position={Position.Right}
+            className="handle-read"
+            aria-label="read — machines wired from here may consult this base"
+            {...readNote.handlers}
+          />
+        </>
       ) : hasOutcomePorts(data.definition) ? (
         <>
           <Handle

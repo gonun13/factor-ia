@@ -1,6 +1,7 @@
 import type { NodeProps } from "@xyflow/react";
-import type { FlowNode } from "../graph";
+import { nodeKind, type FlowNode } from "../graph";
 import { NO_OFFER, providerInForce, useCanvas } from "../canvasContext";
+import { HoverNote, useHoverNote } from "./NodeNote";
 import { NodeShell } from "./NodeShell";
 import { CodebaseGlyph, ModelGlyph, SkillGlyph } from "./Glyphs";
 
@@ -24,9 +25,9 @@ import { CodebaseGlyph, ModelGlyph, SkillGlyph } from "./Glyphs";
  * system prompt on every spawn. The plate carries the chosen skill's
  * description as well as its name, because "what is in force here" is the
  * question a canvas is read to answer, and a name alone answers it only for
- * whoever imported it — but it carries it as a tooltip off the plate, so the
- * sentence costs the machine no height and the canvas stays a canvas of
- * chassis rather than of paragraphs.
+ * whoever imported it — but it carries it as a popup under the pointer
+ * (`NodeNote`), so the sentence costs the machine no height and the canvas
+ * stays a canvas of chassis rather than of paragraphs.
  *
  * **The kind is not a plate, and deliberately not editable here.** What an agent
  * is for is decided when it is dropped — the palette offers a worker and a
@@ -47,11 +48,15 @@ export function AgentNode({ id, data }: NodeProps<FlowNode>) {
     projectSettings,
     skills,
   } = useCanvas();
+  const kind = nodeKind(data.definition);
   const attachedId = data.definition.codebase_id;
   const attached = codebases.find((codebase) => codebase.id === attachedId);
   const missing = attachedId !== null && attached === undefined;
   const git = attachedId ? gitStates[attachedId] : undefined;
   const artifact = data.runtime?.artifact ?? null;
+  // Git's answer where there is one, the workspace's otherwise — a checkout
+  // someone switched under you is exactly what this line is here to show.
+  const branch = attached ? (git?.branch ?? attached.branch) : null;
   const nodeModel = (data.definition.config.model as string | undefined) ?? "";
   // The provider that will actually drive *this* machine, and what it offers.
   // Not the CLI's list: a node a fake runs is offered five Claude ids it will
@@ -85,6 +90,14 @@ export function AgentNode({ id, data }: NodeProps<FlowNode>) {
   // `staleModel`'s reason: an unreadable `_skills/` must not make every node
   // that wears a skill look broken.
   const staleSkill = nodeSkill !== "" && skills.length > 0 && chosenSkill === undefined;
+  // The two plates that have something to say about themselves. Both answer
+  // the pointer where the pointer is, like every other description on a node
+  // (`NodeNote`) — the skill's own sentence, and, on a provider that reports
+  // its own model id, why the plate below it is moot.
+  const skillNote = useHoverNote(chosenSkill?.description ?? null, "skill-what");
+  const modelNote = useHoverNote(
+    offer.fixed ? `${provider} reports its own model id.` : null,
+  );
   // A provider that reports its own id regardless (`fixed`) makes both rungs
   // above it moot, so the project's choice is skipped rather than named — it
   // is stored and real, but it is not what this machine will run on.
@@ -96,7 +109,26 @@ export function AgentNode({ id, data }: NodeProps<FlowNode>) {
       : (offer.default_model ?? "chosen by the CLI");
 
   return (
-    <NodeShell id={id} kind="agent" data={data}>
+    <NodeShell
+      id={id}
+      kind="agent"
+      data={data}
+      note={
+        kind === "reviewer" ? (
+          <p>
+            Reads what came down the belt and judges it. It leaves by{" "}
+            <em>success</em> or by <em>fail</em>, and a fail belt drawn back up
+            the line sends the work round again — capped, so a disagreement
+            cannot run forever.
+          </p>
+        ) : (
+          <p>
+            Does the work, in its own worktree on the attached codebase. One
+            way out: whatever it produces goes on down the line.
+          </p>
+        )
+      }
+    >
       <div className={`slot${attachedId ? "" : " empty"}`}>
         <span className="slot-head">
           <CodebaseGlyph />
@@ -120,37 +152,59 @@ export function AgentNode({ id, data }: NodeProps<FlowNode>) {
             </option>
           ))}
         </select>
-        {attached && (
-          <span className="branch mono">
-            {attached.path}
-            {git?.branch ?? attached.branch ? ` · ${git?.branch ?? attached.branch}` : ""}
-          </span>
-        )}
-        {/* The codebase's own state, and the run's. DESIGN.md accepts host-side
-            git activity during a run as its residual risk and names visibility
-            as the mitigation — so both branches are on the node that owns them,
-            not in a status bar somewhere else. */}
-        {git && (
-          <span className={`gitstate${git.dirty ? " dirty" : ""}`}>
-            {!git.is_repo
-              ? git.detail || "not a git repository"
-              : git.dirty
-                ? `${git.change_count} uncommitted change${git.change_count === 1 ? "" : "s"}`
-                : "clean"}
-            {git.dirty && git.changes.length > 0 && (
-              <span className="mono" title={git.changes.join("\n")}>
-                {" "}
-                {git.changes[0].trim().split(/\s+/).slice(-1)[0]}
-                {git.change_count > 1 ? ` +${git.change_count - 1}` : ""}
+        {/* **Branch and state, on one line.** Where the checkout sits on the
+            host is the picker's business — the plate already names the
+            codebase, and a path repeated under every agent attached to it is a
+            line of noise that answers a question nobody asks of a machine.
+            What is worth the room is what changes under you, and the two
+            halves of that are one fact: `main · clean` reads as the state of a
+            branch, where a branch stacked above a status read as two.
+
+            DESIGN.md accepts host-side git activity during a run as its
+            residual risk and names visibility as the mitigation — so this sits
+            on the node that owns it, not in a status bar somewhere else. */}
+        {(branch || git) && (
+          <span className="branch-state">
+            {branch && <span className="branch mono">{branch}</span>}
+            {branch && git && (
+              <span className="branch-sep" aria-hidden="true">
+                ·
+              </span>
+            )}
+            {git && (
+              <span className={`gitstate${git.dirty ? " dirty" : ""}`}>
+                {!git.is_repo
+                  ? git.detail || "not a git repository"
+                  : git.dirty
+                    ? `${git.change_count} uncommitted change${
+                        git.change_count === 1 ? "" : "s"
+                      }`
+                    : "clean"}
+                {git.dirty && git.changes.length > 0 && (
+                  <HoverNote
+                    className="mono"
+                    note={
+                      <span className="note-lines">
+                        {git.changes.map((change) => (
+                          <span key={change}>{change.trim()}</span>
+                        ))}
+                      </span>
+                    }
+                  >
+                    {" "}
+                    {git.changes[0].trim().split(/\s+/).slice(-1)[0]}
+                    {git.change_count > 1 ? ` +${git.change_count - 1}` : ""}
+                  </HoverNote>
+                )}
               </span>
             )}
           </span>
         )}
         {artifact && (
-          <span className="worktree-line mono" title={artifact.path}>
+          <HoverNote className="worktree-line mono" note={artifact.path}>
             ⎇ {artifact.branch}
             {artifact.commitSha ? ` · ${artifact.commitSha.slice(0, 8)}` : " · isolated worktree"}
-          </span>
+          </HoverNote>
         )}
         {missing && <span className="warn">No longer discovered under /workspace.</span>}
         {!attachedId && <span className="warn">An agent cannot run without one.</span>}
@@ -158,7 +212,8 @@ export function AgentNode({ id, data }: NodeProps<FlowNode>) {
 
       {/* Never `.empty`. An unset model is the normal, correct state — it means
           "inherit" — unlike an unattached codebase, which is a hole. */}
-      <div className="slot model">
+      <div className="slot model" {...modelNote.handlers}>
+        {modelNote.popup}
         <span className="slot-head">
           <ModelGlyph />
           model · optional
@@ -168,7 +223,9 @@ export function AgentNode({ id, data }: NodeProps<FlowNode>) {
           value={nodeModel}
           aria-label="model override"
           disabled={offer.fixed}
-          title={offer.fixed ? `${provider} reports its own model id` : undefined}
+          // Why the plate is dead, in the popup every other description uses
+          // and in the accessible name behind it.
+          aria-describedby={offer.fixed ? `model-why-${id}` : undefined}
           onChange={(event) =>
             patch(id, {
               // The whole config, respread: `patchDefinition` replaces fields at
@@ -197,6 +254,11 @@ export function AgentNode({ id, data }: NodeProps<FlowNode>) {
         {/* What it actually ran on, off `session.init` — which is not always
             what anything asked for, because both rungs above may have deferred
             to the CLI. */}
+        {offer.fixed && (
+          <span className="offscreen" id={`model-why-${id}`}>
+            {provider} reports its own model id.
+          </span>
+        )}
         {data.runtime?.model && (
           <span className="branch mono">ran on {data.runtime.model}</span>
         )}
@@ -207,7 +269,8 @@ export function AgentNode({ id, data }: NodeProps<FlowNode>) {
           correct state. A skill is unconditional once attached, which is why a
           stale one is a `warn` here and a refused run in `runcheck` — the two
           sentences are deliberately the same. */}
-      <div className="slot skill">
+      <div className="slot skill" {...skillNote.handlers}>
+        {skillNote.popup}
         <span className="slot-head">
           <SkillGlyph />
           skill · optional
@@ -216,7 +279,7 @@ export function AgentNode({ id, data }: NodeProps<FlowNode>) {
           className="nodrag nowheel"
           value={nodeSkill}
           aria-label="skill"
-          // The tooltip is the plate's description, so say so: a sentence that
+          // The popup is the plate's description, so say so: a sentence that
           // only appears on hover is no sentence at all to a screen reader.
           aria-describedby={chosenSkill ? `skill-what-${id}` : undefined}
           onChange={(event) =>
@@ -240,8 +303,10 @@ export function AgentNode({ id, data }: NodeProps<FlowNode>) {
             </option>
           ))}
         </select>
+        {/* Read aloud, never drawn: the popup above is what a pointer gets,
+            and this is the same sentence for a reader who has none. */}
         {chosenSkill && (
-          <span className="skill-what" id={`skill-what-${id}`} role="tooltip">
+          <span className="offscreen" id={`skill-what-${id}`}>
             {chosenSkill.description}
           </span>
         )}

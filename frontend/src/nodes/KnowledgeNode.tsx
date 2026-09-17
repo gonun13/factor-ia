@@ -2,6 +2,7 @@ import type { NodeProps } from "@xyflow/react";
 import { knowledgeBase, knowledgeWritable, type FlowNode } from "../graph";
 import { useCanvas } from "../canvasContext";
 import { KNOWLEDGE_SCOPE_NOTE, type KnowledgeScope } from "../types";
+import { HoverNote } from "./NodeNote";
 import { NodeShell } from "./NodeShell";
 
 /** `8.2 kB`, `640 B`. One decimal and no more — the same scale the memory node
@@ -53,7 +54,25 @@ export function KnowledgeNode({ id, data }: NodeProps<FlowNode>) {
   const scope = base?.scope as KnowledgeScope | undefined;
 
   return (
-    <NodeShell id={id} kind="knowledge" data={data}>
+    <NodeShell
+      id={id}
+      kind="knowledge"
+      data={data}
+      note={
+        <>
+          {/* The scope, in words, because it is the one thing about a base
+              that changes what a wire to it means — and it is the manifest's
+              word, not this node's, so nobody can set it from here. */}
+          {scope && <p className="scope-note">{KNOWLEDGE_SCOPE_NOTE[scope]}</p>}
+          <p>
+            Wire this <em>out</em> to every machine that may consult it, and
+            wire a machine <em>in</em> to let it contribute — the direction is
+            the permission. This is not on the line: it never holds the run up
+            and never stops it. Nothing here is discarded when the run ends.
+          </p>
+        </>
+      }
+    >
       <label className="slot base">
         <span className="slot-name">base</span>
         <select
@@ -81,32 +100,20 @@ export function KnowledgeNode({ id, data }: NodeProps<FlowNode>) {
       </label>
 
       {base ? (
-        <p className="filed-line" title={base.about}>
+        <HoverNote tag="p" className="filed-line" note={base.about || null}>
           <span className="filed-dot" aria-hidden="true" />
           {base.scope} · {base.files} file{base.files === 1 ? "" : "s"} ·{" "}
           {size(base.bytes)}
           {!knowledgeWritable(base.scope) && (
             <span className="filed-locked"> · read-only</span>
           )}
-        </p>
+        </HoverNote>
       ) : (
         <p className="filed-line is-empty">
           <span className="filed-dot" aria-hidden="true" />
           {missing ? "base is missing" : "no base selected"}
         </p>
       )}
-
-      {/* The scope, in words, because it is the one thing about a base that
-          changes what a wire to it means — and it is the manifest's word, not
-          this node's, so nobody can set it from here. */}
-      {scope && <p className="node-note scope-note">{KNOWLEDGE_SCOPE_NOTE[scope]}</p>}
-
-      <p className="node-note">
-        Wire this <em>out</em> to every machine that may consult it, and wire a
-        machine <em>in</em> to let it contribute — the direction is the
-        permission. This is not on the line: it never holds the run up and never
-        stops it. Nothing here is discarded when the run ends.
-      </p>
     </NodeShell>
   );
 }

@@ -1,6 +1,7 @@
 import type { NodeProps } from "@xyflow/react";
 import { nodeKind, type FlowNode } from "../graph";
 import { useCanvas } from "../canvasContext";
+import { HoverNote } from "./NodeNote";
 import { NodeShell } from "./NodeShell";
 
 /**
@@ -29,11 +30,17 @@ export function OutputNode({ id, data }: NodeProps<FlowNode>) {
   const artifact = data.runtime?.artifact ?? null;
 
   return (
-    <NodeShell id={id} kind="output" data={data}>
-      <p className="node-note">
-        A commit on <code>factor-ia/&lt;factory&gt;/&lt;run&gt;</code>, left in
-        the attached codebase for review.
-      </p>
+    <NodeShell
+      id={id}
+      kind="output"
+      data={data}
+      note={
+        <p>
+          A commit on <code>factor-ia/&lt;factory&gt;/&lt;run&gt;</code>, left
+          in the attached codebase for review.
+        </p>
+      }
+    >
 
       {kind !== "commit" && (
         <div className="slot reach">
@@ -66,9 +73,9 @@ export function OutputNode({ id, data }: NodeProps<FlowNode>) {
       )}
 
       {artifact && (artifact.kind === "push" || artifact.kind === "merge") && (
-        <span className="worktree-line mono" title={artifact.detail}>
+        <HoverNote className="worktree-line mono" note={artifact.detail}>
           ↥ {artifact.remote}/{artifact.mergedInto ?? artifact.branch}
-        </span>
+        </HoverNote>
       )}
     </NodeShell>
   );

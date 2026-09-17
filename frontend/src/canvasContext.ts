@@ -20,7 +20,7 @@ import type {
   SkillSummary,
 } from "./types";
 
-export type ProviderName = "claude" | "fake";
+export type ProviderName = "claude" | "cursor" | "fake";
 
 /** What a provider offers when `/api/agent/status` has not answered yet. Empty
  * and not `fixed`: an unreachable status must render as "no list", never as a
@@ -47,7 +47,9 @@ export function providerInForce(
 ): ProviderName {
   if (containerProvider === "fake") return "fake";
   const named = nodeAdapter || projectSettings.default_provider || containerProvider;
-  return named === "fake" ? "fake" : "claude";
+  if (named === "fake") return "fake";
+  if (named === "cursor") return "cursor";
+  return "claude";
 }
 
 export type CanvasContextValue = {

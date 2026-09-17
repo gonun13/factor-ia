@@ -675,7 +675,7 @@ class ProjectSettings(Base):
 
     #: The adapter every agent in this project uses unless it names its own.
     #: `None` defers to `FACTOR_IA_ADAPTER`, which defaults to the real one.
-    default_provider: Literal["claude", "fake"] | None = None
+    default_provider: Literal["claude", "cursor", "fake"] | None = None
     #: A model id as the CLI's own handshake spells it. Deliberately **not**
     #: validated against that list: the list is a subprocess away and the CLI is
     #: the authority, so a stale id is stored, sent, and refused by the CLI in

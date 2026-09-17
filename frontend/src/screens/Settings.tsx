@@ -1,5 +1,5 @@
 /**
- * Settings — the agent account and git access.
+ * Settings — agent accounts (Claude + Cursor) and git access.
  *
  * Deliberately a small, plain screen and not a second canvas. `DESIGN.md`'s
  * defining constraint is that *building and operating* are one surface; this is
@@ -15,6 +15,9 @@
  * and is sent whole; the `#` is not a fragment, and stripping it fails every
  * login.
  *
+ * Claude and Cursor are separate credentials on the same agent-home volume —
+ * signing into one does not cover the other.
+ *
  * The URL arrives from a poll rather than from a click, so it is rendered as a
  * link and never opened programmatically — a `window.open()` outside a user
  * gesture is what popup blockers exist for, and the failure would be silent.
@@ -23,21 +26,167 @@
  * changes over a minute of human time.
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactElement } from "react";
 import { api } from "../api";
-import type { AgentStatus, LoginState, SshKeyStatus } from "../types";
+import type { AccountStatus, AgentStatus, LoginState, SshKeyStatus } from "../types";
 
 const POLL_MS = 1000;
+
+function ProviderAccount({
+  title,
+  cliLabel,
+  account,
+  defaultModel,
+  defaultModelDetail,
+  login,
+  code,
+  setCode,
+  urlCopied,
+  setUrlCopied,
+  busy,
+  onBegin,
+  onSubmit,
+  onCancel,
+}: {
+  title: string;
+  cliLabel: string;
+  account: AccountStatus | undefined;
+  defaultModel: string | null | undefined;
+  defaultModelDetail: string | null | undefined;
+  login: LoginState | null;
+  code: string;
+  setCode: (value: string) => void;
+  urlCopied: boolean;
+  setUrlCopied: (value: boolean) => void;
+  busy: boolean;
+  onBegin: () => Promise<void>;
+  onSubmit: (code: string) => Promise<void>;
+  onCancel: () => Promise<void>;
+}): ReactElement {
+  const signedIn = account?.authenticated === true;
+  return (
+    <section className="setting">
+      <div className="setting-head">
+        <span className="eyebrow">{title}</span>
+        <span className={signedIn ? "ok" : "bad"}>
+          {account === undefined
+            ? "checking…"
+            : !account.reachable
+              ? "CLI unavailable"
+              : signedIn
+                ? "signed in"
+                : "not signed in"}
+        </span>
+      </div>
+      <dl className="facts">
+        <dt>{cliLabel}</dt>
+        <dd className="mono">{account?.version ?? "—"}</dd>
+        <dt>account</dt>
+        <dd>{account?.detail || "—"}</dd>
+        <dt>default model</dt>
+        <dd className="mono">{defaultModel ?? defaultModelDetail ?? "—"}</dd>
+      </dl>
+
+      {!signedIn && !login?.active && (
+        <div className="setting-actions">
+          <button className="primary" disabled={busy} onClick={() => void onBegin()}>
+            Sign in
+          </button>
+          {login?.phase === "failed" && login.detail && (
+            <span className="bad">{login.detail}</span>
+          )}
+        </div>
+      )}
+
+      {login?.active && (
+        <div className="login-flow">
+          {login.verification_url ? (
+            <>
+              <p className="lede">
+                Approve the sign-in in your browser, then paste the code it gives
+                you back here.
+              </p>
+              <a
+                className="open-signin"
+                href={login.verification_url}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                Open sign-in page ↗
+              </a>
+              <div className="url-row">
+                <input
+                  className="verification-url mono"
+                  readOnly
+                  value={login.verification_url}
+                  aria-label="Verification URL"
+                  onFocus={(event) => event.currentTarget.select()}
+                />
+                <button
+                  type="button"
+                  onClick={() => {
+                    void navigator.clipboard?.writeText(login.verification_url ?? "");
+                    setUrlCopied(true);
+                    window.setTimeout(() => setUrlCopied(false), 1500);
+                  }}
+                >
+                  {urlCopied ? "Copied" : "Copy link"}
+                </button>
+              </div>
+            </>
+          ) : (
+            <p className="lede">Starting sign-in…</p>
+          )}
+
+          <form
+            className="create-row"
+            onSubmit={(event) => {
+              event.preventDefault();
+              const value = code.trim();
+              if (!value) return;
+              void onSubmit(value);
+            }}
+          >
+            <input
+              value={code}
+              onChange={(event) => setCode(event.target.value)}
+              placeholder="Paste the code, including everything after the #"
+              aria-label="Verification code"
+              spellCheck={false}
+              autoComplete="off"
+              disabled={login.phase === "verifying"}
+            />
+            <button className="primary" type="submit" disabled={!code.trim() || busy}>
+              {login.phase === "verifying" ? "Verifying…" : "Submit"}
+            </button>
+            <button type="button" disabled={busy} onClick={() => void onCancel()}>
+              Cancel
+            </button>
+          </form>
+          {login.detail && (
+            <p className={login.retryable ? "bad" : "lede"}>
+              {login.detail}
+              {login.retryable && " — the link above is still good, try again."}
+            </p>
+          )}
+        </div>
+      )}
+    </section>
+  );
+}
 
 export function Settings({ onBack }: { onBack: () => void }) {
   const [status, setStatus] = useState<AgentStatus | null>(null);
   const [login, setLogin] = useState<LoginState | null>(null);
+  const [cursorLogin, setCursorLogin] = useState<LoginState | null>(null);
   const [key, setKey] = useState<SshKeyStatus | null>(null);
   const [code, setCode] = useState("");
+  const [cursorCode, setCursorCode] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [urlCopied, setUrlCopied] = useState(false);
+  const [cursorUrlCopied, setCursorUrlCopied] = useState(false);
   const live = useRef(true);
 
   const refreshStatus = useCallback(async () => {
@@ -47,11 +196,17 @@ export function Settings({ onBack }: { onBack: () => void }) {
 
   useEffect(() => {
     live.current = true;
-    Promise.all([api.agentStatus(), api.loginState(), api.sshKey()])
-      .then(([account, flow, sshKey]) => {
+    Promise.all([
+      api.agentStatus(),
+      api.loginState(),
+      api.cursorLoginState(),
+      api.sshKey(),
+    ])
+      .then(([account, flow, cursorFlow, sshKey]) => {
         if (!live.current) return;
         setStatus(account);
         setLogin(flow);
+        setCursorLogin(cursorFlow);
         setKey(sshKey);
       })
       .catch((cause: unknown) => live.current && setError(String(cause)));
@@ -60,8 +215,6 @@ export function Settings({ onBack }: { onBack: () => void }) {
     };
   }, []);
 
-  // Poll only while a flow is in flight. A settings screen left open must not
-  // sit there asking a question whose answer cannot change.
   useEffect(() => {
     if (!login?.active) return;
     const timer = window.setInterval(async () => {
@@ -71,11 +224,26 @@ export function Settings({ onBack }: { onBack: () => void }) {
         setLogin(next);
         if (!next.active) void refreshStatus();
       } catch {
-        /* a poll that fails is retried on the next tick */
+        /* retried next tick */
       }
     }, POLL_MS);
     return () => window.clearInterval(timer);
   }, [login?.active, refreshStatus]);
+
+  useEffect(() => {
+    if (!cursorLogin?.active) return;
+    const timer = window.setInterval(async () => {
+      try {
+        const next = await api.cursorLoginState();
+        if (!live.current) return;
+        setCursorLogin(next);
+        if (!next.active) void refreshStatus();
+      } catch {
+        /* retried next tick */
+      }
+    }, POLL_MS);
+    return () => window.clearInterval(timer);
+  }, [cursorLogin?.active, refreshStatus]);
 
   async function guard(action: () => Promise<void>) {
     setBusy(true);
@@ -91,7 +259,8 @@ export function Settings({ onBack }: { onBack: () => void }) {
 
   const account = status?.account;
   const handshake = status?.handshake;
-  const signedIn = account?.authenticated === true;
+  const cursorAccount = status?.cursor_account;
+  const cursorOffer = status?.providers?.cursor;
 
   return (
     <div className="app">
@@ -111,160 +280,81 @@ export function Settings({ onBack }: { onBack: () => void }) {
         <div className="screen-inner">
           <h1>Settings</h1>
           <p className="lede">
-            Once per machine: sign the container in to your agent provider, and
-            give it a key so a run can push.
+            Once per machine: sign the container in to each agent provider you
+            use, and give it a key so a run can push. Claude and Cursor keep
+            separate credentials.
           </p>
 
           {error && <div className="error">{error}</div>}
 
-          {/* ---- agent account ------------------------------------------- */}
-          <section className="setting">
-            <div className="setting-head">
-              <span className="eyebrow">Agent account</span>
-              <span className={signedIn ? "ok" : "bad"}>
-                {account === undefined
-                  ? "checking…"
-                  : !account.reachable
-                    ? "CLI unavailable"
-                    : signedIn
-                      ? "signed in"
-                      : "not signed in"}
-              </span>
-            </div>
-            <dl className="facts">
-              <dt>claude CLI</dt>
-              <dd className="mono">{account?.version ?? "—"}</dd>
-              <dt>account</dt>
-              <dd>{account?.detail || "—"}</dd>
-              <dt>default model</dt>
-              {/* Read from the CLI's own handshake, never hardcoded. */}
-              <dd className="mono">
-                {handshake?.default_model ?? handshake?.detail ?? "—"}
-              </dd>
-            </dl>
+          <ProviderAccount
+            title="Claude account"
+            cliLabel="claude CLI"
+            account={account}
+            defaultModel={handshake?.default_model}
+            defaultModelDetail={handshake?.detail}
+            login={login}
+            code={code}
+            setCode={setCode}
+            urlCopied={urlCopied}
+            setUrlCopied={setUrlCopied}
+            busy={busy}
+            onBegin={async () => {
+              await guard(async () => {
+                setCode("");
+                setLogin(await api.beginLogin());
+              });
+            }}
+            onSubmit={async (value) => {
+              await guard(async () => {
+                setLogin(await api.submitLoginCode(value));
+                setCode("");
+              });
+            }}
+            onCancel={async () => {
+              await guard(async () => {
+                setLogin(await api.cancelLogin());
+                await refreshStatus();
+              });
+            }}
+          />
 
-            {!signedIn && !login?.active && (
-              <div className="setting-actions">
-                <button
-                  className="primary"
-                  disabled={busy}
-                  onClick={() =>
-                    guard(async () => {
-                      setCode("");
-                      setLogin(await api.beginLogin());
-                    })
-                  }
-                >
-                  Sign in
-                </button>
-                {login?.phase === "failed" && login.detail && (
-                  <span className="bad">{login.detail}</span>
-                )}
-              </div>
-            )}
+          <ProviderAccount
+            title="Cursor account"
+            cliLabel="cursor agent CLI"
+            account={cursorAccount}
+            defaultModel={cursorOffer?.default_model}
+            defaultModelDetail={
+              cursorAccount && !cursorAccount.reachable
+                ? cursorAccount.detail
+                : cursorOffer?.default_model_label
+            }
+            login={cursorLogin}
+            code={cursorCode}
+            setCode={setCursorCode}
+            urlCopied={cursorUrlCopied}
+            setUrlCopied={setCursorUrlCopied}
+            busy={busy}
+            onBegin={async () => {
+              await guard(async () => {
+                setCursorCode("");
+                setCursorLogin(await api.beginCursorLogin());
+              });
+            }}
+            onSubmit={async (value) => {
+              await guard(async () => {
+                setCursorLogin(await api.submitCursorLoginCode(value));
+                setCursorCode("");
+              });
+            }}
+            onCancel={async () => {
+              await guard(async () => {
+                setCursorLogin(await api.cancelCursorLogin());
+                await refreshStatus();
+              });
+            }}
+          />
 
-            {login?.active && (
-              <div className="login-flow">
-                {login.verification_url ? (
-                  <>
-                    <p className="lede">
-                      Approve the sign-in in your browser, then paste the code
-                      it gives you back here.
-                    </p>
-                    {/* A real anchor, clicked by the operator. Never
-                        `window.open()` on arrival: the URL lands from a poll,
-                        which is not a user gesture, so a popup blocker would
-                        swallow it and nothing at all would appear to happen.
-                        A clicked link is always a gesture and is never
-                        blocked. `noopener` because an OAuth page must not get
-                        a handle on `window.opener`. */}
-                    <a
-                      className="open-signin"
-                      href={login.verification_url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                    >
-                      Open sign-in page ↗
-                    </a>
-                    {/* The raw URL stays visible and selectable: approving in
-                        a different browser or a different profile from the one
-                        running Factor-ia means carrying it across by hand. */}
-                    <div className="url-row">
-                      <input
-                        className="verification-url mono"
-                        readOnly
-                        value={login.verification_url}
-                        aria-label="Verification URL"
-                        onFocus={(event) => event.currentTarget.select()}
-                      />
-                      <button
-                        type="button"
-                        onClick={() => {
-                          void navigator.clipboard?.writeText(
-                            login.verification_url ?? "",
-                          );
-                          setUrlCopied(true);
-                          window.setTimeout(() => setUrlCopied(false), 1500);
-                        }}
-                      >
-                        {urlCopied ? "Copied" : "Copy link"}
-                      </button>
-                    </div>
-                  </>
-                ) : (
-                  <p className="lede">Starting sign-in…</p>
-                )}
-
-                <form
-                  className="create-row"
-                  onSubmit={(event) => {
-                    event.preventDefault();
-                    const value = code.trim();
-                    if (!value) return;
-                    void guard(async () => {
-                      // Sent whole: the value is `<code>#<state>` and the `#`
-                      // is not a URL fragment to trim off.
-                      setLogin(await api.submitLoginCode(value));
-                      setCode("");
-                    });
-                  }}
-                >
-                  <input
-                    value={code}
-                    onChange={(event) => setCode(event.target.value)}
-                    placeholder="Paste the code, including everything after the #"
-                    aria-label="Verification code"
-                    spellCheck={false}
-                    autoComplete="off"
-                    disabled={login.phase === "verifying"}
-                  />
-                  <button className="primary" type="submit" disabled={!code.trim() || busy}>
-                    {login.phase === "verifying" ? "Verifying…" : "Submit"}
-                  </button>
-                  <button
-                    type="button"
-                    disabled={busy}
-                    onClick={() =>
-                      guard(async () => {
-                        setLogin(await api.cancelLogin());
-                        await refreshStatus();
-                      })
-                    }
-                  >
-                    Cancel
-                  </button>
-                </form>
-                {login.detail && (
-                  <p className={login.retryable ? "bad" : "lede"}>
-                    {login.detail}
-                    {login.retryable && " — the link above is still good, try again."}
-                  </p>
-                )}
-              </div>
-            )}
-          </section>
-
-          {/* ---- git access ---------------------------------------------- */}
           <section className="setting">
             <div className="setting-head">
               <span className="eyebrow">Git access</span>

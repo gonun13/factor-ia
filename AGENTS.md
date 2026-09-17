@@ -1,0 +1,79 @@
+# AGENTS.md
+
+Instructions for any agent — human-directed or automated — working in this
+repository.
+
+## Spec-driven development
+
+Authoritative product and engineering intent lives under [`spec/`](spec/).
+When specs disagree, respect them in this order (higher wins on conflict):
+
+1. [`PROJECT.md`](spec/PROJECT.md)
+2. [`DOMAIN.md`](spec/DOMAIN.md), [`ARCHITECTURE.md`](spec/ARCHITECTURE.md)
+3. [`UIUX.md`](spec/UIUX.md), [`DATA.md`](spec/DATA.md)
+4. [`BEHAVIOUR/`](spec/BEHAVIOUR/), [`DECISIONS/`](spec/DECISIONS/)
+5. [`TESTS.md`](spec/TESTS.md)
+
+**Implement and review against these docs before inventing behaviour.**
+
+## The tree
+
+| path | what it settles |
+|---|---|
+| `spec/PROJECT.md` | Goal, purpose, requirements, non-goals, the happy path, compliance. |
+| `spec/DOMAIN.md` | Entities, the kind vocabularies, and the invariants that must hold. |
+| `spec/ARCHITECTURE.md` | Structure, components, boundaries, the API, storage, the adapter seam, the stack, and the security requirements. |
+| `spec/UIUX.md` | The canvas, the run experience, settings, and the copy rules. |
+| `spec/DATA.md` | Contracts, file formats, persistence, concurrency. |
+| `spec/BEHAVIOUR/` | One file per system: `run-execution`, `review-loops`, `git-output`, `human-nodes`, `knowledge`, `memory`. |
+| `spec/DECISIONS/` | Numbered records for choices that outlive their diff. Read `DECISIONS/README.md` before adding one. |
+| `spec/TESTS.md` | How this project is verified, and what acceptance means. |
+
+## Rules that apply to every change here
+
+**A spec sentence with no marker is a claim that the thing holds today.**
+Anything the code does not yet satisfy carries a bold **Not built.** marker.
+Writing an unmarked claim the code does not meet is the one failure mode this
+tree exists to prevent — so before stating that a control, a rule or a behaviour
+holds, check that it does.
+
+**Verify before you write it down.** Every status in
+`spec/ARCHITECTURE.md`'s security table, and every mechanism claim in
+`spec/BEHAVIOUR/`, was checked against the code rather than copied from prose.
+Hold a change to the same standard.
+
+**Update the spec with the code, in the same change.** A behaviour change that
+leaves `spec/` describing the old behaviour is an incomplete change. If a change
+contradicts a decision record, add a superseding record — never edit a record's
+verdict.
+
+**Say what you did not do.** If part of a task is blocked, finish everything
+else and state plainly what was left and why. A green result over partial work
+is the same lie as a green tick over an empty branch, which this product refuses
+by design.
+
+## What is *not* in `spec/`
+
+- `docs/BUILD_STATE.md` — the build log: stages, decisions as they were taken,
+  and the still-open list. **Operator-local and gitignored.** History, not
+  authority; where something in it is still binding, it is restated in `spec/`.
+- `docs/SECURITY_PRD.md` — the defect analysis behind the six security
+  requirements. **Operator-local and gitignored on purpose** (`.gitignore:27`):
+  two of those defects describe a working path from a web page to code execution
+  on the operator's machine, and this repository is intended to be published.
+  The *requirements* are public, in `spec/ARCHITECTURE.md`; the map is not.
+- `README.md` — setup and operation for a person installing this. It is not a
+  design document, and feature write-ups do not go in it.
+
+## Working conventions
+
+- **Tests:** `cd backend && uv sync && uv run pytest`. UI tests are Playwright
+  scripts under `uitests/`, run through the `uitest` compose profile. See
+  `spec/TESTS.md` for which layer a new proof belongs in.
+- **Nothing new should need a token to be verified.** `FACTOR_IA_ADAPTER=fake`
+  runs the whole execution path without a provider call, and the suite depends
+  on that staying true.
+- **Failures are sentences, not codes** — a product rule, so also a test rule.
+- **The workspace is the only shared surface.** Codebases are discovered, never
+  supplied; every path derived from a request is re-checked against `/workspace`
+  with symlinks resolved.

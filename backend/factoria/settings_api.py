@@ -1,15 +1,18 @@
-"""The settings surface: agent account, sign-in, and git access.
+"""The settings surface: agent accounts, sign-in, and git access.
 
-This is the second face of the CLI subprocess layer (`DESIGN.md`, *The Claude
-CLI is the one runtime dependency*) — the same supervisor pointed at different
-subcommands. The frontend never executes anything itself; it drives these
-invocations, which is what lets a browser tab sign the container in.
+This is the second face of the CLI subprocess layer — the same supervisor
+pointed at different subcommands for Claude and Cursor. The frontend never
+executes anything itself; it drives these invocations, which is what lets a
+browser tab sign the container in.
 
 **Sign-in is polled, not streamed.** SSE is stage 5's, and a login has perhaps
 four state changes over a minute of human time — a `GET` every second is less
 machinery than a second event transport, and it reconnects for free when the
 operator's tab sleeps. The state is server-side and single-flighted, so polling
 from two tabs shows both the same flow rather than starting a second.
+
+Claude and Cursor each have their own login slot (`/api/agent/login*` and
+`/api/agent/cursor/login*`) so one provider's flow cannot steal the other's.
 
 **Scrubbing.** Everything returned from here that came from a subprocess passes
 through `scrub.scrub_text` first — this is one of the two boundaries the design
@@ -28,7 +31,7 @@ from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field
 
 from . import config, sshkeys
-from .agent import cli, login
+from .agent import cli, cursor_cli, cursor_login, login
 from .agent.fake import FAKE_MODEL
 from .scrub import scrub_text
 
@@ -93,11 +96,24 @@ def _fake_offer() -> ModelOffer:
     )
 
 
+def _normalize_default_provider(name: str) -> str:
+    """Coerce like `orchestrator.adapter_name_for`'s container rung."""
+    name = name.strip().lower()
+    if name == "fake":
+        return "fake"
+    if name == "cursor":
+        return "cursor"
+    return "claude"
+
+
 class AgentStatus(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    #: Claude account — kept as the primary `account` field so existing clients
+    #: keep working; Settings also reads `cursor_account` for the second block.
     account: cli.AccountStatus
     handshake: cli.Handshake
+    cursor_account: cli.AccountStatus
     #: What a run uses when neither the node nor the project names a provider —
     #: `FACTOR_IA_ADAPTER`, normalized. An environment fact the browser has no
     #: other way to learn, and the settings panel names it rather than saying
@@ -116,30 +132,31 @@ def _scrubbed(account: cli.AccountStatus) -> cli.AccountStatus:
 
 @router.get("/agent/status", response_model=AgentStatus)
 async def agent_status() -> AgentStatus:
-    """Account status plus what the CLI says it offers.
+    """Account status for both CLIs plus what each provider offers.
 
-    Two subprocess calls, both free of tokens and both answering while signed
-    out — which is what makes the default model readable before the operator
-    has ever signed in.
+    Claude handshake + Cursor models listing, both free of tokens and both
+    answering while signed out — which is what makes the default model readable
+    before the operator has ever signed in.
     """
     account = _scrubbed(await cli.auth_status())
     handshake = await cli.handshake()
-    # Coerced the same way `orchestrator.adapter_name_for` coerces it, so the
-    # panel cannot show a third value that no run would ever resolve to.
-    name = config.adapter_name()
+    cursor_account = _scrubbed(await cursor_cli.auth_status())
+    cursor_handshake = await cursor_cli.models_handshake()
     return AgentStatus(
         account=account,
         handshake=handshake,
-        default_provider="fake" if name == "fake" else "claude",
-        # `handshake` stays the CLI's own answer — the settings screen reads it
-        # to say whether the CLI is reachable, which is not a question about
-        # models. This is that same answer shaped for the pickers, alongside
-        # the provider the CLI knows nothing about.
+        cursor_account=cursor_account,
+        default_provider=_normalize_default_provider(config.adapter_name()),
         providers={
             "claude": ModelOffer(
                 models=handshake.models,
                 default_model=handshake.default_model,
                 default_model_label=handshake.default_model_label,
+            ),
+            "cursor": ModelOffer(
+                models=cursor_handshake.models,
+                default_model=cursor_handshake.default_model,
+                default_model_label=cursor_handshake.default_model_label,
             ),
             "fake": _fake_offer(),
         },
@@ -148,13 +165,13 @@ async def agent_status() -> AgentStatus:
 
 @router.get("/agent/login", response_model=login.LoginState)
 async def read_login() -> login.LoginState:
-    """The current sign-in flow, for polling. Never starts one."""
+    """The current Claude sign-in flow, for polling. Never starts one."""
     return login.login_state()
 
 
 @router.post("/agent/login", response_model=login.LoginState)
 async def begin_login() -> login.LoginState:
-    """Start a sign-in, or join the one already in progress (single-flight)."""
+    """Start a Claude sign-in, or join the one already in progress (single-flight)."""
     return await login.start_login()
 
 
@@ -169,6 +186,28 @@ async def submit_login_code(body: CodeSubmission) -> login.LoginState:
 @router.post("/agent/login/cancel", response_model=login.LoginState)
 async def cancel_login() -> login.LoginState:
     return await login.cancel_login()
+
+
+@router.get("/agent/cursor/login", response_model=cursor_login.LoginState)
+async def read_cursor_login() -> cursor_login.LoginState:
+    """The current Cursor sign-in flow, for polling. Never starts one."""
+    return cursor_login.login_state()
+
+
+@router.post("/agent/cursor/login", response_model=cursor_login.LoginState)
+async def begin_cursor_login() -> cursor_login.LoginState:
+    """Start a Cursor sign-in, or join the one already in progress."""
+    return await cursor_login.start_login()
+
+
+@router.post("/agent/cursor/login/code", response_model=cursor_login.LoginState)
+async def submit_cursor_login_code(body: CodeSubmission) -> cursor_login.LoginState:
+    return cursor_login.submit_code(body.code)
+
+
+@router.post("/agent/cursor/login/cancel", response_model=cursor_login.LoginState)
+async def cancel_cursor_login() -> cursor_login.LoginState:
+    return await cursor_login.cancel_login()
 
 
 @router.get("/ssh/key", response_model=sshkeys.SshKeyStatus)

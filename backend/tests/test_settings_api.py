@@ -17,13 +17,17 @@ from factoria.agent import login
 from factoria.agent.fake import FAKE_MODEL
 
 STUB = Path(__file__).parent / "stub_auth_cli.py"
+CURSOR_STUB = Path(__file__).parent / "stub_cursor_cli.py"
 
 
 @pytest.fixture
 def stubbed(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     session = tmp_path / "session"
+    cursor_session = tmp_path / "cursor-session"
     monkeypatch.setenv("FACTOR_IA_CLAUDE_BIN", str(STUB))
     monkeypatch.setenv("STUB_SESSION", str(session))
+    monkeypatch.setenv("FACTOR_IA_CURSOR_BIN", str(CURSOR_STUB))
+    monkeypatch.setenv("STUB_CURSOR_SESSION", str(cursor_session))
     home = tmp_path / "agent-home"
     home.mkdir()
     monkeypatch.setattr(config, "AGENT_HOME", home)
@@ -52,11 +56,14 @@ def test_every_provider_reports_what_it_offers_not_just_the_cli(
     cannot tell, because what an adapter honours is not visible from there.
     """
     body = client.get("/api/agent/status").json()
-    assert set(body["providers"]) == {"claude", "fake"}
+    assert set(body["providers"]) == {"claude", "cursor", "fake"}
 
     # The CLI's entry is the handshake's answer, not a second opinion on it.
     assert body["providers"]["claude"]["default_model"] == body["handshake"]["default_model"]
     assert body["providers"]["claude"]["fixed"] is False
+
+    assert body["providers"]["cursor"]["default_model"] == "composer-2.5"
+    assert body["providers"]["cursor"]["fixed"] is False
 
     # The fake's is its own: one model, which is also its default, and `fixed`
     # — it keeps only the session id off a `RunConfig` and reports this id
@@ -124,7 +131,7 @@ def test_a_token_shaped_detail_is_scrubbed_before_it_is_returned(
     assert "[redacted:anthropic-key]" in detail
 
 
-def test_status_names_the_container_s_default_provider(client, monkeypatch) -> None:
+def test_status_names_the_container_s_default_provider(stubbed, client, monkeypatch) -> None:
     """The browser cannot read `FACTOR_IA_ADAPTER`, so the API says it.
 
     Without this the settings panel can only offer "the container default" as an

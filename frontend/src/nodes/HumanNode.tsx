@@ -1,6 +1,7 @@
 import type { NodeProps } from "@xyflow/react";
 import type { FlowNode } from "../graph";
 import { NO_OFFER, providerInForce, useCanvas } from "../canvasContext";
+import { useHoverNote } from "./NodeNote";
 import { NodeShell } from "./NodeShell";
 import { ModelGlyph, SkillGlyph } from "./Glyphs";
 import { nodeKind } from "../graph";
@@ -35,31 +36,6 @@ export function HumanNode({ id, data }: NodeProps<FlowNode>) {
   const config = data.definition.config ?? {};
   const kind = nodeKind(data.definition);
 
-  if (kind !== "scope") {
-    const prompt = typeof config.prompt === "string" ? (config.prompt as string) : "";
-    return (
-      <NodeShell id={id} kind="human" data={data}>
-        <div className="slot">
-          <span className="slot-head">asks</span>
-          <input
-            className="nodrag"
-            value={prompt}
-            placeholder="Does this look right?"
-            aria-label="what to ask the operator"
-            spellCheck={false}
-            onChange={(event) =>
-              patch(id, { config: { ...config, prompt: event.target.value } })
-            }
-          />
-        </div>
-        <p className="node-note">
-          The line stops here. Approving takes the upper belt, rejecting the lower
-          one — and a rejection with no belt drawn for it ends the run.
-        </p>
-      </NodeShell>
-    );
-  }
-
   const nodeSkill = (config.skill as string | undefined) ?? "";
   const chosenSkill = skills.find((skill) => skill.name === nodeSkill);
   // Guarded on a non-empty list for `AgentNode`'s reason: an unreadable
@@ -85,13 +61,64 @@ export function HumanNode({ id, data }: NodeProps<FlowNode>) {
         projectSettings.default_model)
       : (offer.default_model ?? "chosen by the CLI");
 
+  // Both plates below, and the notes they answer the pointer with. A sign-off
+  // node uses neither, but hooks cannot live behind the early return under
+  // them, and derivations off `config` cost nothing when nothing reads them.
+  const skillNote = useHoverNote(chosenSkill?.description ?? null, "skill-what");
+  const modelNote = useHoverNote(
+    offer.fixed ? `${provider} reports its own model id.` : null,
+  );
+
+  if (kind !== "scope") {
+    const prompt = typeof config.prompt === "string" ? (config.prompt as string) : "";
+    return (
+      <NodeShell
+        id={id}
+        kind="human"
+        data={data}
+        note={
+          <p>
+            The line stops here. Approving takes the upper belt, rejecting the
+            lower one — and a rejection with no belt drawn for it ends the run.
+          </p>
+        }
+      >
+        <div className="slot">
+          <span className="slot-head">asks</span>
+          <input
+            className="nodrag"
+            value={prompt}
+            placeholder="Does this look right?"
+            aria-label="what to ask the operator"
+            spellCheck={false}
+            onChange={(event) =>
+              patch(id, { config: { ...config, prompt: event.target.value } })
+            }
+          />
+        </div>
+      </NodeShell>
+    );
+  }
+
   return (
-    <NodeShell id={id} kind="human" data={data}>
+    <NodeShell
+      id={id}
+      kind="human"
+      data={data}
+      note={
+        <p>
+          The line stops here and an agent interviews you, one question at a
+          time. The answers become a document on the upper belt; a session that
+          ends without one takes the lower belt.
+        </p>
+      }
+    >
       {/* `.empty` when unset, unlike an agent's skill plate — here it is the
           hole, not the normal state. A scope node with no skill interviews the
           operator about whatever occurs to it, which is a chat and not an
           interview, and the server refuses the run. */}
-      <div className={`slot${nodeSkill ? "" : " empty"}`}>
+      <div className={`slot skill${nodeSkill ? "" : " empty"}`} {...skillNote.handlers}>
+        {skillNote.popup}
         <span className="slot-head">
           <SkillGlyph />
           skill · required
@@ -119,8 +146,9 @@ export function HumanNode({ id, data }: NodeProps<FlowNode>) {
             </option>
           ))}
         </select>
+        {/* Read aloud, never drawn — the popup is what a pointer gets. */}
         {chosenSkill && (
-          <span className="skill-what" id={`skill-what-${id}`} role="tooltip">
+          <span className="offscreen" id={`skill-what-${id}`}>
             {chosenSkill.description}
           </span>
         )}
@@ -132,7 +160,8 @@ export function HumanNode({ id, data }: NodeProps<FlowNode>) {
 
       {/* Never `.empty` — an unset model means "inherit", which is the normal,
           correct state. Same plate as an agent's, same ladder behind it. */}
-      <div className="slot model">
+      <div className="slot model" {...modelNote.handlers}>
+        {modelNote.popup}
         <span className="slot-head">
           <ModelGlyph />
           model · optional
@@ -142,7 +171,7 @@ export function HumanNode({ id, data }: NodeProps<FlowNode>) {
           value={nodeModel}
           aria-label="model override"
           disabled={offer.fixed}
-          title={offer.fixed ? `${provider} reports its own model id` : undefined}
+          aria-describedby={offer.fixed ? `model-why-${id}` : undefined}
           onChange={(event) =>
             patch(id, {
               config: { ...config, model: event.target.value || undefined },
@@ -159,17 +188,16 @@ export function HumanNode({ id, data }: NodeProps<FlowNode>) {
             </option>
           ))}
         </select>
+        {offer.fixed && (
+          <span className="offscreen" id={`model-why-${id}`}>
+            {provider} reports its own model id.
+          </span>
+        )}
         {data.runtime?.model && (
           <span className="branch mono">ran on {data.runtime.model}</span>
         )}
         {staleModel && <span className="warn">The CLI no longer offers this model.</span>}
       </div>
-
-      <p className="node-note">
-        The line stops here and an agent interviews you, one question at a time.
-        The answers become a document on the upper belt; a session that ends
-        without one takes the lower belt.
-      </p>
     </NodeShell>
   );
 }

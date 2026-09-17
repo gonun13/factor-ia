@@ -79,23 +79,42 @@
   outline: none;
 }
 
-/* What a machine is for, on hover and not before. The sentence is worth a line
-   when you go looking at one node, and never worth the height on all of them at
-   once — a canvas of chassis you can read the shape of beats a canvas of
-   paragraphs. `display` rather than a collapsed height because `.node-body` is
-   a grid: an item shrunk to nothing still takes its `gap`, a removed one does
-   not. `:focus-within` is the keyboard's hover — tabbing into a node's own
-   field is the same act of looking at it. */
-.node-note {
-  display: none;
-  color: var(--ink-faint);
+/* What a machine is for, under the pointer and a second after it settles
+   (`NodeNote`). It is portalled to the body rather than drawn inside the
+   chassis, so it costs the node no height at all and no node on the canvas is
+   a paragraph — the sentence is worth reading when you go looking at one
+   machine and never worth the room on all of them at once. Fixed, because the
+   position it is given is the pointer's, which is a window coordinate and not
+   a canvas one; `pointer-events: none` so it can never take the hover that
+   opened it, nor stand between the pointer and the node underneath. */
+.node-note-popup {
+  position: fixed;
+  z-index: 1000;
+  max-width: 22rem;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid var(--edge-strong);
+  border-radius: 8px;
+  background: #10141b;
+  box-shadow: var(--shadow);
+  color: var(--ink-dim);
   font-size: 0.72rem;
   line-height: 1.4;
+  pointer-events: none;
 }
 
-.node:hover .node-note,
-.node:focus-within .node-note {
-  display: block;
+.node-note-popup p {
+  margin: 0;
+}
+
+.node-note-popup .note-lines {
+  display: grid;
+  gap: 0.15rem;
+}
+
+/* Two sentences in one popup — a base's scope and what wiring it means — read
+   as two paragraphs rather than one block. */
+.node-note-popup p + p {
+  margin-top: 0.4rem;
 }
 
 /* The status pip. Dark while `data.runtime` is null — which is every node you
@@ -187,6 +206,23 @@
 .slot.empty select {
   border-color: color-mix(in srgb, var(--input) 45%, transparent);
   background: #171309;
+}
+
+/* Branch and state are one fact about the attached codebase, so they are one
+   line: `main · clean`. Wrapping is allowed because "3 uncommitted changes"
+   plus a filename is longer than a 15rem chassis, and a second line of the
+   same sentence still reads as one thing — a branch stacked above a status
+   read as two. */
+.slot .branch-state {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.slot .branch-sep {
+  color: var(--edge-strong);
+  font-size: 0.68rem;
 }
 
 .slot .branch {
@@ -625,51 +661,21 @@
   background: #10141b;
 }
 
-/* Out of the grid entirely, so a chosen skill costs the machine no height and
-   the sentence needs no clamp — the two-line limit was the price of living
-   inside the plate, not a wish to say less. It hangs above the plate because
-   what is below one is usually another plate, and it answers the plate's own
-   hover rather than the whole node's: "what is this skill" is a narrower
-   question than "what is this machine", and a tooltip is the narrow answer.
-   `pointer-events: none` keeps it from stealing the hover that opened it —
-   without that it flickers over the select underneath. `:focus-within` is the
-   keyboard's hover, as it is everywhere else here. */
-.slot.skill .skill-what {
-  display: none;
+/* A skill's description is a popup under the pointer like every other
+   description now (`.node-note-popup`), so the plate itself has nothing left to
+   style — what is left here is the sentence's twin for screen readers, which is
+   in the DOM and never on the screen. `clip-path` rather than `display: none`
+   because a hidden element is not read aloud either. */
+.offscreen {
   position: absolute;
-  left: 0;
-  right: 0;
-  bottom: calc(100% + 7px);
-  z-index: 3;
-  padding: 0.4rem 0.5rem;
-  border: 1px solid var(--edge-strong);
-  border-radius: 8px;
-  background: #10141b;
-  box-shadow: var(--shadow);
-  font-size: 0.72rem;
-  line-height: 1.35;
-  color: var(--ink-dim);
-  pointer-events: none;
-}
-
-/* The stem, so it reads as pointing at the plate rather than floating near it. */
-.slot.skill .skill-what::after {
-  content: "";
-  position: absolute;
-  top: 100%;
-  left: 1.1rem;
-  width: 7px;
-  height: 7px;
-  margin-top: -4px;
-  transform: rotate(45deg);
-  border: 1px solid var(--edge-strong);
-  border-width: 0 1px 1px 0;
-  background: #10141b;
-}
-
-.slot.skill:hover .skill-what,
-.slot.skill:focus-within .skill-what {
-  display: block;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
 }
 
 /* ---- the two ports ------------------------------------------------------
@@ -723,14 +729,10 @@
 /* The scope in words, on hover and on focus like the skill's description — it
    is the one thing about a base that changes what a wire to it means, and it is
    the manifest's word rather than anything set here. */
-.node .scope-note {
-  display: none;
+/* The scope keeps the base's own colour inside the popup: it is the manifest
+   speaking, not the node. */
+.node-note-popup .scope-note {
   color: var(--knowledge);
-}
-
-.node:hover .scope-note,
-.node:focus-within .scope-note {
-  display: block;
 }
 
 /* ---- the two knowledge handles ------------------------------------------

@@ -28,11 +28,15 @@ import { SettingsGlyph } from "../nodes/Glyphs";
 import { NO_OFFER, type ProviderName } from "../canvasContext";
 import type { ModelOffer, Project, ProjectSettings } from "../types";
 
-/** The adapters that exist. There are two, and that is the whole set. */
-const PROVIDERS: Record<"claude" | "fake", { label: string; hint: string }> = {
+/** The adapters that exist. */
+const PROVIDERS: Record<"claude" | "cursor" | "fake", { label: string; hint: string }> = {
   claude: {
     label: "Claude",
-    hint: "Real runs. Spends tokens against the signed-in account.",
+    hint: "Real runs. Spends tokens against the signed-in Claude account.",
+  },
+  cursor: {
+    label: "Cursor",
+    hint: "Real runs via the Cursor Agent CLI. Separate sign-in from Claude.",
   },
   fake: {
     label: "Fake (dry run)",
@@ -63,7 +67,7 @@ export function ProjectSettingsPanel({
   onSaved: (project: Project) => void;
   onClose: () => void;
 }): ReactElement {
-  const [provider, setProvider] = useState<"" | "claude" | "fake">(
+  const [provider, setProvider] = useState<"" | "claude" | "cursor" | "fake">(
     project.settings.default_provider ?? "",
   );
   const [model, setModel] = useState(project.settings.default_model ?? "");
@@ -189,11 +193,11 @@ export function ProjectSettingsPanel({
               ref={firstField}
               value={provider}
               onChange={(event) =>
-                setProvider(event.target.value as "" | "claude" | "fake")
+                setProvider(event.target.value as "" | "claude" | "cursor" | "fake")
               }
             >
               <option value="">{inheritLabel(inheritedProvider)}</option>
-              {(["claude", "fake"] as const).map((value) => (
+              {(["claude", "cursor", "fake"] as const).map((value) => (
                 <option key={value} value={value}>
                   {PROVIDERS[value].label}
                 </option>

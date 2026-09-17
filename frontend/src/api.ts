@@ -152,6 +152,17 @@ export const api = {
   cancelLogin: () =>
     request<LoginState>("/api/agent/login/cancel", { method: "POST" }),
 
+  cursorLoginState: () => request<LoginState>("/api/agent/cursor/login"),
+  beginCursorLogin: () =>
+    request<LoginState>("/api/agent/cursor/login", { method: "POST" }),
+  submitCursorLoginCode: (code: string) =>
+    request<LoginState>("/api/agent/cursor/login/code", {
+      method: "POST",
+      body: JSON.stringify({ code }),
+    }),
+  cancelCursorLogin: () =>
+    request<LoginState>("/api/agent/cursor/login/cancel", { method: "POST" }),
+
   /* Run control. Every one of these is a POST, so the Origin check covers it:
      starting a run is the most dangerous thing this server does, and no other
      page in the browser gets to do it. Watching a run is a GET — the SSE

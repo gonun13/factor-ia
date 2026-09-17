@@ -343,7 +343,7 @@ export type Factory = {
  * container's, and the model to the CLI's own — which is the only place a model
  * id ever comes from. */
 export type ProjectSettings = {
-  default_provider: "claude" | "fake" | null;
+  default_provider: "claude" | "cursor" | "fake" | null;
   default_model: string | null;
 };
 
@@ -413,13 +413,15 @@ export type ModelOffer = {
 export type AgentStatus = {
   account: AccountStatus;
   handshake: Handshake;
+  /** Cursor Agent CLI account — separate credential from Claude's. */
+  cursor_account: AccountStatus;
   /** Every provider that exists, keyed by the name a node's `adapter` and a
    * project's `default_provider` are spelled with. */
   providers: Record<string, ModelOffer>;
   /** What a run uses when neither the node nor the project names a provider.
    * An environment fact on the container (`FACTOR_IA_ADAPTER`), which the
    * browser has no other way to learn. */
-  default_provider: "claude" | "fake";
+  default_provider: "claude" | "cursor" | "fake";
 };
 
 export type LoginPhase =

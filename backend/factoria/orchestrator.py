@@ -93,6 +93,7 @@ from .knowledge import store as knowledge_store
 from .agent.adapter import AgentAdapter, AgentRun, RunConfig
 from .agent.events import PermissionRequest
 from .agent.claude import ClaudeAdapter, PermissionDenied, resolve_permission_mode
+from .agent.cursor import CursorAdapter
 from .agent.fake import FAKE_COST_USD, SCRIPT_NAMES as FAKE_SCRIPTS, FakeAdapter
 from .discovery import discover_codebases
 from . import verdict
@@ -231,7 +232,7 @@ def _fake_cost(node: Node) -> float:
 
 
 def adapter_name_for(node: Node, settings: ProjectSettings | None = None) -> str:
-    """`fake` or `claude`. The node, then the project, then the container.
+    """`fake`, `cursor`, or `claude`. The node, then the project, then the container.
 
     Per node rather than per run so one machine on a busy canvas can be dry-run
     while the rest are real — which is how you debug a factory without paying
@@ -252,7 +253,11 @@ def adapter_name_for(node: Node, settings: ProjectSettings | None = None) -> str
         settings.default_provider if settings else None
     )
     name = str(requested or container).strip().lower()
-    return "fake" if name == "fake" else "claude"
+    if name == "fake":
+        return "fake"
+    if name == "cursor":
+        return "cursor"
+    return "claude"
 
 
 def adapter_for(
@@ -271,7 +276,8 @@ def adapter_for(
     entry repeats, so `["verdict-fail", "verdict-pass"]` is a review that is
     satisfied on the second look.
     """
-    if adapter_name_for(node, settings) == "fake":
+    name = adapter_name_for(node, settings)
+    if name == "fake":
         scripts = node.definition.config.get("fake_scripts")
         if isinstance(scripts, list) and scripts:
             script = str(scripts[min(max(lap, 1) - 1, len(scripts) - 1)])
@@ -293,6 +299,8 @@ def adapter_for(
         return FakeAdapter(  # type: ignore[arg-type]
             script=script, delay_s=_fake_delay(), cost_usd=_fake_cost(node)
         )
+    if name == "cursor":
+        return CursorAdapter()
     return ClaudeAdapter()
 
 
@@ -1627,6 +1635,17 @@ class Orchestrator:
         # exactly this reason.
         await self._set_node(state, node.id, "running")
 
+        # Cursor print-mode has no permission round-trip; a scope node would
+        # hang or silently deny every AskUserQuestion. Refuse rather than degrade.
+        if adapter_name_for(node, state.settings) == "cursor":
+            await self._set_node(
+                state,
+                node.id,
+                "failed",
+                "Cursor provider does not support scope nodes yet — use Claude or Fake",
+            )
+            return
+
         # Required, unlike an agent's, and failed on rather than defaulted for
         # the reason `_run_agent` gives about dropping standing instructions: a
         # session that quietly lost the thing deciding what it asks about would
@@ -2143,13 +2162,30 @@ class Orchestrator:
         # told which files exist goes straight to one rather than guessing
         # whether a base is worth a call (`knowledge/index.py`).
         attached_bases = self._knowledge_neighbours(state, node)
-        (
-            mcp_servers,
-            allowed_tools,
-            disallowed_tools,
-            knowledge_block,
-            knowledge_journal,
-        ) = self._knowledge_spawn(state, node, attached_bases, lap=node_run.lap)
+        provider = adapter_name_for(node, state.settings)
+        # Cursor v1: no inline MCP inject and no `--add-dir`. Skills still reach
+        # the agent via append_system_prompt (prepended onto the prompt). Memory
+        # pointers stay in the prompt text; knowledge MCP tools do not.
+        if provider == "cursor":
+            mcp_servers: dict = {}
+            allowed_tools: list[str] = []
+            disallowed_tools: list[str] = []
+            knowledge_block = None
+            knowledge_journal = None
+            add_dirs: list[str] = []
+        else:
+            (
+                mcp_servers,
+                allowed_tools,
+                disallowed_tools,
+                knowledge_block,
+                knowledge_journal,
+            ) = self._knowledge_spawn(state, node, attached_bases, lap=node_run.lap)
+            assert state.workspaces is not None
+            add_dirs = [
+                str(state.workspaces.ensure_memory_dir(memory.memory_slug(other)))
+                for other in reads
+            ]
         appended = verdict.compose_system_prompt(
             appended,
             reviewer=reviewer,
@@ -2161,11 +2197,7 @@ class Orchestrator:
         # worktree. Created here as well as by the memory node itself: the walk
         # guarantees the writer already ran, and `--add-dir` on a missing
         # directory is a CLI error, so one `mkdir` removes the whole class.
-        assert state.workspaces is not None
-        add_dirs = [
-            str(state.workspaces.ensure_memory_dir(memory.memory_slug(other)))
-            for other in reads
-        ]
+        # (Skipped for Cursor — see above.)
         # **The pointer goes in the prompt, because a wire is not a belt.** The
         # belts already brought this node its task and its predecessor's answer;
         # a memory adds a reference to that and changes nothing else, which is
@@ -2865,6 +2897,8 @@ def _run_adapter_id(factory: Factory, settings: ProjectSettings | None = None) -
         return FakeAdapter.id
     if names == {"claude"}:
         return ClaudeAdapter.id
+    if names == {"cursor"}:
+        return CursorAdapter.id
     return "mixed"
 
 

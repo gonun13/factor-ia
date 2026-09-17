@@ -37,6 +37,16 @@ def claude_bin() -> str:
     return os.environ.get("FACTOR_IA_CLAUDE_BIN") or "claude"
 
 
+def cursor_bin() -> str:
+    """The Cursor Agent CLI executable (`agent`, legacy alias `cursor-agent`).
+
+    Same per-call read as `claude_bin`: tests point it at a stub, and the image
+    installs the binary under `/usr/local` so the agent-home volume cannot freeze
+    it.
+    """
+    return os.environ.get("FACTOR_IA_CURSOR_BIN") or "agent"
+
+
 def _flag(env: str) -> bool:
     return (os.environ.get(env) or "").strip().lower() in ("1", "true", "yes", "on")
 
@@ -48,7 +58,8 @@ def adapter_name() -> str:
     tool that silently does nothing on a fresh install. The tests set
     `FACTOR_IA_ADAPTER=fake` (an autouse fixture), which is what keeps the whole
     suite at zero tokens, and an agent node can name `fake` in its own config to
-    dry-run one machine on a live canvas.
+    dry-run one machine on a live canvas. `cursor` selects the Cursor Agent CLI
+    adapter when neither the node nor the project overrides.
     """
     return (os.environ.get("FACTOR_IA_ADAPTER") or "claude").strip().lower()
 

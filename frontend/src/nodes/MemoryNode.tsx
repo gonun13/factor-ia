@@ -1,6 +1,7 @@
 import type { NodeProps } from "@xyflow/react";
 import type { FlowNode } from "../graph";
 import { useCanvas } from "../canvasContext";
+import { HoverNote } from "./NodeNote";
 import { NodeShell } from "./NodeShell";
 
 /** `8.2 kB`, `640 B`. One decimal and no more: this is the difference between
@@ -54,9 +55,21 @@ export function MemoryNode({ id, data }: NodeProps<FlowNode>) {
   const filed = memories[id] ?? null;
 
   return (
-    <NodeShell id={id} kind="memory" data={data}>
+    <NodeShell
+      id={id}
+      kind="memory"
+      data={data}
+      note={
+        <p>
+          Wire a machine in to file its answer here, and a machine below it on
+          the line out, to be told to <em>read</em> it. This is not on the line:
+          it never holds the run up and never stops it. Discarded when the run
+          ends.
+        </p>
+      }
+    >
       {filed ? (
-        <p className="filed-line" title={filed.path}>
+        <HoverNote tag="p" className="filed-line" note={filed.path}>
           <span className="filed-dot" aria-hidden="true" />
           {filed.fileCount} section{filed.fileCount === 1 ? "" : "s"} ·{" "}
           {size(filed.bytes ?? 0)}
@@ -64,18 +77,13 @@ export function MemoryNode({ id, data }: NodeProps<FlowNode>) {
               above is a ceiling and not the whole of what was written. A
               reader who cannot tell the two apart trusts the gap. */}
           {filed.truncated && <span className="filed-cut"> · truncated</span>}
-        </p>
+        </HoverNote>
       ) : (
         <p className="filed-line is-empty">
           <span className="filed-dot" aria-hidden="true" />
           empty
         </p>
       )}
-      <p className="node-note">
-        Wire a machine in to file its answer here, and a machine below it on the
-        line out, to be told to <em>read</em> it. This is not on the line: it
-        never holds the run up and never stops it. Discarded when the run ends.
-      </p>
     </NodeShell>
   );
 }

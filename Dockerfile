@@ -6,11 +6,12 @@ ARG NODE_IMAGE=node:24-trixie-slim
 ARG PYTHON_IMAGE=python:3.13-slim-trixie
 ARG UV_IMAGE=ghcr.io/astral-sh/uv:0.12.13
 
-# The `claude` CLI is the one runtime dependency, and its stream-json output
-# shape is a parsing dependency — an unpinned upgrade is a breaking change
-# (DESIGN.md, Assumptions). npm's `stable` dist-tag at the time of writing;
-# bump deliberately, never via @latest.
+# Provider CLIs are runtime dependencies, and their stream-json output shapes
+# are parsing dependencies — an unpinned upgrade is a breaking change
+# (DESIGN.md, Assumptions). Bump deliberately, never via @latest / install tip.
 ARG CLAUDE_CODE_VERSION=2.1.236
+# Cursor Agent CLI lab build id from https://cursor.com/install (date-hash).
+ARG CURSOR_AGENT_VERSION=2026.09.15-d2fe57e
 ARG PNPM_VERSION=12.4.1
 # Only ever installed in the `uitest` stage. Pinned for the same reason the CLI
 # is: a browser that updates itself turns a UI assertion into a coin toss.
@@ -52,6 +53,24 @@ ARG CLAUDE_CODE_VERSION
 RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} \
     && npm cache clean --force \
     && claude --version
+
+# Cursor Agent CLI: tarball under /usr/local (never /home/factoria — the
+# agent-home volume would freeze an image rebuild). Symlinks match the
+# upstream installer (`agent` primary, `cursor-agent` legacy).
+ARG CURSOR_AGENT_VERSION
+RUN set -eux; \
+    case "$(uname -m)" in \
+      x86_64|amd64) CURSOR_ARCH=x64 ;; \
+      arm64|aarch64) CURSOR_ARCH=arm64 ;; \
+      *) echo "unsupported arch: $(uname -m)" >&2; exit 1 ;; \
+    esac; \
+    CURSOR_DIR=/usr/local/lib/cursor-agent/${CURSOR_AGENT_VERSION}; \
+    mkdir -p "${CURSOR_DIR}"; \
+    curl -fSL "https://downloads.cursor.com/lab/${CURSOR_AGENT_VERSION}/linux/${CURSOR_ARCH}/agent-cli-package.tar.gz" \
+      | tar --strip-components=1 -xzf - -C "${CURSOR_DIR}"; \
+    ln -sf "${CURSOR_DIR}/cursor-agent" /usr/local/bin/agent; \
+    ln -sf "${CURSOR_DIR}/cursor-agent" /usr/local/bin/cursor-agent; \
+    agent --version
 
 # The container runs as the host user's uid/gid, or bind mounts are unwritable
 # and git refuses /workspace as dubiously owned. A host GID this common (macOS

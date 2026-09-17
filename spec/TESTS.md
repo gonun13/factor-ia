@@ -1,0 +1,133 @@
+# Factor-ia — tests
+
+How this project is verified, what the suite is allowed to touch, and what
+"done" means before a change ships.
+
+Written for whoever is about to add a feature and needs to know which layer
+their proof belongs in.
+
+---
+
+## The three layers
+
+| layer | what it proves | how it runs |
+|---|---|---|
+| **pytest** (`backend/tests/`) | Everything the server decides: the models, the store, the run check, the walk, the git gate, the adapters' parsing, the API's shapes and refusals. | `cd backend && uv sync && uv run pytest` |
+| **UI tests** (`uitests/*.mjs`) | The half the backend cannot see: that a thing exists in the palette, draws the handles it should, and that what the operator drags lands in the saved file. Playwright, against the real bundle. | `docker compose --profile uitest run --rm uitest node tests/<name>.mjs` |
+| **Walkthrough** (`bin/walkthrough`) | That the stack an operator actually installs works end to end, across a container restart. | `./bin/walkthrough` |
+
+---
+
+## The standing rules
+
+These are the conditions the suite is written under. A new test that breaks one
+of them is the thing to reconsider, not the rule.
+
+### A test never spends a token
+
+**The `AgentAdapter` is designed to be faked**, and that is what makes the
+orchestrator testable. `FACTOR_IA_ADAPTER=fake` (or `"adapter": "fake"` on one
+agent node) runs the entire execution path — worktree, edits, commit, summary —
+with no provider call. The fake's scripted edits are **real file writes into the
+worktree**, so what is exercised is the real path and not a mock of it.
+
+A container pinned to `fake` **stays** fake: the provider ladder has that one
+clamp, and it is what makes a machine with no credential, and the whole suite,
+spend nothing.
+
+### A real CLI is never invoked
+
+The provider CLIs are exercised through stubs that produce the frames — 
+`stub_cli.py`, `stub_cursor_cli.py`, `stub_auth_cli.py` — because the thing
+under test is **our parsing of a documented stream shape**, not the vendor's
+binary. Each CLI is pinned in the image; an upgrade is a deliberate change and
+never `@latest`, because the stream shape is a parsing dependency.
+
+> **The standing exception, and it is open.** The scope node's mechanism —
+> `--permission-prompt-tool stdio` surfacing `AskUserQuestion` as a permission
+> request — is verified against a stub that produces those frames, and borrowed
+> from prior art for the claim that the real CLI produces them too. **One live
+> session settles it, and it should be run before that node is relied on.**
+
+### A test never reaches the operator's workspace
+
+Every filesystem test gets its own `tmp_path` workspace and data directory, and
+`config.WORKSPACE` is **monkeypatched rather than read from the environment**,
+so nothing in the suite can reach the real one. Git repos in tests are **real
+git repos**, because discovery looks for a real `.git`.
+
+### A UI test cleans up after itself
+
+Each `uitests/*.mjs` creates its own throwaway project, named with a timestamp,
+and deletes it at the end. **It asserts rather than prints** — a script that
+prints and exits 0 is not a test.
+
+### Every claim in `spec/` is somebody's test
+
+The rule that keeps this tree honest. Specific pairings that must not rot:
+
+- **Byte-identical re-writes.** A save that reorders keys or changes formatting
+  breaks the review workflow, so a test asserts the round trip byte for byte.
+- **No path deletes a ref.** A test asserts it of `gitwork.py` — the guarantee
+  is the absence, so the absence is what is checked.
+- **The push gate.** Fourteen parametrised denials, plus a real push and a real
+  non-fast-forward refusal, against a local bare repo.
+- **No endpoint returns the private key.** `test_sshkeys.py` proves it by
+  crawling **every route the app registers** with a real key on disk — not by
+  checking the two routes somebody remembered.
+- **The refusals.** A run check that returns every reason at once is only
+  useful if the reasons are right, so each precondition has a test that triggers
+  exactly it.
+
+The last two are the pattern worth copying: **test the property over the whole
+surface, not over the places you thought of.**
+
+---
+
+## Where a new test goes
+
+| the change is… | the proof belongs in… |
+|---|---|
+| a new node type or kind | `test_kinds.py` for the vocabulary, `test_routing.py` for how it walks, plus a `uitests/` script if it has a palette entry or a handle |
+| a new run precondition | `test_orchestrator.py` / the relevant `test_*_check.py` — assert the sentence, not just the 422 |
+| a change to the walk or ports | `test_execution.py`, `test_routing.py`, `test_loops.py` |
+| a git capability | `test_gitwork.py`, **as a denial first** |
+| a provider's stream shape | `test_normalize.py` / `test_cursor_normalize.py`, against a stub |
+| a new exit for text | `test_scrub.py` — a new exit should be hard to add without noticing |
+| an API shape | `test_api.py`, `test_runs_api.py`, `test_settings_api.py` |
+
+---
+
+## Acceptance
+
+A change is done when **all** of these hold. Anything less is reported as
+unfinished rather than called done.
+
+1. **`uv run pytest` is green.** Not "green except the one that was already
+   failing" — if something was already failing, say so explicitly.
+2. **Every new claim in `spec/` has a test behind it**, or carries a bold
+   **Not built.** marker. A spec sentence with neither is the failure mode this
+   tree exists to prevent.
+3. **A refusal is asserted by its sentence**, not only by its status code.
+   Failures are sentences, not codes — that is a product rule
+   ([`UIUX.md`](UIUX.md)), so it is a test rule.
+4. **A UI-visible change has a `uitests/` assertion** if it touches the palette,
+   a handle, a form, or what lands in the saved file.
+5. **The walkthrough still passes** for a change that touches storage,
+   discovery, the container, or the API's shape.
+6. **Nothing new spends a token to be verified.**
+
+---
+
+## What is not tested, and is known
+
+Stated so that nobody mistakes silence for coverage:
+
+- **The scope node against a real CLI** — see the standing exception above.
+- **Concurrency.** There is none to test: one run at a time, last-write-wins on
+  two tabs, and both are stated positions rather than gaps
+  ([`DATA.md`](DATA.md)).
+- **The security requirements in [`ARCHITECTURE.md`](ARCHITECTURE.md)** — R1–R6
+  are unmet, so the tests that would hold them do not exist yet. Each carries
+  its acceptance criteria in the operator-local PRD, and R1's belongs beside the
+  existing origin cases in `test_auth.py`, which today only vary `Origin`.

@@ -137,7 +137,7 @@ downstream machine is strict about what it is handed, say so in its own skill.
 
 ## Why this did not need a WebSocket
 
-`DESIGN.md` open question 2 settled on one-shot input and named this exact node
+[`../PROJECT.md`](../PROJECT.md) open question 2 settled on one-shot input and named this exact node
 as the thing that might reopen it: *"what would still reopen the question is a
 human node that negotiates — several turns with an agent mid-run"*. The Stack
 section said the same thing about SSE — *"expect to follow Overseer only if
