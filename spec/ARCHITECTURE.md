@@ -198,6 +198,26 @@ source handle on an output, so neither is reachable by dragging — but
 `main.json` is a file people edit in a pull request, and a rule the UI merely
 makes awkward is not a rule.
 
+### An agent and a human node are entered by three named handles
+
+`store`, `forward` and `loop`, drawn top to bottom on the left of the chassis
+(`NodeShell.tsx`) and landing in `Edge.target_handle`. A read wire from a memory
+or a knowledge base arrives at `store`, a belt running down the line at
+`forward`, and a reviewer's `fail` belt coming back round at `loop`. A human node
+draws two of the three: only an agent may read a memory or a base, so there is no
+`store` entry for a wire that would be refused to land on.
+
+**The server never reads `target_handle`.** Every routing decision is taken off
+`source_handle` — `models.edge_outcome`, `orchestrator._carries`,
+`runcheck.back_edges` — so which entry an edge arrives at changes what a canvas
+draws and what a reviewer can read, and changes nothing about how a factory runs.
+The rule is therefore enforced on the client alone, as it is drawn
+(`FactoryCanvas.isValidConnection`) and afterwards for a hand-edited file
+(`validation.ts`, as notices rather than blockers). It is the one rule in
+`validation.ts` with no mirror in `runcheck.py`, and
+[`DECISIONS/0012`](DECISIONS/0012-three-entry-handles.md) says why that is
+deliberate.
+
 ### Inputs are submitted per node
 
 `POST /api/runs/<id>/input` takes an optional `node_id`. Omitting it keeps the

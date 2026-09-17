@@ -103,6 +103,26 @@ export type CanvasContextValue = {
    * `hasWriteHandle` keep both handles rather than dropping edges on load.
    */
   knowledgeBases: Map<string, KnowledgeBaseSummary>;
+  /**
+   * Whether an edge being dragged may land on a given entry — `graph.entryAccepts`
+   * with the current graph already closed over.
+   *
+   * Here rather than computed in the node, because `NodeShell` needs the whole
+   * graph to answer it (a loop is a question about all of it) and putting the
+   * node and edge arrays into the context would make every node re-render on
+   * every drag of every other. `FactoryCanvas` holds them already and hands down
+   * the one answer.
+   *
+   * **The same function the canvas's `isValidConnection` calls.** Two copies of
+   * this rule would drift into a canvas that lights one entry and accepts
+   * another, which is worse than having no highlight at all.
+   */
+  entryAccepts: (
+    targetId: string,
+    entry: string,
+    sourceId: string,
+    sourceHandle: string | null | undefined,
+  ) => boolean;
 };
 
 export const CanvasContext = createContext<CanvasContextValue>({
@@ -116,6 +136,10 @@ export const CanvasContext = createContext<CanvasContextValue>({
   skills: [],
   memories: {},
   knowledgeBases: new Map(),
+  // No graph in hand means nothing to light up. `false` rather than `true`: a
+  // default that lit every entry would be a canvas promising drops it cannot
+  // take.
+  entryAccepts: () => false,
 });
 
 export const useCanvas = () => useContext(CanvasContext);

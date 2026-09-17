@@ -188,6 +188,15 @@ awkward is not a rule — `main.json` is a file people edit in a pull request.
    what is refused and what is re-run cannot drift.
 5. **No output node may sit on a loop body.** Otherwise it would commit on every
    lap.
+6. **An edge into an agent or a human node arrives at one of three entries.**
+   `store` takes a wire from a memory or a base, `forward` a belt running down
+   the line, `loop` a reviewer's `fail` belt closing one; a human node draws no
+   `store`, because only an agent may read storage. Enforced **client-side only**
+   — `graph.entryAccepts`, as the edge is drawn, and `validation.ts` afterwards
+   as a notice. Deliberately not a server rule: nothing in `runcheck` or the
+   orchestrator reads `Edge.target_handle`, which is what keeps this a fact about
+   the drawing rather than about the run. See
+   [`DECISIONS/0012`](DECISIONS/0012-three-entry-handles.md).
 6. **Whether a node has two ports is a question about the node, not its type.**
    A worker and a reviewer are both `type: "agent"` and answer it differently
    (`models.has_outcome_ports`). A human node always has two; an input has

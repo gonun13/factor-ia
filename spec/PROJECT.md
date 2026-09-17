@@ -148,6 +148,11 @@ direction when asked to build it.
 - **Belts carry outcomes.** A reviewer and a human node leave by `success` or
   `fail`, on the belt's `source_handle`. A failure with a belt drawn for it is an
   outcome the graph handles; a failure with nothing on that port ends the run.
+- **And they arrive at named entries.** An agent and a human node are entered by
+  `store`, `forward` and `loop` — storage, the line, and a loop coming back round
+  — on the belt's `target_handle`. Purely so a path can be read at a glance:
+  nothing on the server consults it, and the rule is the canvas's alone. See
+  [`DECISIONS/0012`](DECISIONS/0012-three-entry-handles.md).
 - **Loops**, bounded. A reviewer's `fail` belt is the only belt allowed to close
   a cycle, and the iteration cap lives on the reviewer. See
   [`BEHAVIOUR/review-loops.md`](BEHAVIOUR/review-loops.md).

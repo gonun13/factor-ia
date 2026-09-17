@@ -8,6 +8,11 @@
  * (`source_handle`), and that the decision form appears in the run panel when a
  * run parks — and says what it is asking.
  *
+ * It also carries the **entry** assertions, and it is the right place for them
+ * because its fixture is saved with no `target_handle` on any edge: that is the
+ * shape of every file written before the entries existed, and the one shape that
+ * would drop every belt off the canvas if `loadGraph` stopped normalising.
+ *
  * The agent assertion **inverted** in stage 9: an agent node used to draw two
  * ports whatever it was for, and now only a `reviewer` does. A worker has one
  * way out, which is the whole of what "worker" means, so it is checked here
@@ -132,6 +137,32 @@ try {
   check("an input node keeps its single unnamed way out", await ports(".node.type-input"), [null]);
   check("an output node draws none", await ports(".node.type-output"), []);
   check("the fail belt is drawn as one", await page.locator(".belt-fail").count(), 1);
+
+  // ---- the entries --------------------------------------------------------
+  //
+  // The way *in*, which used to be one unnamed dot for all three things that
+  // arrive at a machine. A human node draws two of the three: only an agent may
+  // read a memory or a base, and this canvas says read-only by leaving the drop
+  // target out rather than by refusing a wire after it lands.
+  const entries = (selector) =>
+    page
+      .locator(selector)
+      .first()  // this line has two agent nodes; one of them answers the question
+      .locator(".react-flow__handle-left")
+      .evaluateAll((els) => els.map((el) => el.getAttribute("data-handleid")).sort());
+  check("an agent draws all three entries", await entries(".node.type-agent"), ["forward", "loop", "store"]);
+  check("a human node draws the two it can use", await entries(".node.type-human"), ["forward", "loop"]);
+  check("an input node is entered by nothing", await entries(".node.type-input"), []);
+  check("an output node keeps its single unnamed way in", await entries(".node.type-output"), [null]);
+
+  // **The trap, asserted.** Every edge in the fixture above was saved with no
+  // `target_handle` at all — which is every edge written before the entries
+  // existed — and React Flow *silently drops* an edge naming a handle its node
+  // does not render. `loadGraph` puts each of them on an entry as it opens the
+  // file; this is the check that they are on screen at all, and it is the one
+  // failure this change could cause that nothing else would notice.
+  check("every belt saved without an entry is still drawn", await page.locator(".react-flow__edge").count(), graph.edges.length);
+  check("…and opening the file did not dirty it", await page.locator(".pill.saved").count(), 1);
 
   // ---- the run panel ------------------------------------------------------
   await page.locator(".runbox button.run").click();

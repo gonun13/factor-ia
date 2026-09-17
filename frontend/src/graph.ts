@@ -63,6 +63,29 @@ export const WIRE_EDGE = "wire";
 /** Node types attached to the line rather than standing on it. `models.ATTACHED_TYPES`. */
 export const ATTACHED_TYPES = new Set<string>(["memory", "knowledge"]);
 
+/**
+ * **The three ways in.** An agent and a human node split the single unnamed
+ * target handle they used to draw into named entries, top to bottom: storage
+ * arrives at one, the line arrives at another, and a loop arrives at a third.
+ *
+ * The split buys one thing and it is legibility: a read wire, a forward belt and
+ * a return belt used to land on the same 10px dot, so which of the three a line
+ * was had to be traced by eye. Now the side of the node says it.
+ *
+ * **They are cosmetic to the server, and must stay that way.** Nothing in
+ * `runcheck`, `models.edge_outcome`, `orchestrator._carries` or
+ * `back_edges` reads `Edge.target_handle` — it is stored and handed back, and
+ * every decision about where a run goes next is taken off `source_handle`. So
+ * these names change what a canvas draws and what a reviewer can read, and
+ * change nothing about how a factory runs. See
+ * `DECISIONS/0012-three-entry-handles.md`.
+ */
+export const ENTRY_STORE = "store";
+export const ENTRY_FORWARD = "forward";
+export const ENTRY_LOOP = "loop";
+
+export const ENTRIES = [ENTRY_STORE, ENTRY_FORWARD, ENTRY_LOOP] as const;
+
 export function isWire(
   edge: { source: string; target: string },
   definitions: Map<string, NodeDefinition>,
@@ -104,7 +127,13 @@ export function toFlowNode(node: GraphNode): FlowNode {
  * Deliberately only in this direction. A belt naming a port the node *does*
  * have is untouched, and nothing here invents a port.
  */
-export function toFlowEdge(edge: GraphEdge, sources?: Map<string, NodeDefinition>): FlowEdge {
+export function toFlowEdge(
+  edge: GraphEdge,
+  sources?: Map<string, NodeDefinition>,
+  /** The entry each edge was normalised onto, keyed by edge id — see
+      `loadGraph`, which is the only caller that can work them out. */
+  entries?: Map<string, string>,
+): FlowEdge {
   // A wire first, because none of a belt's normalisation applies to it: it has
   // no outcome port to be orphaned from, and nothing travels it.
   if (sources && isWire(edge, sources)) {
@@ -128,7 +157,7 @@ export function toFlowEdge(edge: GraphEdge, sources?: Map<string, NodeDefinition
       source: edge.source,
       target: edge.target,
       sourceHandle: from?.type === "knowledge" ? "read" : null,
-      targetHandle: edge.target_handle,
+      targetHandle: entries?.get(edge.id) ?? edge.target_handle,
       type: WIRE_EDGE,
       data: { kind: edge.payload.kind, outcome: DEFAULT_EDGE_OUTCOME },
     };
@@ -144,7 +173,7 @@ export function toFlowEdge(edge: GraphEdge, sources?: Map<string, NodeDefinition
     source: edge.source,
     target: edge.target,
     sourceHandle,
-    targetHandle: edge.target_handle,
+    targetHandle: entries?.get(edge.id) ?? edge.target_handle,
     type: BELT_EDGE,
     // The port is on `sourceHandle`; it is copied into `data` as well so the
     // belt can draw itself differently without every edge component having to
@@ -181,10 +210,62 @@ export function loadGraph(factory: Factory): {
   edges: FlowEdge[];
 } {
   const sources = new Map(factory.nodes.map((node) => [node.id, node.definition]));
+  const entries = entriesFor(factory, sources);
   return {
     nodes: factory.nodes.map(toFlowNode),
-    edges: factory.edges.map((edge) => toFlowEdge(edge, sources)),
+    edges: factory.edges.map((edge) => toFlowEdge(edge, sources, entries)),
   };
+}
+
+/**
+ * Which entry each edge lands on, for every edge whose target draws entries.
+ *
+ * **This is the normalisation the entries could not ship without.** Every belt
+ * and wire written before them carries `target_handle: null`, and an unnamed
+ * target handle is the one thing an agent no longer renders — so without this,
+ * opening any existing factory would drop every edge on the floor, silently,
+ * while the file and the server went on carrying them. See `entryFor`.
+ *
+ * Deliberately only in this direction, exactly as the source side is: a
+ * `target_handle` that names an entry its node *does* render is left alone, and
+ * nothing here invents a port. The next save writes the resolved names back, so
+ * a file heals itself rather than being normalised again on every open —
+ * `FactoryCanvas` takes its dirty-check baseline *after* this runs, so an
+ * untouched factory does not open dirty.
+ *
+ * Computed once for the whole graph rather than per edge, because deciding
+ * `forward` from `loop` is a question about the whole of it.
+ */
+function entriesFor(
+  factory: Factory,
+  sources: Map<string, NodeDefinition>,
+): Map<string, string> {
+  const nodes = factory.nodes.map((node) => ({ id: node.id }));
+  // Belts only. A wire attaches storage and decides nothing about what runs
+  // next, so a loop walked over the whole edge list would find return paths
+  // through a shared memory that no run ever takes. Mirrors `models.split_edges`.
+  const belts = factory.edges.filter((edge) => !isWire(edge, sources));
+  const entries = new Map<string, string>();
+  for (const edge of factory.edges) {
+    const target = sources.get(edge.target);
+    const source = sources.get(edge.source);
+    if (target === undefined || source === undefined) continue;
+    if (!hasEntryPorts(target)) continue;
+    // Already names an entry this node draws: the operator drew it there, or a
+    // previous save resolved it, and either way it is not ours to move.
+    if (
+      edge.target_handle !== null &&
+      (ENTRIES as readonly string[]).includes(edge.target_handle) &&
+      (edge.target_handle !== ENTRY_STORE || hasStoreEntry(target))
+    ) {
+      continue;
+    }
+    entries.set(
+      edge.id,
+      entryFor(nodes, belts, target, source, edge.source, edge.target, edge.source_handle),
+    );
+  }
+  return entries;
 }
 
 let counter = 0;
@@ -314,6 +395,208 @@ export function hasOutcomePorts(definition: NodeDefinition): boolean {
   if (definition.type === "human") return true;
   if (definition.type === "agent") return nodeKind(definition) === "reviewer";
   return false;
+}
+
+/**
+ * Whether this node splits its way *in* across the three named entries.
+ *
+ * The target-side twin of `hasOutcomePorts`, and a question about the type
+ * rather than the kind: every agent and every human node draws entries, a
+ * worker and a reviewer alike. Storage has its own handles (`write`/`read`), an
+ * input has no way in at all, and an output keeps the single unnamed target it
+ * has always had — an output is the end of the line and nothing arrives at it
+ * but the line.
+ */
+export function hasEntryPorts(definition: NodeDefinition): boolean {
+  return definition.type === "agent" || definition.type === "human";
+}
+
+/**
+ * Whether this node draws the `store` entry — the one a read wire arrives at.
+ *
+ * **Agents only, and that is the existing rule rather than a new one.** Only an
+ * agent may read a memory or a knowledge base (`validation.runProblems`,
+ * `runcheck._wire_problems`), so drawing the entry on a human node would be
+ * putting up a drop target for a wire that is refused the moment it lands. This
+ * project already decided how that goes: read-only is *the absence of a drop
+ * target* rather than a sentence somebody has to read — which is exactly why a
+ * `principles` base renders no `write` handle (`BEHAVIOUR/knowledge.md`).
+ *
+ * A human node therefore draws `forward` and `loop`, in the same two slots an
+ * agent puts them, so the rows still line up across a canvas.
+ */
+export function hasStoreEntry(definition: NodeDefinition): boolean {
+  return definition.type === "agent";
+}
+
+/**
+ * The nodes a belt from `source` to `target` would send round again: everything
+ * on a path from `target` back to `source`, inclusive. Empty when the belt runs
+ * forward and closes nothing.
+ *
+ * A second implementation of `runcheck.back_edges`, which is a cost worth
+ * naming. It is here because the canvas has to answer "would this close a loop"
+ * while the belt is still being *dragged*, and shipping the graph to the server
+ * on every pointer move to ask would be worse. Both are small, both are tested,
+ * and only the server's decides whether a run starts.
+ *
+ * It lived in `validation.ts` until the entries arrived. It moved here because
+ * three readers need it now — the validator, the canvas's `isValidConnection`,
+ * and the load-time normalisation below — and `validation.ts` imports this file,
+ * never the other way round.
+ *
+ * Typed on the two fields it reads, so it serves an API graph and a React Flow
+ * one without a conversion: `loadGraph` walks `GraphEdge`s and the canvas walks
+ * `FlowEdge`s.
+ */
+export function loopBody(
+  nodes: readonly { id: string }[],
+  edges: readonly { source: string; target: string }[],
+  source: string,
+  target: string,
+): Set<string> {
+  const forward = new Map<string, string[]>();
+  const backward = new Map<string, string[]>();
+  for (const node of nodes) {
+    forward.set(node.id, []);
+    backward.set(node.id, []);
+  }
+  for (const edge of edges) {
+    forward.get(edge.source)?.push(edge.target);
+    backward.get(edge.target)?.push(edge.source);
+  }
+  const reach = (start: string, graph: Map<string, string[]>) => {
+    const seen = new Set<string>();
+    const stack = [start];
+    while (stack.length) {
+      const current = stack.pop()!;
+      if (seen.has(current)) continue;
+      seen.add(current);
+      stack.push(...(graph.get(current) ?? []));
+    }
+    return seen;
+  };
+  const down = reach(target, forward);
+  const up = reach(source, backward);
+  return new Set([...down].filter((id) => up.has(id)));
+}
+
+/** Whether a belt from `source` to `target` would come back round to `source`. */
+export function closesLoop(
+  nodes: readonly { id: string }[],
+  edges: readonly { source: string; target: string }[],
+  source: string,
+  target: string,
+): boolean {
+  return loopBody(nodes, edges, source, target).has(source);
+}
+
+/**
+ * Whether a belt leaving this node by this handle is one that may close a loop.
+ *
+ * `DECISIONS/0009`: the one belt that may is a reviewer's `fail` belt. Mirrors
+ * the predicate `runcheck.back_edges` skips on, and the identical one
+ * `validation.ts` uses to find the loops it reports about.
+ */
+export function isLoopBelt(
+  definition: NodeDefinition,
+  sourceHandle: string | null | undefined,
+): boolean {
+  return (
+    sourceHandle === "fail" &&
+    definition.type === "agent" &&
+    hasOutcomePorts(definition)
+  );
+}
+
+/**
+ * Whether an edge from `source`/`sourceHandle` may land on `entry`.
+ *
+ * **The one implementation of the rule**, read by the canvas's
+ * `isValidConnection` — which refuses the wrong drop mid-drag — and by
+ * `NodeShell`, which lights the legal entry while a connection is in flight. Two
+ * copies of this would drift into a canvas that highlights one handle and
+ * accepts another, which is worse than either rule on its own.
+ *
+ * A target that draws no entries is not this function's business and is left
+ * alone: dragging onto a memory, a base or an output behaves exactly as it did.
+ *
+ * Three rules, and the third is narrower than it looks:
+ *
+ * - `store` takes a wire, and only a wire — its source is a memory or a base.
+ * - `loop` takes a belt that would genuinely come back round, which by
+ *   `DECISIONS/0009` means a reviewer's `fail` belt.
+ * - `forward` takes everything else off the line.
+ *
+ * What `forward` deliberately does **not** refuse is a belt that would close a
+ * cycle nothing may close — a worker's single way out, wired back upstream. That
+ * is already an error, and the server is the thing that says so, with a sentence
+ * about which cycle and why. Refusing it here would replace that sentence with a
+ * drag that silently will not drop, and "nothing happened" is the worst
+ * explanation of a rule this canvas could give.
+ */
+export function entryAccepts(
+  nodes: readonly FlowNode[],
+  edges: readonly FlowEdge[],
+  targetId: string,
+  entry: string | null | undefined,
+  sourceId: string,
+  sourceHandle: string | null | undefined,
+): boolean {
+  const byId = new Map(nodes.map((node) => [node.id, node.data.definition]));
+  const target = byId.get(targetId);
+  const source = byId.get(sourceId);
+  if (target === undefined || source === undefined) return false;
+  // Not a node with entries: no rule of ours applies, and the canvas keeps the
+  // unrestricted behaviour it has always had.
+  if (!hasEntryPorts(target)) return true;
+
+  const fromStorage = ATTACHED_TYPES.has(source.type);
+  if (entry === ENTRY_STORE) return hasStoreEntry(target) && fromStorage;
+  // A wire has exactly one place to land. Letting one sit on `forward` would put
+  // a dashed attachment in the slot that means "this is what runs next".
+  if (fromStorage) return false;
+
+  const belts = edges.filter((edge) => !isWire(edge, byId));
+  const loops = isLoopBelt(source, sourceHandle) && closesLoop(nodes, belts, sourceId, targetId);
+  if (entry === ENTRY_LOOP) return loops;
+  if (entry === ENTRY_FORWARD) return !loops;
+  return false;
+}
+
+/**
+ * The entry an edge belongs at, for a target that draws entries.
+ *
+ * The load-time half of `entryAccepts`, and the reason it exists: every belt and
+ * wire written before this change carries `target_handle: null`, and **React
+ * Flow silently drops an edge whose handle names one its node does not render**
+ * — the trap `toFlowEdge` documents on the source side. With the unnamed target
+ * gone from agents and humans, an un-normalised file would open with every one
+ * of its edges missing from the canvas while the server went on treating them as
+ * live. That is a file you cannot fix from the canvas, because you cannot see
+ * the thing to delete.
+ */
+export function entryFor(
+  nodes: readonly { id: string }[],
+  belts: readonly { source: string; target: string }[],
+  target: NodeDefinition,
+  source: NodeDefinition,
+  sourceId: string,
+  targetId: string,
+  sourceHandle: string | null | undefined,
+): string {
+  // A wire from storage goes to `store` — unless this target does not draw one,
+  // which means a memory or a base wired to a human node. That wiring is already
+  // refused, with a sentence saying only an agent may read one, and it must stay
+  // **visible** to be refused: an entry the node does not render would drop the
+  // wire off the canvas and leave the operator a file they cannot fix from it.
+  // So it lands on `forward`, where the validator can point at it.
+  if (ATTACHED_TYPES.has(source.type)) {
+    return hasStoreEntry(target) ? ENTRY_STORE : ENTRY_FORWARD;
+  }
+  return isLoopBelt(source, sourceHandle) && closesLoop(nodes, belts, sourceId, targetId)
+    ? ENTRY_LOOP
+    : ENTRY_FORWARD;
 }
 
 /** A reviewer's lap cap as the node asks for it, defaulted — `verdict.max_laps`. */

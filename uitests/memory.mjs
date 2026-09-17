@@ -125,6 +125,22 @@ try {
     0,
   );
   check("the three belts are still belts", await page.locator(".belt-casing").count(), 3);
+  // **The entry a read wire arrives at**, and the trap under it. The fixture
+  // above names no `target_handle` on anything — the shape of every file written
+  // before the entries existed — and React Flow *silently drops* an edge whose
+  // handle its node does not render. The wires above are the check that nothing
+  // vanished; this is the check that there is a storage entry for them to have
+  // landed on, which is what stops them vanishing.
+  check(
+    "each reader draws a storage entry for a wire to arrive at",
+    await page.locator('.node.type-agent .react-flow__handle[data-handleid="store"]').count(),
+    2,
+  );
+  check(
+    "…and no belt was dropped on the way in",
+    await page.locator(".react-flow__edge").count(),
+    graph.edges.length,
+  );
 
   // **One name, and it is the one on the chassis.** A memory has no
   // configuration: the label is the filename and is what the reader sees in

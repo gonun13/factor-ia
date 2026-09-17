@@ -15,8 +15,18 @@
  */
 
 import type { ReactNode } from "react";
-import { Handle, Position } from "@xyflow/react";
-import { hasOutcomePorts, hasWriteHandle, nodeKind, type NodeData } from "../graph";
+import { Handle, Position, useConnection } from "@xyflow/react";
+import {
+  ENTRY_FORWARD,
+  ENTRY_LOOP,
+  ENTRY_STORE,
+  hasEntryPorts,
+  hasOutcomePorts,
+  hasStoreEntry,
+  hasWriteHandle,
+  nodeKind,
+  type NodeData,
+} from "../graph";
 import { useCanvas } from "../canvasContext";
 import { useHoverNote } from "./NodeNote";
 import {
@@ -97,7 +107,7 @@ export function NodeShell({
   note?: ReactNode;
   children?: ReactNode;
 }) {
-  const { patch, invalid, knowledgeBases } = useCanvas();
+  const { patch, invalid, knowledgeBases, entryAccepts } = useCanvas();
   const { handlers, popup } = useHoverNote(note);
   // The two handle sentences. They are descriptions like any other and answer
   // the pointer the same way — a handle is 10px across, and a bubble that
@@ -109,12 +119,73 @@ export function NodeShell({
   const readNote = useHoverNote(
     "read — machines wired from here may consult this base",
   );
+  // **The three ways in**, and the same treatment the two above get: a handle is
+  // 10px across, so what it is for is a sentence under the pointer rather than
+  // a word that would not fit beside it.
+  const storeNote = useHoverNote(
+    "storage — a memory or a knowledge base this machine may read arrives here",
+  );
+  const forwardNote = useHoverNote(
+    "forward — the belt that runs down the line into this machine arrives here",
+  );
+  const loopNote = useHoverNote(
+    "loop — a reviewer’s fail belt, coming back round for another lap, arrives here",
+  );
   const variant = nodeKind(data.definition);
   const Glyph = KIND_GLYPHS[variant] ?? GLYPHS[kind];
   const name = KIND_NAME[variant] ?? TYPE_NAME[kind];
   const runtime = data.runtime;
   const status = runtime?.status ?? "idle";
   const live = runtime !== null;
+
+  /**
+   * Which entry would take the connection currently being dragged.
+   *
+   * `isValidConnection` alone is not enough for this. React Flow calls it for
+   * the handle *under the pointer*, which sets the `valid` class one moment
+   * before the drop — so it can refuse a mistake but cannot prevent one. The
+   * question an operator has while a wire is in the air is "where does this
+   * go", and it is answerable the instant they start dragging: read the
+   * connection in flight and light the one entry that would take it.
+   *
+   * So the rule is an affordance first and an obstruction second, which is the
+   * order this canvas does everything else in — a `principles` base draws no
+   * write handle rather than refusing a wire dropped on one.
+   */
+  // Through a selector, and the selector is the point: the connection state
+  // carries the pointer's position and changes on every frame of a drag, so the
+  // whole of it would re-render every node on the sheet sixty times a second to
+  // answer a question whose answer cannot change until the drag ends. What is
+  // read here is only where the wire *started*, which is fixed for its whole
+  // flight — so a node re-renders once when a drag begins and once when it ends.
+  const from = useConnection((connection) =>
+    connection.inProgress && connection.fromHandle?.type === "source"
+      ? { node: connection.fromNode?.id ?? null, handle: connection.fromHandle.id }
+      : null,
+  );
+  const lit = (entry: string) =>
+    from !== null && from.node !== null && entryAccepts(id, entry, from.node, from.handle)
+      ? " entry-legal"
+      : "";
+
+  const entry = (
+    entryId: string,
+    className: string,
+    note: ReturnType<typeof useHoverNote>,
+    description: string,
+  ) => (
+    <>
+      {note.popup}
+      <Handle
+        id={entryId}
+        type="target"
+        position={Position.Left}
+        className={`${className}${lit(entryId)}`}
+        aria-label={description}
+        {...note.handlers}
+      />
+    </>
+  );
 
   return (
     <div
@@ -149,6 +220,49 @@ export function NodeShell({
             />
           </>
         )
+      ) : hasEntryPorts(data.definition) ? (
+        /* **Three ways in, drawn top to bottom**, where an agent and a human
+           node used to draw one unnamed dot for all of them.
+
+           The dot was honest about the mechanism and useless about the picture:
+           a read wire from a memory, a belt running down the line and a
+           reviewer's fail belt coming back round all landed on the same point,
+           so which of the three a line was had to be traced by eye across the
+           whole sheet. Splitting them means the side of a node says what
+           reaches it.
+
+           The names ride `Edge.target_handle`, and **nothing on the server
+           reads them** — every routing decision is taken off `source_handle`
+           (`runcheck`, `orchestrator._carries`). That is what makes this a
+           change to the drawing and not to the run, and it is the property to
+           keep: see `DECISIONS/0012-three-entry-handles.md`.
+
+           A human node draws two of the three. Only an agent may read a memory
+           or a base, and this canvas says read-only by leaving out the drop
+           target rather than by refusing a wire after it lands — the same
+           mechanism a `principles` base uses. The two it does draw sit in the
+           slots an agent puts them in, so the rows line up across a canvas. */
+        <>
+          {hasStoreEntry(data.definition) &&
+            entry(
+              ENTRY_STORE,
+              "handle-store",
+              storeNote,
+              "storage — a memory or a knowledge base this machine may read arrives here",
+            )}
+          {entry(
+            ENTRY_FORWARD,
+            "handle-forward",
+            forwardNote,
+            "forward — the belt that runs down the line into this machine arrives here",
+          )}
+          {entry(
+            ENTRY_LOOP,
+            "handle-loop",
+            loopNote,
+            "loop — a reviewer’s fail belt, coming back round for another lap, arrives here",
+          )}
+        </>
       ) : (
         kind !== "input" && <Handle type="target" position={Position.Left} />
       )}

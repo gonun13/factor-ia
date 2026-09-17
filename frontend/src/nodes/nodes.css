@@ -708,6 +708,75 @@
   background: var(--danger);
 }
 
+/* ---- the three entries --------------------------------------------------
+   An agent and a human node are entered by storage, by the line, or by a loop.
+   Said apart exactly the way the two ports on the right are — position at a
+   glance, colour to confirm — because they are the same problem: React Flow
+   stacks every left-hand handle at the vertical middle, and a node with three
+   of them is a node whose left edge is worth reading.
+
+   The colours are borrowed rather than invented, which is the point. `store`
+   wears storage's colour, the one the memory and knowledge nodes and their
+   dashed wires already wear. `loop` wears --danger, because the belt that
+   arrives there is a fail belt and is drawn in --danger for the whole of its
+   length — the entry is the end of a line the operator has already learnt to
+   read. `forward` is the ordinary belt, so it is the belt's own tread colour
+   and the quietest of the three: it is what normally happens. */
+
+.react-flow__handle.handle-store,
+.react-flow__handle.handle-forward,
+.react-flow__handle.handle-loop {
+  height: 14px;
+}
+
+.react-flow__handle.handle-store {
+  top: 24%;
+  background: color-mix(in srgb, var(--memory) 45%, var(--belt-casing));
+}
+
+.react-flow__handle.handle-forward {
+  top: 50%;
+  background: color-mix(in srgb, var(--belt-tread) 60%, var(--belt-casing));
+}
+
+.react-flow__handle.handle-loop {
+  top: 76%;
+  background: color-mix(in srgb, var(--danger) 45%, var(--belt-casing));
+}
+
+/* A human node draws two of these three and needs no rule of its own for it:
+   the slots are absolute percentages, so its `forward` and `loop` sit exactly
+   where an agent's do and a row of machines keeps its entries on one line
+   however many of them can read a memory. */
+
+.react-flow__handle.handle-store:hover {
+  background: var(--memory);
+}
+
+.react-flow__handle.handle-forward:hover {
+  background: var(--belt-tread);
+}
+
+.react-flow__handle.handle-loop:hover {
+  background: var(--danger);
+}
+
+/* **The lit entry.** While a connection is in the air, the one entry that would
+   take it grows and glows; the other two stay as they are.
+
+   Not React Flow's own `.valid`, which it sets on the handle under the pointer
+   — by then the operator has already found the right one by trying. This class
+   goes on from the moment the drag starts (`NodeShell` reads `useConnection`),
+   so the canvas answers "where does this go" rather than "not there". Scale and
+   a ring, not a colour change: each entry keeps the colour that says which one
+   it is, and a highlight that repainted it would take that away at exactly the
+   moment it is being used. */
+.react-flow__handle.entry-legal {
+  transform: translate(-50%, -50%) scale(1.35);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--agent) 45%, transparent);
+  z-index: 2;
+}
+
 /* ---- the knowledge node -------------------------------------------------
    A base is storage, so it wears storage's colour and storage's vocabulary
    unchanged: the same square dot, the same "this is a shelf, not a station"

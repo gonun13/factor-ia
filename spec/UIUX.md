@@ -31,6 +31,29 @@ The agent node carries both its knowledge base and its operating target,
 because those are the two things an operator needs to see without clicking
 anything.
 
+### Three ways in, and the right one lights up
+
+A machine's left edge carries three entries, top to bottom: **storage**, where a
+memory or a knowledge base's wire arrives; **forward**, where the belt down the
+line arrives; **loop**, where a reviewer's fail belt arrives on its way back
+round. A human node draws the lower two — it cannot read storage, so there is
+nothing for a wire to land on.
+
+They exist so a path can be read without being traced. All three used to arrive
+at one dot, which meant "what reaches this machine" was a question about the
+whole sheet rather than about the machine.
+
+**Start dragging and the entry that would take the wire grows and glows**, from
+the first moment the pointer moves rather than once it has found the right one.
+The wrong entry refuses the drop. That order is the rule everywhere on this
+canvas — a `principles` base draws no write handle rather than refusing a wire
+dropped on one — because a refusal explains a mistake and an affordance prevents
+it.
+
+Which entry an edge arrives at is a drawing and nothing else: it is not read by
+anything that decides how a run behaves, so parking a belt on the wrong one is a
+notice beside the Run button, never a reason a factory will not start.
+
 ### Provider and model are set once, overridden where it matters
 
 The cog in the topbar opens **Project settings**: the provider every agent in

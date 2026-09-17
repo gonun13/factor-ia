@@ -37,3 +37,4 @@ original keeps its number.
 | [0009](0009-only-a-reviewers-fail-belt-closes-a-loop.md) | Only a reviewer's `fail` belt may close a loop | stands |
 | [0010](0010-commit-merge-amends-blast-radius.md) | `commit-merge` amends "no writes to the default branch" | stands |
 | [0011](0011-a-second-provider-adapter.md) | A second provider adapter — supersedes a non-goal | supersedes part of `PROJECT.md` Non-goals |
+| [0012](0012-three-entry-handles.md) | Three entry handles, and the server never reads them | stands |

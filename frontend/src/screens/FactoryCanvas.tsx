@@ -47,6 +47,7 @@ import { api } from "../api";
 import { CanvasContext } from "../canvasContext";
 import {
   BELT_EDGE,
+  entryAccepts as acceptsEntry,
   hasWriteHandle,
   loadGraph,
   newEdgeId,
@@ -423,6 +424,49 @@ function CanvasInner({ projectId, onBack }: { projectId: string; onBack: () => v
     [setEdges],
   );
 
+  /**
+   * The entry rules, as the drag happens.
+   *
+   * The first connection rule this canvas has had — until the entries arrived,
+   * anything could be dragged to anything and every rule was a sentence beside
+   * the Run button afterwards. That was the right trade while a node had one way
+   * in: there was nothing to choose, so there was nothing to get wrong. Three
+   * entries is a choice, and a choice a drop can make silently is one the
+   * operator finds out about later, from a list.
+   *
+   * Narrow on purpose. It decides **which entry** an edge lands on and nothing
+   * else — whether the edge should exist at all is still `runProblems`' question
+   * and the server's answer, so nothing that used to be drawable and wrong
+   * becomes undrawable here. `graph.entryAccepts` documents where that line is
+   * drawn and why a cycle nothing may close is left drawable.
+   *
+   * Handed to the nodes as well (`canvasContext.entryAccepts`), which is what
+   * lights the legal entry while the wire is still in the air. One function, so
+   * the highlight and the refusal cannot disagree.
+   */
+  const entryAccepts = useCallback(
+    (
+      targetId: string,
+      entry: string,
+      sourceId: string,
+      sourceHandle: string | null | undefined,
+    ) => acceptsEntry(nodes, edges, targetId, entry, sourceId, sourceHandle),
+    [nodes, edges],
+  );
+
+  const isValidConnection = useCallback(
+    (connection: Connection | FlowEdge) => {
+      if (!connection.source || !connection.target) return false;
+      return entryAccepts(
+        connection.target,
+        connection.targetHandle ?? "",
+        connection.source,
+        connection.sourceHandle,
+      );
+    },
+    [entryAccepts],
+  );
+
   const addNode = useCallback(
     (type: NodeType, kind: string, clientX: number, clientY: number) => {
       const position = screenToFlowPosition({ x: clientX, y: clientY });
@@ -534,8 +578,20 @@ function CanvasInner({ projectId, onBack }: { projectId: string; onBack: () => v
       skills,
       memories: run.memories,
       knowledgeBases: baseIndex,
+      entryAccepts,
     }),
-    [codebases, gitStates, invalid, patch, agent, project, skills, run.memories, baseIndex],
+    [
+      codebases,
+      gitStates,
+      invalid,
+      patch,
+      agent,
+      project,
+      skills,
+      run.memories,
+      baseIndex,
+      entryAccepts,
+    ],
   );
 
   return (
@@ -619,6 +675,7 @@ function CanvasInner({ projectId, onBack }: { projectId: string; onBack: () => v
               onNodesChange={onNodesChange}
               onEdgesChange={onEdgesChange}
               onConnect={onConnect}
+              isValidConnection={isValidConnection}
               nodeTypes={nodeTypes}
               edgeTypes={edgeTypes}
               defaultEdgeOptions={{ type: BELT_EDGE }}

@@ -8,6 +8,10 @@
  * rather than as a smear across two machines, and that a node sent round again
  * says which lap it is on instead of quietly redrawing itself.
  *
+ * It also owns the **loop entry**: this is the only fixture with a belt that
+ * genuinely comes back round, so it is the only one that can check the canvas
+ * tells a return belt from a forward one without being told which is which.
+ *
  * Run it:  docker compose --profile uitest run --rm uitest node tests/loop.mjs
  *
  * Same bargain as `gate.mjs`: its own throwaway project, deleted at the end,
@@ -177,6 +181,31 @@ try {
   const stored = await (await api(`/api/projects/${PROJECT}/factories/main`)).json();
   const reviewer = stored.nodes.find((node) => node.id === "n-review");
   check("…and still read from the factory file", reviewer.definition.config.max_laps, 3);
+
+  // ---- where a return belt arrives ----------------------------------------
+  //
+  // The target-side half of the same idea as the two ports: a return belt used
+  // to land on the same dot a forward belt did, so which was which could only be
+  // settled by tracing the line. The fixture above saved **no `target_handle` at
+  // all**, so this is checking that the canvas worked out for itself which belt
+  // comes back round — the question `runcheck.back_edges` answers server-side —
+  // and put it on the loop entry.
+  //
+  // Asserted through a save rather than off the DOM, because the claim is about
+  // two things at once: what the canvas drew, and that the **file heals** when
+  // it is next written. A factory opened and saved should come back naming its
+  // entries, without the operator having redrawn anything.
+  // A real edit, so the graph is genuinely dirty and Save is live. Normalising
+  // the entries on open deliberately does *not* dirty it — the baseline is taken
+  // after `loadGraph` — so there has to be something else to save.
+  await page.locator('.node.kind-worker input.node-title').fill("Build it twice");
+  await page.locator(".savebar button.primary").click();
+  await page.waitForSelector(".pill.saved");
+  const healed = await (await api(`/api/projects/${PROJECT}/factories/main`)).json();
+  const entryOf = (id) => healed.edges.find((edge) => edge.id === id)?.target_handle ?? null;
+  check("the belt that closes the loop is saved onto the loop entry", entryOf("e4"), "loop");
+  check("…and the belt that runs down the line onto the forward one", entryOf("e2"), "forward");
+  check("…while the belt into the output node is left alone", entryOf("e3"), null);
 
   // ---- the loop turns -----------------------------------------------------
   await page.locator(".runbox button.run").click();

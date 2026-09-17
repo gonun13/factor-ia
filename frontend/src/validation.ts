@@ -12,10 +12,16 @@
 
 import {
   ATTACHED_TYPES,
+  ENTRY_FORWARD,
+  ENTRY_LOOP,
+  ENTRY_STORE,
+  entryAccepts,
+  hasEntryPorts,
   hasOutcomePorts,
   isWire,
   knowledgeBase,
   knowledgeWritable,
+  loopBody,
   memorySlug,
   nodeKind,
   type FlowEdge,
@@ -31,48 +37,6 @@ import {
   type CodebaseGit,
   type KnowledgeBaseSummary,
 } from "./types";
-
-/**
- * The nodes a back-edge sends round again: everything on a path from `target`
- * back to `source`, inclusive.
- *
- * A second implementation of `runcheck.back_edges`, which is a cost worth
- * naming. It is here because the canvas has to answer "is this node inside a
- * loop" while the belt is still being drawn, and shipping the graph to the
- * server on every edit to ask would be worse. Both are small, both are tested,
- * and only the server's decides whether a run starts.
- */
-function loopBody(
-  nodes: FlowNode[],
-  edges: FlowEdge[],
-  source: string,
-  target: string,
-): Set<string> {
-  const forward = new Map<string, string[]>();
-  const backward = new Map<string, string[]>();
-  for (const node of nodes) {
-    forward.set(node.id, []);
-    backward.set(node.id, []);
-  }
-  for (const edge of edges) {
-    forward.get(edge.source)?.push(edge.target);
-    backward.get(edge.target)?.push(edge.source);
-  }
-  const reach = (start: string, graph: Map<string, string[]>) => {
-    const seen = new Set<string>();
-    const stack = [start];
-    while (stack.length) {
-      const current = stack.pop()!;
-      if (seen.has(current)) continue;
-      seen.add(current);
-      stack.push(...(graph.get(current) ?? []));
-    }
-    return seen;
-  };
-  const down = reach(target, forward);
-  const up = reach(source, backward);
-  return new Set([...down].filter((id) => up.has(id)));
-}
 
 export type Problem = {
   /** Shown in the Run tooltip and next to the button. */
@@ -570,6 +534,69 @@ export function runProblems(
             ? `“${label(source)}” is a worker agent, which has one way out — its belt cannot leave by “${edge.sourceHandle}”. A machine that judges what it is given is a Reviewer: drop one from the palette in its place, or remove the belt.`
             : `“${label(source)}” is a ${type} node, which has one way out — its belt cannot leave by “${edge.sourceHandle}”.`,
         nodeIds: [source.id],
+      });
+    }
+  }
+
+  // ---- the three entries ---------------------------------------------------
+  //
+  // Which entry an edge lands on is a **drawing, not a decision**. The server
+  // reads `Edge.source_handle` for everything it routes and never looks at
+  // `target_handle` (`runcheck`, `models.edge_outcome`,
+  // `orchestrator._carries`, `back_edges`). So this block has **no mirror in
+  // `runcheck.py`** — the only rule in this file that has none — and the
+  // asymmetry is deliberate rather than a half somebody forgot to write.
+  //
+  // Which also settles the severity: a belt parked on the wrong entry still runs
+  // exactly where it always ran, so every problem here is a notice. Refusing to
+  // start a factory over a handle name nothing consults would be a lie about
+  // what is wrong with it.
+  //
+  // `loadGraph` puts every edge on the right entry as it opens a file, so
+  // nothing here fires on a file as it arrives. What it catches is **drift**:
+  // delete the belt that made a cycle and the return belt is still drawn as a
+  // return belt, pointing into a loop that is no longer there.
+  for (const edge of allEdges) {
+    const source = byId.get(edge.source);
+    const target = byId.get(edge.target);
+    if (!source || !target) continue;
+    if (!hasEntryPorts(target.data.definition)) continue;
+    if (
+      entryAccepts(
+        nodes,
+        allEdges,
+        edge.target,
+        edge.targetHandle,
+        edge.source,
+        edge.sourceHandle,
+      )
+    ) {
+      continue;
+    }
+    const ends = [source.id, target.id];
+    if (edge.targetHandle === ENTRY_STORE) {
+      problems.push({
+        message: `The wire into “${label(target)}” arrives at its storage entry, but it comes from “${label(source)}”, which is a ${source.data.definition.type} node — the storage entry takes a memory or a knowledge base.`,
+        nodeIds: ends,
+        severity: "notice",
+      });
+    } else if (edge.targetHandle === ENTRY_LOOP) {
+      problems.push({
+        message: `The belt into “${label(target)}” arrives at its loop entry, but it does not come back round to “${label(source)}” — the loop entry is for a reviewer’s fail belt that closes one. Move it to the forward entry, so the drawing says what the run does.`,
+        nodeIds: ends,
+        severity: "notice",
+      });
+    } else if (edge.targetHandle === ENTRY_FORWARD) {
+      problems.push({
+        message: `The belt from “${label(source)}” into “${label(target)}” closes a loop but arrives at the forward entry — move it to the loop entry, so the return path reads as one.`,
+        nodeIds: ends,
+        severity: "notice",
+      });
+    } else {
+      problems.push({
+        message: `The edge into “${label(target)}” arrives at “${String(edge.targetHandle)}”, which is not an entry this version knows.`,
+        nodeIds: ends,
+        severity: "notice",
       });
     }
   }

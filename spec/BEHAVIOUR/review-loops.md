@@ -92,6 +92,16 @@ possibility of disagreement.
   shared, so a worker sent round again lands in the directory holding its own
   previous edits. Without that, *"fix the two things the reviewer named"* would
   mean nothing. It is the least obvious load-bearing fact in the feature.
+- **The back edge arrives at the `loop` entry**, which an agent and a human node
+  draw alongside `store` and `forward`. A drawing and nothing more: the canvas
+  works out which belt closes a loop the same way `back_edges` does, from the
+  shape of the graph, and writes the answer onto `Edge.target_handle` so a return
+  conveyor can be told from a forward belt without tracing it. Nothing on the
+  server reads that field, and
+  [`../DECISIONS/0012`](../DECISIONS/0012-three-entry-handles.md) says why it
+  must stay that way — a second answer to "is this a loop" is exactly what
+  [`0009`](../DECISIONS/0009-only-a-reviewers-fail-belt-closes-a-loop.md) exists
+  to prevent.
 - **The back edge stays `taken` across the reset.** That is how the reviewer's
   reason reaches the next lap: `_incoming_text` then hands the worker both the
   original request and the critique.

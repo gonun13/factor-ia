@@ -237,6 +237,29 @@ switching a node's base to one with `principles` scope must *normalise the write
 wires away* — visibly, with a notice — rather than leaving wires pointing at a
 handle that has gone. An invisible wire is worse than a refused one.
 
+## Where a read wire lands
+
+The machine's end of the wire is named too, and by the same trap. An agent draws
+three entries — `store`, `forward`, `loop` — and a read wire arrives at `store`,
+so a base's `read` handle and the reader's `store` entry are the two ends of one
+line ([`../DECISIONS/0012`](../DECISIONS/0012-three-entry-handles.md)).
+
+The entry is what makes "only an agent may read a base" a shape rather than a
+sentence: **a human node draws no `store`**, so a read wire onto one cannot be
+drawn in the first place. That is the `principles` rule above, applied one node
+along — read-only is the absence of a drop target.
+
+It carries no more meaning than that. `Edge.target_handle` is not read by
+anything on the server, so which entry a wire arrives at decides nothing about
+what a machine is given; the direction still does all of that work, exactly as
+this document has said throughout.
+
+And the trap applies in this direction as well: every wire written before the
+entries existed named no entry at all, so the canvas resolves one for each as it
+reads a file. A wire whose target has no `store` entry is put on `forward`
+rather than nowhere — it is refused there, with a sentence, which it could not be
+if it had been dropped off the canvas instead.
+
 ## The MCP contract
 
 This is the section the rest of the document exists for, and it is new ground:
