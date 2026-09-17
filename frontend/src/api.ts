@@ -15,6 +15,7 @@ import type {
   KnowledgeBaseSummary,
   LoginState,
   Project,
+  NodeEventPage,
   Run,
   Skill,
   SkillSummary,
@@ -232,6 +233,17 @@ export const api = {
     request<Run>(`/api/runs/${runId}/resume`, { method: "POST" }),
   run: (runId: string) => request<Run>(`/api/runs/${runId}`),
   runs: () => request<Run[]>("/api/runs"),
+  /** Everything one machine did, straight out of the run's log.
+   *
+   * A GET, like the stream, and for the same reason it is a fetch rather than
+   * more state in `run.ts`: the reducer keeps what the *canvas* needs and
+   * throws the rest away on every lap, while this file keeps all of it for as
+   * long as the run directory exists. `fromSeq` is how an open log window asks
+   * for only what it has not already been handed. */
+  nodeEvents: (runId: string, nodeId: string, fromSeq = 0) =>
+    request<NodeEventPage>(
+      `/api/runs/${runId}/nodes/${encodeURIComponent(nodeId)}/events?from=${fromSeq}`,
+    ),
 
   sshKey: () => request<SshKeyStatus>("/api/ssh/key"),
   generateSshKey: () => request<SshKeyStatus>("/api/ssh/key", { method: "POST" }),

@@ -9,9 +9,10 @@
  * constraint being mechanical rather than aspirational (DESIGN.md).
  *
  * What lights up is a pip and a status word, and only those. The agent's words,
- * its tool and its checklist stream into the run pane beside the canvas
- * (`screens/RunChat`), which has room for them — a 15rem chassis held about five
- * lines, and a machine you have to squint at is not a machine you can watch.
+ * its tool and its checklist go to the timeline and the node log
+ * (`screens/Timeline`, `screens/NodeLog`), which have room for them — the
+ * chassis held about five lines of them, and a machine you have to squint at is
+ * not a machine you can watch. It is narrower still now that it never has to.
  */
 
 import type { ReactNode } from "react";
@@ -34,6 +35,7 @@ import {
   HumanGlyph,
   InputGlyph,
   KnowledgeGlyph,
+  LogGlyph,
   MemoryGlyph,
   MergeGlyph,
   OutputGlyph,
@@ -107,7 +109,7 @@ export function NodeShell({
   note?: ReactNode;
   children?: ReactNode;
 }) {
-  const { patch, invalid, knowledgeBases, entryAccepts } = useCanvas();
+  const { patch, invalid, knowledgeBases, entryAccepts, openLog } = useCanvas();
   const { handlers, popup } = useHoverNote(note);
   // The two handle sentences. They are descriptions like any other and answer
   // the pointer the same way — a handle is 10px across, and a bubble that
@@ -127,6 +129,9 @@ export function NodeShell({
   );
   const forwardNote = useHoverNote(
     "forward — the belt that runs down the line into this machine arrives here",
+  );
+  const logNote = useHoverNote(
+    "log — everything this machine did: its input, its words, every tool it ran, and every lap",
   );
   const loopNote = useHoverNote(
     "loop — a reviewer’s fail belt, coming back round for another lap, arrives here",
@@ -283,6 +288,33 @@ export function NodeShell({
         <span className="pip" data-status={status} title={`status: ${status}`} />
       </div>
       <div className="node-body">
+        {/* The name and, in front of it, the way into what this machine did.
+            A row of their own inside the body's column: the body is a grid, and
+            a button laid out as one of its rows would sit *above* the name
+            rather than beside it. */}
+        <div className="node-titlerow">
+        {/* **In front of the name, and only on a machine the run has reached.**
+            A node this size has no room for a control that does nothing, and a
+            log icon on a node the walk never came to would be a promise of a
+            page that does not exist. What it opens is the whole of what this
+            machine did — every lap, every tool and its arguments, the words and
+            the thinking — which is the half of a run the canvas has never been
+            able to show, because the chassis holds a few lines at most and the
+            reducer behind it keeps about that much. */}
+        {live && (
+          <>
+            {logNote.popup}
+            <button
+              type="button"
+              className="node-log-open nodrag"
+              aria-label={`Open the log for ${data.definition.label}`}
+              onClick={() => openLog(id)}
+              {...logNote.handlers}
+            >
+              <LogGlyph />
+            </button>
+          </>
+        )}
         <input
           className="node-title nodrag"
           value={data.definition.label}
@@ -293,6 +325,7 @@ export function NodeShell({
           // changes the next run, not this one.
           onChange={(event) => patch(id, { label: event.target.value })}
         />
+        </div>
         {children}
       </div>
       {/* **The ports.** A reviewer and a human node leave by one of two named

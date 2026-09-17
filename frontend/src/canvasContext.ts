@@ -84,7 +84,7 @@ export type CanvasContextValue = {
    * Here rather than on the node's `runtime` because a memory has no runtime
    * and must not grow one: a runtime is what the walk gives a machine it ran,
    * and inventing one for storage would put a pip on the canvas and a thread
-   * in the run log for a node the walk never reaches. This is the other fact
+   * on the timeline for a node the walk never reaches. This is the other fact
    * about a memory node — not "how is it doing", which is not a question about
    * a file, but "is there anything in it".
    */
@@ -123,6 +123,20 @@ export type CanvasContextValue = {
     sourceId: string,
     sourceHandle: string | null | undefined,
   ) => boolean;
+  /**
+   * Open the log window for one machine.
+   *
+   * Through the context rather than down through `data`, for the reason the
+   * codebase list is here: a callback in `data` would be part of what
+   * `fromFlowNode` has to remember not to serialize, and this is a fact about
+   * the screen, not about the graph. It is also six node components deep —
+   * `NodeShell` is the one that draws the icon, and nothing between it and the
+   * canvas has any business knowing about a window.
+   *
+   * A no-op by default, which is what an idle canvas wants: the icon is only
+   * drawn on a node the run has reached.
+   */
+  openLog: (nodeId: string) => void;
 };
 
 export const CanvasContext = createContext<CanvasContextValue>({
@@ -140,6 +154,7 @@ export const CanvasContext = createContext<CanvasContextValue>({
   // default that lit every entry would be a canvas promising drops it cannot
   // take.
   entryAccepts: () => false,
+  openLog: () => {},
 });
 
 export const useCanvas = () => useContext(CanvasContext);

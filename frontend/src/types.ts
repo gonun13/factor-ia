@@ -672,3 +672,19 @@ export const RUN_EVENT_TYPES: RunEvent["type"][] = [
   "run.artifact",
   "run.cost",
 ];
+
+/**
+ * One machine's slice of the log, fetched rather than streamed.
+ *
+ * Every envelope in `events` names this node, in `seq` order, with nothing
+ * dropped — the thinking and the tool deltas the live reducer discards are
+ * here, and so is every lap a loop ran rather than only the newest. `last_seq`
+ * is where this page ends, so an open window can ask for the rest later
+ * instead of fetching the whole history again.
+ */
+export type NodeEventPage = {
+  run_id: string;
+  node_id: string;
+  last_seq: number;
+  events: RunEvent[];
+};

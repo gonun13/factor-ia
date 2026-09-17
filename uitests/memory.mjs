@@ -4,8 +4,8 @@
  * What the backend tests cannot see: that Memory is in the palette at all, that
  * it draws both ports so it can sit mid-line, that the canvas refuses a
  * mis-drawn belt *as it is drawn* rather than on the Run button, and — the one
- * that matters most — that what appears in the reading machine's thread is a
- * path and not the document.
+ * that matters most — that what the reading machine was handed is a path and
+ * not the document.
  *
  * Run it:  docker compose --profile uitest run --rm uitest node tests/memory.mjs
  *
@@ -260,15 +260,23 @@ try {
     "idle",
   );
   check(
-    "…and gets no thread in the run log, being no machine of the run's",
-    await page.locator(".thread .who", { hasText: /^Codebase index$/ }).count(),
+    "…and gets no card on the timeline, being no machine of the run's",
+    await page.locator(".timeline-card .who", { hasText: /^Codebase index$/ }).count(),
     0,
   );
 
   // **The claim the whole design rests on.** The reader echoes its prompt, so
-  // what is on screen under the Planner is exactly what it was handed — and it
-  // must be a path, not the document.
-  const handed = await page.locator(".thread", { hasText: "Planner" }).innerText();
+  // what the Planner said is exactly what it was handed — and it must be a
+  // path, not the document.
+  //
+  // Read out of the node log rather than off the canvas: the transcript left
+  // the run pane when the pane became a timeline, and a card says which machine
+  // ran, not what it said. Clicking one opens the log, which is the whole point
+  // of the card.
+  await page.locator(".timeline-card", { hasText: "Planner" }).click();
+  await page.waitForSelector(".node-log");
+  await page.locator(".node-log-tabs button", { hasText: "Output" }).click();
+  const handed = await page.locator(".node-log-body").innerText();
   check("the reader was told a memory exists", handed.includes("Memory available"), true);
   // And it still got its predecessor's answer down the belt, exactly as it
   // would with no memory in the factory: an attachment adds, it never replaces.

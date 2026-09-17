@@ -300,8 +300,8 @@ try {
     "idle",
   );
   check(
-    "…and gets no thread in the run log, being no machine of the run's",
-    await page.locator(".thread .who", { hasText: /^Timeline$/ }).count(),
+    "…and gets no card on the timeline, being no machine of the run's",
+    await page.locator(".timeline-card .who", { hasText: /^Timeline$/ }).count(),
     0,
   );
 

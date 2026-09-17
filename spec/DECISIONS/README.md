@@ -38,3 +38,4 @@ original keeps its number.
 | [0010](0010-commit-merge-amends-blast-radius.md) | `commit-merge` amends "no writes to the default branch" | stands |
 | [0011](0011-a-second-provider-adapter.md) | A second provider adapter — supersedes a non-goal | supersedes part of `PROJECT.md` Non-goals |
 | [0012](0012-three-entry-handles.md) | Three entry handles, and the server never reads them | stands |
+| [0013](0013-the-node-log-is-fetched.md) | The node log is fetched, not hoarded | stands |

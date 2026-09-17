@@ -499,7 +499,8 @@ button:focus-visible {
 
 /* ---- canvas ------------------------------------------------------------- */
 
-/* The sheet and the run pane, side by side under the topbar. */
+/* The sheet, under the topbar, and nothing beside it: the run panel, the chat
+   and the timeline all float over it. */
 .workbench {
   flex: 1;
   display: flex;
@@ -556,7 +557,7 @@ button:focus-visible {
 
 /* A horizontal bar: five category triggers in a row, each dropping its own
    machines over the sheet. Collapsed it is one row in the corner — the point of
-   the shape, on a screen whose right side is already the run pane's. */
+   the shape, on a screen whose top-right corner is already the run panel's. */
 .palette {
   padding: 0.6rem 0.7rem;
   display: grid;
@@ -825,11 +826,26 @@ button:focus-visible {
   flex: 0 0 auto;
 }
 
+/* Green, because the line this was written for says the factory is ready to
+   run. Anything that reuses the shape but is not that statement overrides the
+   colour below — the border and the spacing are what is shared. */
 .runbox .ready {
   font-size: 0.78rem;
   color: var(--output);
   border-top: 1px solid var(--edge);
   padding-top: 0.6rem;
+}
+
+/* How the run ended. A failed run used to say so in the colour of success,
+   which made "worktree kept at …" — the sentence telling you where to go and
+   see what went wrong — read as an achievement. */
+.runbox .outcome[data-status="failed"],
+.runbox .outcome[data-status="cancelled"] {
+  color: var(--danger);
+}
+
+.runbox .running-cost {
+  color: var(--ink-dim);
 }
 
 /* The run's branch, shown from the first frame because the name is known
@@ -941,197 +957,639 @@ button:focus-visible {
   outline: none;
   border-color: var(--agent);
 }
+/* ---- the run panel ------------------------------------------------------
+   The run as a whole — start and stop, the branch it owns, what it cost, what
+   is stopping it — floating at the top-right of the sheet.
 
-/* ---- the run pane -------------------------------------------------------
-   The right-hand dock: the run box, and under it one thread per machine. It is
-   a sibling of the canvas rather than a panel floating over it, so it takes
-   width from the layout instead of covering the far side of the line — the
-   machines underneath a floating panel are the ones you most want to see while
-   a run is going. Fixed width: the canvas is the thing that pans and zooms, and
-   a draggable splitter here would be a second way to resize the same view. */
+   It used to be a docked column holding three jobs at once: these controls, the
+   operator's forms and a transcript per machine. The transcript is the
+   timeline's and the node log's now and the forms are the chat's, and what is
+   left is a short list of facts that has no business taking a fixed quarter of
+   the window for the whole session. So it floats like everything else here, and
+   the line gets the full width of the sheet to be drawn across.
 
-.runpane {
-  flex: 0 0 25rem;
-  display: flex;
-  flex-direction: column;
-  gap: 0.6rem;
-  padding: 0.6rem;
-  min-height: 0;
-  border-left: 1px solid var(--edge);
-  background: linear-gradient(180deg, #121822, #0e131b);
-}
+   Top-right, with the chat just inboard of it, so the two read as one column
+   without either one being part of the layout. */
 
-/* In the pane the run box is a card in a column, not a floating panel: it keeps
-   its own chrome (the border is how a live run announces itself) and gives up
-   only its fixed width. It scrolls before the threads do — the log is the part
-   that must stay on screen. */
-.runpane .runbox {
-  width: auto;
-  flex: 0 1 auto;
+.runbox {
+  position: absolute;
+  top: 0.6rem;
+  right: 0.6rem;
+  z-index: 6;
+  max-height: calc(100% - 1.2rem);
   overflow-y: auto;
+  background: color-mix(in srgb, var(--panel) 96%, transparent);
+  backdrop-filter: blur(8px);
+  box-shadow: 0 10px 34px rgb(0 0 0 / 50%);
 }
 
-.runchat {
-  flex: 1 1 auto;
-  min-height: 8rem;
-  overflow-y: auto;
-  padding: 0.75rem;
-  display: grid;
-  gap: 0.7rem;
-  align-content: start;
-}
-
-.runchat-empty {
+/* A block of streamed text, wherever one appears: the node log's panes, a
+   gate's incoming. Was `.thread .stream` and is now its own class, because the
+   thread it was scoped to is gone and three surfaces want the same block. */
+.stream {
   margin: 0;
-  font-size: 0.75rem;
-  line-height: 1.5;
-  color: var(--ink-faint);
-}
-
-/* One machine's thread. The border says what it is doing, the same way the
-   node's does — the pane and the sheet are two views of one state. */
-.thread {
-  display: grid;
-  gap: 0.35rem;
-  border: 1px solid var(--edge);
-  border-radius: 8px;
-  background: var(--raised);
-  padding: 0.5rem 0.55rem;
-}
-
-.thread[data-status="running"] {
-  border-color: color-mix(in srgb, var(--agent) 55%, var(--edge));
-}
-
-.thread[data-status="waiting_input"] {
-  border-color: color-mix(in srgb, var(--input) 55%, var(--edge));
-}
-
-.thread[data-status="succeeded"] {
-  border-color: color-mix(in srgb, var(--output) 40%, var(--edge));
-}
-
-.thread[data-status="failed"] {
-  border-color: color-mix(in srgb, var(--danger) 55%, var(--edge));
-}
-
-.thread-head {
-  display: flex;
-  align-items: center;
-  gap: 0.45rem;
-}
-
-.thread-head .who {
-  font-weight: 600;
-  font-size: 0.85rem;
-}
-
-.thread-head .eyebrow {
-  flex: 1;
-}
-
-.thread-detail {
-  margin: 0;
-  font-size: 0.72rem;
-  line-height: 1.4;
-  color: var(--ink-dim);
-}
-
-.thread[data-status="failed"] .thread-detail {
-  color: var(--danger);
-}
-
-/* The tool in flight: name plus the argument that says what it acts on. */
-.thread .tool {
-  display: flex;
-  gap: 0.35rem;
-  align-items: baseline;
-  font-size: 0.7rem;
-  color: var(--ink-dim);
-  background: #0f151e;
-  border: 1px solid var(--edge);
-  border-radius: 6px;
-  padding: 0.25rem 0.4rem;
-  overflow: hidden;
-}
-
-.thread .tool b {
-  color: var(--agent);
-  flex: 0 0 auto;
-}
-
-.thread .tool .target {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.thread .tool[data-state="running"] b {
-  animation: pulse 1.4s ease-in-out infinite;
-}
-
-.thread .tool[data-state="error"] b {
-  color: var(--danger);
-}
-
-/* The checklist in full, which is what "the step it is on" actually means. */
-.thread .todos {
-  margin: 0;
-  padding: 0;
-  list-style: none;
-  display: grid;
-  gap: 0.15rem;
-  font-size: 0.72rem;
-  line-height: 1.4;
-  color: var(--ink-dim);
-}
-
-.thread .todos li {
-  display: flex;
-  gap: 0.4rem;
-  align-items: baseline;
-}
-
-.thread .todos li[data-status="completed"] {
-  color: var(--ink-faint);
-  text-decoration: line-through;
-}
-
-.thread .todos li[data-status="in_progress"] {
-  color: var(--ink);
-}
-
-.thread .todos .box {
-  flex: 0 0 auto;
-}
-
-/* The agent's own words, as they arrive. Capped and tail-following: one
-   talkative machine must not push every other thread out of the pane. */
-.thread .stream {
-  margin: 0;
-  max-height: 18rem;
+  max-height: 22rem;
   overflow-y: auto;
   white-space: pre-wrap;
   word-break: break-word;
-  font-size: 0.72rem;
+  font-size: 0.75rem;
   line-height: 1.5;
   color: var(--ink);
   background: #0b1017;
   border: 1px solid var(--edge);
   border-radius: 6px;
-  padding: 0.4rem 0.5rem;
+  padding: 0.5rem 0.6rem;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
-.thread-foot {
+/* ---- the timeline -------------------------------------------------------
+   The run as a strip of cards along the bottom of the sheet: one per machine
+   the walk has been through, in the order the belts run. Floating, because it
+   is one row tall and a row is cheap to float; docked, it would have cost a
+   column for the whole session to say what it says in 40 pixels.
+
+   **Two hard limits, and they are the design.** It never takes more than 80% of
+   the width, so the line is never fully covered, and it takes as little height
+   as the content allows — which is one row, plus one more line on the single
+   card that is still changing. A run with forty machines scrolls sideways
+   rather than growing upwards. */
+
+.timeline {
   display: flex;
-  gap: 0.6rem;
+  align-items: stretch;
+  gap: 0.3rem;
+  max-width: 80%;
+  margin: 0 0 0.5rem 0;
+  padding: 0.3rem;
+  border: 1px solid var(--edge);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--panel) 92%, transparent);
+  backdrop-filter: blur(6px);
+  box-shadow: 0 6px 24px rgb(0 0 0 / 45%);
+}
+
+.timeline-rail {
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.timeline-rail::-webkit-scrollbar {
+  display: none;
+}
+
+/* The link between two cards, drawn as a rule rather than an element: the
+   machines are linked by belts on the sheet above, and this is the same
+   statement made in the space a 2px pseudo-element takes. */
+.timeline-card + .timeline-card::before {
+  content: "";
+  position: absolute;
+  left: -0.45rem;
+  top: 50%;
+  width: 0.45rem;
+  height: 1px;
+  background: var(--edge-strong);
+}
+
+.timeline-card {
+  position: relative;
+  display: grid;
+  gap: 0.15rem;
+  flex: 0 0 auto;
+  max-width: 22rem;
+  margin-left: 0.45rem;
+  padding: 0.25rem 0.5rem;
+  border: 1px solid var(--edge);
+  border-radius: 7px;
+  background: var(--raised);
+  color: var(--ink-dim);
+  font: inherit;
+  font-size: 0.72rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+.timeline-card:first-child {
+  margin-left: 0;
+}
+
+.timeline-card:hover,
+.timeline-card:focus-visible {
+  border-color: var(--edge-strong);
+  color: var(--ink);
+}
+
+/* The border says what a machine is doing, the way its chassis does — the
+   strip and the sheet are two readings of one state. */
+.timeline-card[data-status="running"] {
+  border-color: color-mix(in srgb, var(--agent) 55%, var(--edge));
+}
+
+.timeline-card[data-status="waiting_input"] {
+  border-color: color-mix(in srgb, var(--input) 55%, var(--edge));
+}
+
+.timeline-card[data-status="succeeded"] {
+  border-color: color-mix(in srgb, var(--output) 40%, var(--edge));
+}
+
+.timeline-card[data-status="failed"] {
+  border-color: color-mix(in srgb, var(--danger) 55%, var(--edge));
+}
+
+.timeline-card .card-head {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.timeline-card .who {
+  font-weight: 600;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.timeline-card .lap {
+  color: var(--ink-faint);
   font-size: 0.65rem;
+}
+
+/* The one card that earns a second line. Everything else on this strip is
+   history and links to itself; this is the part that is still happening. */
+.timeline-card[data-live] {
+  max-width: 30rem;
+}
+
+.timeline-card .card-live {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  font-size: 0.65rem;
+  color: var(--ink-faint);
+  overflow: hidden;
+}
+
+.timeline-card .card-live .tool b {
+  color: var(--agent);
+}
+
+.timeline-card .card-live .tool[data-state="running"] b {
+  animation: pulse 1.4s ease-in-out infinite;
+}
+
+.timeline-card .card-live .target,
+.timeline-card .card-live .tail {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 14rem;
+}
+
+.timeline-nudge {
+  flex: 0 0 auto;
+  border: none;
+  background: transparent;
+  color: var(--ink-faint);
+  cursor: pointer;
+  padding: 0 0.15rem;
+  font-size: 0.9rem;
+}
+
+.timeline-nudge:hover {
+  color: var(--ink);
+}
+
+/* ---- the chat -----------------------------------------------------------
+   Where the operator answers whatever the run stopped to ask. Floating over the
+   canvas and wide, which is the whole reason it left the dock: a sign-off exists
+   so that somebody reads what arrived before approving it, and 25rem minus a
+   scrollbar is not a width anybody reads a diff in.
+
+   Top-right and clear of the timeline along the bottom. It is only on screen
+   while there is a conversation, so the width it borrows from the line is
+   borrowed for as long as the run is actually asking for something. */
+
+.chatpane {
+  position: absolute;
+  top: 0.6rem;
+  /* Clear of the run panel, which is 21rem of floating card at the same top
+     edge. Offsetting rather than stacking: the run panel carries Cancel, and
+     a chat covering the one control that stops a run would be the worst thing
+     on this screen to hide. */
+  right: 22.8rem;
+  z-index: 5;
+  width: 34rem;
+  max-width: calc(100% - 24rem);
+  max-height: 70%;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.6rem;
+  background: color-mix(in srgb, var(--panel) 96%, transparent);
+  backdrop-filter: blur(8px);
+  box-shadow: 0 10px 34px rgb(0 0 0 / 50%);
+}
+
+.chatpane.folded {
+  width: auto;
+}
+
+.chatpane-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.chatpane-head .chat-open {
+  font-size: 0.7rem;
+  color: var(--input);
+}
+
+.chat-history {
+  flex: 0 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  display: grid;
+  gap: 0.45rem;
+  align-content: start;
+}
+
+/* What has already been said. Quiet, because the thing being asked is below it
+   — but kept, because a negotiation that forgot its last exchange the moment it
+   was answered would be a form with extra chrome. */
+.said {
+  display: grid;
+  gap: 0.2rem;
+  border-left: 2px solid var(--edge-strong);
+  padding: 0.1rem 0 0.1rem 0.5rem;
+  font-size: 0.75rem;
+  color: var(--ink-dim);
+}
+
+.said[data-from="operator"] {
+  border-left-color: color-mix(in srgb, var(--human) 60%, var(--edge));
+}
+
+.said[data-from="run"] {
+  border-left-color: color-mix(in srgb, var(--agent) 60%, var(--edge));
+}
+
+.said h5 {
+  margin: 0;
+  font-size: 0.65rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
   color: var(--ink-faint);
 }
 
-.thread-foot .commit {
+.said p {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.chat-forms {
+  flex: 0 0 auto;
+  display: grid;
+  gap: 0.5rem;
+  overflow-y: auto;
+  max-height: 46vh;
+}
+
+ul.plain {
+  margin: 0;
+  padding-left: 1rem;
+  display: grid;
+  gap: 0.2rem;
+}
+
+/* ---- the node log -------------------------------------------------------
+   One machine's whole story, in a window big enough to read it in. It is the
+   answer to the question the canvas has never been able to answer — not "how is
+   this machine doing", which a pip says, but "what did it actually do" — so it
+   is sized for reading rather than for glancing. */
+
+.node-log-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: grid;
+  place-items: center;
+  background: rgb(4 7 11 / 62%);
+  backdrop-filter: blur(2px);
+}
+
+.node-log {
+  width: min(72rem, 86vw);
+  height: 80vh;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+.node-log-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.6rem 0.75rem;
+  border-bottom: 1px solid var(--edge);
+}
+
+.node-log-head .who {
+  font-weight: 600;
+}
+
+.node-log-head .lap {
+  font-size: 0.7rem;
+  color: var(--ink-faint);
+}
+
+.node-log-close {
+  border: none;
+  background: transparent;
+  color: var(--ink-faint);
+  cursor: pointer;
+  font-size: 0.9rem;
+}
+
+.node-log-close:hover {
+  color: var(--ink);
+}
+
+.node-log-tabs {
+  display: flex;
+  gap: 0.15rem;
+  padding: 0.4rem 0.6rem 0;
+  border-bottom: 1px solid var(--edge);
+}
+
+.node-log-tabs button {
+  border: none;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--ink-faint);
+  cursor: pointer;
+  padding: 0.3rem 0.6rem;
+  font: inherit;
+  font-size: 0.78rem;
+}
+
+.node-log-tabs button:hover {
+  color: var(--ink);
+}
+
+.node-log-tabs button.on {
+  color: var(--ink);
+  border-bottom-color: var(--agent);
+}
+
+.node-log-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0.75rem;
+}
+
+.log-pane {
+  display: grid;
+  gap: 0.8rem;
+  align-content: start;
+}
+
+.log-block h4 {
+  margin: 0 0 0.3rem;
+  font-size: 0.68rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--ink-faint);
+}
+
+.log-block .stream {
+  max-height: 32rem;
+}
+
+.dim {
+  color: var(--ink-faint);
+}
+
+.good {
   color: var(--output);
+}
+
+/* The transcript. A column of paragraphs rather than one `<pre>`, because a
+   tool call is a different kind of thing from a sentence and folding both into
+   one string is exactly what the old run log had to do. */
+.chat-scroll {
+  height: 100%;
+  overflow-y: auto;
+  display: grid;
+  gap: 0.5rem;
+  align-content: start;
+}
+
+.lap-block {
+  display: grid;
+  gap: 0.5rem;
+}
+
+/* Laps are separated by a rule, and this is the thing the live reducer cannot
+   show at all: it throws the previous lap away the moment a loop reopens a
+   node, because the canvas must not put lap one's words under lap two's header.
+   Nothing is thrown away here. */
+.lap-rule {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0.6rem 0 0;
+  font-size: 0.65rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--ink-faint);
+}
+
+.lap-rule::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--edge);
+}
+
+.chat-say {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: inherit;
+  font-size: 0.82rem;
+  line-height: 1.55;
+  color: var(--ink);
+}
+
+.chat-model {
+  margin: 0;
+  font-size: 0.68rem;
+  color: var(--ink-faint);
+}
+
+.chat-note {
+  margin: 0;
+  font-size: 0.75rem;
+  color: var(--ink-dim);
+}
+
+.chat-note.bad {
+  color: var(--danger);
+}
+
+/* Collapsed by default: thinking is the most voluminous thing in a log and the
+   least often the answer — but when it is the answer, nothing else is. */
+.chat-think summary,
+.chat-tool summary {
+  cursor: pointer;
+  font-size: 0.72rem;
+  color: var(--ink-faint);
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+}
+
+.chat-think pre,
+.chat-tool pre {
+  margin: 0.35rem 0 0;
+  max-height: 24rem;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 0.72rem;
+  line-height: 1.45;
+  color: var(--ink-dim);
+  background: #0b1017;
+  border: 1px solid var(--edge);
+  border-radius: 6px;
+  padding: 0.45rem 0.55rem;
+}
+
+.chat-tool {
+  border: 1px solid var(--edge);
+  border-radius: 7px;
+  background: #0f151e;
+  padding: 0.35rem 0.5rem;
+}
+
+.chat-tool[data-error] {
+  border-color: color-mix(in srgb, var(--danger) 55%, var(--edge));
+}
+
+.chat-tool summary b {
+  color: var(--agent);
+}
+
+.chat-tool summary .target {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-tool summary .state {
+  color: var(--ink-faint);
+  font-size: 0.65rem;
+}
+
+.chat-tool[data-error] summary .state {
+  color: var(--danger);
+}
+
+/* The checklist, in full. The pane has the room the node never did, and it is
+   the clearest statement of the step a machine is on. */
+.todos {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 0.2rem;
+  font-size: 0.72rem;
+  color: var(--ink-dim);
+}
+
+.todos li {
+  display: flex;
+  gap: 0.35rem;
+  align-items: baseline;
+}
+
+.todos li[data-status="completed"] {
+  color: var(--ink-faint);
+  text-decoration: line-through;
+}
+
+.todos li[data-status="in_progress"] {
+  color: var(--ink);
+}
+
+.todos .box {
+  flex: 0 0 auto;
+}
+
+/* The raw envelopes: the escape hatch for when a tab folded away the one thing
+   that mattered, and the only place the deltas are visible as themselves. */
+.raw-events {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 0.1rem;
+}
+
+.raw-events > li > button {
+  display: flex;
+  gap: 0.6rem;
+  width: 100%;
+  border: none;
+  background: transparent;
+  color: var(--ink-dim);
+  cursor: pointer;
+  text-align: left;
+  padding: 0.15rem 0.3rem;
+  font: inherit;
+  font-size: 0.7rem;
+  border-radius: 4px;
+}
+
+.raw-events > li > button:hover {
+  background: var(--raised);
+  color: var(--ink);
+}
+
+.raw-events .seq {
+  flex: 0 0 3rem;
+  color: var(--ink-faint);
+}
+
+.raw-events .kind {
+  flex: 1;
+}
+
+.raw-events pre {
+  margin: 0.2rem 0 0.4rem;
+  max-height: 22rem;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 0.68rem;
+  color: var(--ink-dim);
+  background: #0b1017;
+  border: 1px solid var(--edge);
+  border-radius: 6px;
+  padding: 0.4rem 0.5rem;
 }
 
 .request label .hint {

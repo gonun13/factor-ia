@@ -145,7 +145,7 @@ memory beside the branch.
 
 It is deliberately **not a status**. A memory has no `runtime` and never gets
 one: a runtime is what the walk gives a machine it ran, and inventing one here
-would light a pip on the canvas and open a thread in the run log for a node the
+would light a pip on the canvas and put a card on the timeline for a node the
 walk never reaches — the canvas claiming storage is a station on the line. The
 filed line is the other question, the one worth asking of a shelf: is there
 anything on it, and how much. The pip stays dark on a memory that has just been

@@ -212,3 +212,14 @@ export function ModelGlyph() {
     </svg>
   );
 }
+
+/** Log: a page with lines written on it — what a machine did, on the record. */
+export function LogGlyph() {
+  return (
+    <svg viewBox="0 0 16 16" aria-hidden>
+      <path d="M3.5 2h6l3 3v9h-9z" {...stroke} />
+      <path d="M9.5 2v3h3" {...stroke} />
+      <path d="M5.5 8h5M5.5 10.5h5" {...stroke} />
+    </svg>
+  );
+}

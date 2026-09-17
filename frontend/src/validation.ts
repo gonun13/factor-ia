@@ -32,7 +32,6 @@ import {
   DEFAULT_MAX_LAPS,
   EDGE_OUTCOMES,
   MAX_LAPS_LIMIT,
-  PUSHING_OUTPUT_KINDS,
   type Codebase,
   type CodebaseGit,
   type KnowledgeBaseSummary,
@@ -480,31 +479,15 @@ export function runProblems(
     });
   }
 
-  // A pushing output node needs a remote to push to, and the canvas cannot
-  // know whether one is configured — `git remote get-url` is a subprocess, and
-  // the server runs it as a run precondition. What the canvas *can* do is say
-  // out loud what is about to happen, next to the Run button, because an output
-  // node is the only thing here that can change a repository other people pull
-  // from. Not a `Problem` that blocks a run: a warning shaped like one.
-  const pushing = byType("output").filter((n) =>
-    (PUSHING_OUTPUT_KINDS as string[]).includes(nodeKind(n.data.definition)),
-  );
-  const merging = pushing.filter(
-    (n) => nodeKind(n.data.definition) === "commit-merge",
-  );
-  if (merging.length > 0) {
-    problems.push({
-      message: `“${label(merging[0])}” fast-forwards the base branch on the remote when the run succeeds.`,
-      nodeIds: merging.map((n) => n.id),
-      severity: "notice",
-    });
-  } else if (pushing.length > 0) {
-    problems.push({
-      message: `“${label(pushing[0])}” pushes the run’s branch to the remote when the run succeeds.`,
-      nodeIds: pushing.map((n) => n.id),
-      severity: "notice",
-    });
-  }
+  // **A pushing output used to announce itself here, and no longer does.** It
+  // was true — a `commit & push` node does push, and a `commit & merge` node
+  // does move a branch other people pull from — but it was true of every run
+  // with one on the sheet, every time the canvas was looked at, and it said
+  // nothing that was not already permanent in the run panel’s own note. A ▲
+  // that fires on the ordinary case teaches an operator to skim past the ▲
+  // that fires on the broken one, and the broken ones are what this function
+  // is for. The things that *stop* a push — no remote, no commits — are the
+  // server’s preconditions (`runcheck.py`) and they refuse the run out loud.
 
   // A belt leaving by a port its source node does not have. The server refuses
   // the same two (`runcheck._outcome_problems`) and its refusal is the one that
@@ -652,34 +635,14 @@ export function runProblems(
           message: `“${label(node)}” is inside the loop that “${label(source)}” closes, so it would commit on every lap. Move it onto the reviewer’s success belt, below the loop.`,
           nodeIds: [node.id],
         });
-      } else if (node.data.definition.type === "human") {
-        problems.push({
-          message: `“${label(node)}” is inside a loop — it is asked again on every lap.`,
-          nodeIds: [node.id],
-          severity: "notice",
-        });
-      } else if (node.data.definition.type === "agent") {
-        // A memory is never inside a loop — it is not on the line at all. What
-        // can be in one is the machine that *writes* to it, and that is worth
-        // saying: "rewritten" and "accumulated" are both plausible readings of
-        // a box called Memory and only one of them is true. A notice, not a
-        // blocker — unlike an output node, which would commit on every lap,
-        // this is the shape people actually want.
-        for (const wire of wires) {
-          if (wire.source !== node.id) continue;
-          const filed = nodeById.get(wire.target);
-          // Memories only. A base is not rewritten by a lap — it accumulates,
-          // which is the property that makes it a base — so this notice would
-          // be false of one, and a wire drawn agent-to-base is refused above
-          // rather than described here.
-          if (filed?.data.definition.type !== "memory") continue;
-          problems.push({
-            message: `“${label(node)}” is inside the loop that “${label(source)}” closes, so its section of “${label(filed)}” is rewritten on every lap rather than added to.`,
-            nodeIds: [node.id, filed.id],
-            severity: "notice",
-          });
-        }
       }
+      // **Two more notices used to live here**, about a human node being asked
+      // again on every lap and about a writer’s section of a memory being
+      // rewritten rather than added to on every lap. Both describe the loop
+      // working correctly — they are what a lap *is* — and the node’s own lap
+      // chip says it is on one. Only the output node above is still a problem,
+      // and it is a blocker, because committing on every lap is the one thing
+      // in here nobody wants.
     }
   }
 

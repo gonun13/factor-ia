@@ -298,3 +298,42 @@ async def run_events(
             "connection": "keep-alive",
         },
     )
+
+
+@router.get("/runs/{run_id}/nodes/{node_id}/events")
+async def node_events(
+    run_id: str,
+    node_id: str,
+    from_seq: int = Query(default=0, ge=0, alias="from"),
+) -> dict[str, Any]:
+    """Everything one machine did, read back out of the log.
+
+    The stream above is the run's story as it happens, and the browser keeps
+    only as much of it as the canvas needs — the newest lap's text, the tool in
+    flight. Every lap before this one, every tool's arguments, the thinking and
+    the deltas are all still in `events.jsonl`; they simply have nowhere to go
+    in a reducer that has to stay small. So the node log fetches them instead of
+    the reducer hoarding them, which keeps a long run's browser memory flat and
+    makes a *finished* run's nodes openable for as long as the file exists.
+
+    Raw records, not models: they were scrubbed once on append (`RunLog.append`)
+    and the client already has a type for every envelope. Round-tripping them
+    through `RUN_EVENT_ADAPTER` would only risk a validation error standing
+    between an operator and the log of the run that just failed.
+    """
+    if orchestrator().get(run_id) is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"no such run: {run_id}")
+    # A live run's log belongs to its channel — the same choice `_stream` makes,
+    # and for the same reason: a second `RunLog` would carry a second append
+    # lock over one file.
+    channel = orchestrator().channel(run_id)
+    log = channel.log if channel else RunLog(run_id)
+    events = [record for record in log.read(from_seq) if record.get("node_id") == node_id]
+    return {
+        "run_id": run_id,
+        "node_id": node_id,
+        # Where this history ends, so the client knows which live events it has
+        # already been given and which are new.
+        "last_seq": int(events[-1]["seq"]) if events else from_seq,
+        "events": events,
+    }

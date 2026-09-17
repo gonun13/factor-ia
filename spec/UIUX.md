@@ -99,19 +99,36 @@ returns every reason at once rather than the first one it hits.
 
 ## Running, in place
 
-Press **Run** and the viewport does not move. No second screen opens. The run
-box asks for the request, it is submitted **once** — this is not a chat — and
-the machines light up where they already are:
+Press **Run** and the viewport does not move. No second screen opens. The
+machines light up where they already are, and four surfaces say what is
+happening — each with one job:
 
-- a status pip and a status word on the node itself,
-- a thread per machine in the **run pane** down the right-hand side: the tool it
-  is running, its checklist, and its words as they arrive.
+- **The node** keeps what reads at a glance: a status pip, a status word, and a
+  lap chip when it is going round more than once.
+- **The timeline** floats along the bottom of the sheet: one small card per
+  machine the walk has been through, in the order the belts run, linked left to
+  right. The machine currently working gets one more line — the tool it is on
+  and the tail of what it is saying. It never takes more than 80% of the width
+  and never grows taller than a row; a long run scrolls sideways instead.
+- **The node log** opens from the icon in front of a machine's name, or from its
+  card on the timeline: one machine's whole story, in a window sized for
+  reading. What arrived, what left, the agent's words, every tool with its
+  actual arguments, the thinking, the decisions, and the raw events underneath
+  — with every lap of a loop kept separately rather than only the newest.
+- **The chat** appears over the canvas when the run stops to ask something: the
+  request, a gate's sign-off, a scope node's questionnaire, with the exchange so
+  far above the open form. It is wide because a sign-off exists so that somebody
+  reads what arrived first.
 
-The pane is docked beside the canvas rather than floating over it, so no part of
-the line is ever hidden while a run is going, and the run box sits at the top of
-it. It is a transcript you read, not a conversation you type into — the request
-is still submitted once. The zoom controls and the minimap share the canvas's
-bottom-left corner.
+Top-right is the **run panel**: the run as a whole — Run and Cancel, the branch
+it owns, what it cost, what is stopping it. It floats too, and it is as small as
+its contents; nothing here takes a permanent column, so the line is drawn across
+the whole sheet. A floating panel does cover what is under it — the chat has a
+**hide** for exactly that, and it is the way to a node the question is about.
+
+Input is still submitted **once**; this is not a conversation you type into
+freely. The zoom controls and the minimap share the canvas's bottom-left
+corner.
 
 ### Cancel means cancel
 

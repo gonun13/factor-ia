@@ -2,7 +2,11 @@
    them up later reads as one system; the type colour, glyph and body differ. */
 
 .node {
-  width: 15rem;
+  /* 12rem, down from 15. The chassis was sized when it carried the agent's
+     words; the transcript is the node log's now, so what is left is a name, a
+     glyph and two or three plates — and a narrower node puts more of the line
+     on screen at once, which is what this canvas is for. */
+  width: 12rem;
   border-radius: 12px;
   border: 1px solid var(--edge);
   background: linear-gradient(180deg, #1a222e, #141a24);
@@ -190,6 +194,12 @@
 
 .slot select {
   width: 100%;
+  /* A model id plus "(default)" is longer than a 12rem chassis, so the ellipsis
+     is doing real work: a select that simply clips reports "fake-model-1
+     (default" and invites the reader to wonder what the missing character was.
+     `min-width: 0` is what lets it shrink inside the slot's grid at all. */
+  min-width: 0;
+  text-overflow: ellipsis;
   font-size: 0.78rem;
   padding: 0.3rem 0.4rem;
   background: #12101c;
@@ -210,7 +220,7 @@
 
 /* Branch and state are one fact about the attached codebase, so they are one
    line: `main · clean`. Wrapping is allowed because "3 uncommitted changes"
-   plus a filename is longer than a 15rem chassis, and a second line of the
+   plus a filename is longer than a 12rem chassis, and a second line of the
    same sentence still reads as one thing — a branch stacked above a status
    read as two. */
 .slot .branch-state {
@@ -518,7 +528,7 @@
    is in flight. A node that has never run is byte-for-byte the node you drew:
    no reserved space, no empty panels, no "waiting" placeholder — and a node
    that *is* running is the same node, one pip and one word larger. The rest of
-   the live state is in the run pane (`index.css`, the run pane), which shares
+   the live state is in the node log (`index.css`, the node log), which shares
    the pip and the status word so the two surfaces speak with one vocabulary. */
 
 .node.live {
@@ -533,7 +543,7 @@
   border-color: color-mix(in srgb, var(--danger) 60%, var(--edge));
 }
 
-/* Shared with the run pane's threads, which say the same word about the same
+/* Shared with the timeline's cards, which say the same word about the same
    node — hence no `.node` in front of it. */
 .status-word {
   font-size: 0.6rem;
@@ -836,4 +846,40 @@
 
 .react-flow__handle.handle-write:hover {
   background: var(--input);
+}
+
+/* The log icon, in front of a machine's name. Quiet until the pointer is on it:
+   it sits beside an editable title on a 12rem chassis, and a control that
+   announced itself all the time would be competing with the name for the one
+   row they share. Drawn only on a node the run has reached (`NodeShell`), so
+   its presence is itself the statement that there is something to read. */
+.node-log-open {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 1.1rem;
+  height: 1.1rem;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--ink-faint);
+  cursor: pointer;
+}
+
+.node-log-open svg {
+  width: 0.85rem;
+  height: 0.85rem;
+}
+
+.node-log-open:hover,
+.node-log-open:focus-visible {
+  color: var(--ink);
+  background: var(--raised);
+}
+
+.node-titlerow {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
 }

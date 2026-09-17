@@ -39,6 +39,28 @@ import {
 /** What one node looks like right now, by node id. */
 export type Runtimes = Record<string, NodeRuntime>;
 
+/**
+ * One turn of what the operator and the run said to each other.
+ *
+ * Beside `decisions` and `questions` rather than instead of them, and the
+ * difference is the whole reason it exists: those two hold what is being asked
+ * *now* and are cleared the moment it is answered, because a form on screen
+ * that nobody is waiting on is a lie. This is the record of what was asked and
+ * what was said back, and it is never cleared — the chat panel is a
+ * conversation, and a conversation that forgot its last exchange the instant it
+ * ended would be a form with extra chrome.
+ *
+ * Built from the log like everything else here, so a tab that joined late reads
+ * the same conversation as the tab that was open from the start.
+ */
+export type Exchange = { seq: number; nodeId: string } & (
+  | { kind: "input"; text: string; filename: string | null }
+  | { kind: "asked"; requestId: string; questions: ScopeQuestion[] }
+  | { kind: "answered"; requestId: string; answers: Record<string, string> }
+  | { kind: "gate"; prompt: string; incoming: string }
+  | { kind: "verdict"; approved: boolean; note: string }
+);
+
 export type RunState = {
   run: Run | null;
   status: OverallRunStatus | null;
@@ -76,6 +98,8 @@ export type RunState = {
    * late renders the open form from the log alone, and a tab that was already
    * open loses the form the moment anybody answers it. */
   questions: Record<string, { nodeId: string; questions: ScopeQuestion[] }>;
+  /** What the operator and the run have said to each other, oldest first. */
+  exchanges: Exchange[];
   /** Blockers the *server* refused the run with, or a control-call failure. */
   problems: string[];
   error: string | null;
@@ -92,6 +116,7 @@ const EMPTY: RunState = {
   memories: {},
   decisions: {},
   questions: {},
+  exchanges: [],
   problems: [],
   error: null,
   busy: false,
@@ -183,6 +208,16 @@ export function reduceRunEvent(state: RunState, event: RunEvent): RunState {
     case "run.decision.request":
       return {
         ...state,
+        exchanges: [
+          ...state.exchanges,
+          {
+            seq: event.seq,
+            nodeId: event.node_id,
+            kind: "gate",
+            prompt: event.prompt,
+            incoming: event.incoming,
+          },
+        ],
         decisions: {
           ...state.decisions,
           [event.node_id]: { prompt: event.prompt, incoming: event.incoming },
@@ -191,6 +226,16 @@ export function reduceRunEvent(state: RunState, event: RunEvent): RunState {
     case "run.decision":
       return {
         ...state,
+        exchanges: [
+          ...state.exchanges,
+          {
+            seq: event.seq,
+            nodeId: event.node_id,
+            kind: "verdict",
+            approved: event.approved,
+            note: event.note,
+          },
+        ],
         decisions: withoutNode(state.decisions, event.node_id),
         runtimes: withNode(state.runtimes, event.node_id, {
           text: event.note || undefined,
@@ -199,6 +244,16 @@ export function reduceRunEvent(state: RunState, event: RunEvent): RunState {
     case "run.question.request":
       return {
         ...state,
+        exchanges: [
+          ...state.exchanges,
+          {
+            seq: event.seq,
+            nodeId: event.node_id,
+            kind: "asked",
+            requestId: event.request_id,
+            questions: event.questions,
+          },
+        ],
         questions: {
           ...state.questions,
           [event.request_id]: {
@@ -210,6 +265,16 @@ export function reduceRunEvent(state: RunState, event: RunEvent): RunState {
     case "run.question":
       return {
         ...state,
+        exchanges: [
+          ...state.exchanges,
+          {
+            seq: event.seq,
+            nodeId: event.node_id,
+            kind: "answered",
+            requestId: event.request_id,
+            answers: event.answers,
+          },
+        ],
         // Keyed by request, so `withoutNode` is doing its job on a different
         // kind of key — the function drops one entry and does not care what the
         // entry is about.
@@ -224,6 +289,16 @@ export function reduceRunEvent(state: RunState, event: RunEvent): RunState {
     case "run.input":
       return {
         ...state,
+        exchanges: [
+          ...state.exchanges,
+          {
+            seq: event.seq,
+            nodeId: event.node_id,
+            kind: "input",
+            text: event.text,
+            filename: event.filename,
+          },
+        ],
         runtimes: withNode(state.runtimes, event.node_id, {
           // A PRD is a document, and a node is not a document viewer. The
           // shell's `<pre>` scrolls, so the whole thing is there to read — but
@@ -270,8 +345,8 @@ export function reduceRunEvent(state: RunState, event: RunEvent): RunState {
             : state.memories,
         // **Only onto a machine that is running.** A `memory` artifact names a
         // node that never runs and has no status of its own, and creating a
-        // runtime for it here would put a pip on the canvas and a thread in the
-        // run log for a node the walk is never going to reach — the canvas
+        // runtime for it here would put a pip on the canvas and a card on the
+        // timeline for a node the walk is never going to reach — the canvas
         // claiming storage is a station on the line. Every other artifact kind
         // is emitted by a machine that is mid-run, so it already has one.
         runtimes: state.runtimes[event.node_id]
@@ -348,6 +423,27 @@ function message(cause: unknown): string {
 export function useRun(projectId: string, factoryId: string) {
   const [state, setState] = useState<RunState>(EMPTY);
   const source = useRef<EventSource | null>(null);
+  /**
+   * Who else wants to see the envelopes, besides the reducer.
+   *
+   * A node log window has fetched one machine's history and needs the events
+   * that arrive *after* that fetch, which is a different question from the one
+   * `RunState` answers — it wants the envelopes themselves, all of them, for
+   * one node, rather than the small summary the canvas draws. A second
+   * `EventSource` would get them at the cost of a second replay of the whole
+   * log and a second connection per open window; a tap on the one stream costs
+   * nothing. In a ref, not state: adding a listener must not re-run `watch`
+   * and reconnect the stream underneath it.
+   */
+  const taps = useRef(new Set<(event: RunEvent) => void>());
+
+  /** Watch the raw stream. Returns the unsubscribe; call it on unmount. */
+  const subscribe = useCallback((tap: (event: RunEvent) => void) => {
+    taps.current.add(tap);
+    return () => {
+      taps.current.delete(tap);
+    };
+  }, []);
 
   const disconnect = useCallback(() => {
     source.current?.close();
@@ -371,6 +467,10 @@ export function useRun(projectId: string, factoryId: string) {
           }
           return next;
         });
+        // After the reducer, never inside it: `setState`'s updater is called
+        // twice under StrictMode, and a tap that ran in there would append
+        // every event to an open log window twice.
+        for (const tap of taps.current) tap(event);
       };
       for (const type of RUN_EVENT_TYPES) stream.addEventListener(type, onEvent as EventListener);
       stream.onerror = () => {
@@ -602,6 +702,7 @@ export function useRun(projectId: string, factoryId: string) {
     resume,
     resumable,
     watch,
+    subscribe,
     clear,
   };
 }

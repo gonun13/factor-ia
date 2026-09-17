@@ -17,12 +17,21 @@
  * serialization or the node components moves, because stage 3 put the
  * `definition`/`runtime` split on the node object from the first render.
  *
- * **The run pane is docked, not floating.** The right-hand side is a sibling of
- * the canvas rather than a panel over it — the run box on top, then one thread
- * per machine (`RunChat`) fed by the same `runtimes` map. The node keeps the
- * part that reads at a glance, its pip and status word; the words, the tool and
- * the checklist go where there is room for them. Nothing on the line is ever
- * hidden behind the pane, which is why it takes width instead of overlaying.
+ * **Four surfaces, one job each, and all of them float.** The *run panel*
+ * (`RunBox`) sits top-right: the run as a whole — start it, cancel it, the
+ * branch it owns, what it cost, what is stopping it. The *chat* (`RunChat`)
+ * sits just inboard of it, and only while the run has stopped to ask something.
+ * Along the bottom runs the *timeline* (`Timeline`), one small card per machine
+ * the walk has been through. And a card, or the icon in front of a machine's
+ * name, opens the *node log* (`NodeLog`) — one machine's whole story, fetched
+ * back out of `events.jsonl`.
+ *
+ * They used to be two: a docked 25rem column holding all of it, and the node.
+ * The column was being asked to be a control panel, a form and a transcript at
+ * once, and the transcript won — it pushed the forms off the bottom of the
+ * thing the operator had to answer. Splitting them gives each one the shape its
+ * job needs; floating all of them gives the line the whole sheet to be drawn
+ * across, which is the thing this screen is actually for.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from "react";
@@ -74,7 +83,9 @@ import {
 } from "../nodes/Glyphs";
 import { ProjectSettingsPanel } from "./ProjectSettingsPanel";
 import { useRun, type RunState } from "../run";
+import { NodeLog } from "./NodeLog";
 import { RunChat } from "./RunChat";
+import { Timeline } from "./Timeline";
 import { blockers, runProblems, type Problem } from "../validation";
 import type {
   AgentStatus,
@@ -545,8 +556,8 @@ function CanvasInner({ projectId, onBack }: { projectId: string; onBack: () => v
     [nodes, edges, codebases, dirty, gitStates, bases],
   );
   const invalid = useMemo(
-    // Blockers only: a notice ("this one pushes") is something to read, not a
-    // node to outline in red.
+    // Blockers only: a notice — now only ever a wire that landed on the wrong
+    // entry — is something to read, not a node to outline in red.
     () => new Set(blockers(problems).flatMap((problem) => problem.nodeIds)),
     [problems],
   );
@@ -562,6 +573,39 @@ function CanvasInner({ projectId, onBack }: { projectId: string; onBack: () => v
     },
     [fitView, setNodes],
   );
+
+  /** Which machine's log is open, if any. One window: two of them over the
+   * same canvas would be two copies of the same fetch competing for the same
+   * screen, and the timeline makes switching between machines one click. */
+  const [logNodeId, setLogNodeId] = useState<string | null>(null);
+  const openLog = useCallback((nodeId: string) => setLogNodeId(nodeId), []);
+
+  // The window closes when the run it is reading is cleared out from under it.
+  const runId = run.run?.id ?? null;
+  useEffect(() => {
+    if (runId === null) setLogNodeId(null);
+  }, [runId]);
+
+  const logNode = logNodeId ? (nodes.find((node) => node.id === logNodeId) ?? null) : null;
+
+  /** What the machines immediately above this one left behind.
+   *
+   * The nearest honest answer to "what did this node get": the text the belts
+   * actually carried is assembled when a node starts and never written down, so
+   * the log pane shows each predecessor's own output and says that is what it
+   * is. Belts only — a wire from a memory is a reference, not an input. */
+  const upstream = useMemo(() => {
+    if (!logNodeId) return [];
+    const byId = new Map((run.run?.node_runs ?? []).map((one) => [one.node_id, one]));
+    return edges
+      .filter((edge) => edge.target === logNodeId && edge.type !== "wire")
+      .map((edge) => ({
+        label:
+          nodes.find((node) => node.id === edge.source)?.data.definition.label ?? edge.source,
+        text: byId.get(edge.source)?.output_text ?? "",
+      }))
+      .filter((source) => source.text);
+  }, [logNodeId, edges, nodes, run.run]);
 
   const context = useMemo(
     () => ({
@@ -579,6 +623,7 @@ function CanvasInner({ projectId, onBack }: { projectId: string; onBack: () => v
       memories: run.memories,
       knowledgeBases: baseIndex,
       entryAccepts,
+      openLog,
     }),
     [
       codebases,
@@ -591,6 +636,7 @@ function CanvasInner({ projectId, onBack }: { projectId: string; onBack: () => v
       run.memories,
       baseIndex,
       entryAccepts,
+      openLog,
     ],
   );
 
@@ -794,21 +840,41 @@ function CanvasInner({ projectId, onBack }: { projectId: string; onBack: () => v
                   </div>
                 </div>
               </Panel>
+
+              {/* The run, along the bottom. A `Panel` and not an absolutely
+                  positioned div: a `Panel` is React Flow's own overlay slot and
+                  sits outside the viewport transform, so the strip neither pans
+                  nor zooms with the sheet under it. */}
+              <Timeline nodes={nodes} runtimes={run.runtimes} onOpen={openLog} />
             </ReactFlow>
+
+            {/* Over the canvas, not inside the flow: both of these are things
+                you click and type into, and inside React Flow's subtree the
+                viewport transform would scale every control in them.
+
+                The run panel floats at the top-right and the chat sits just
+                inboard of it, so they read as one column without either one
+                taking width from the line permanently. */}
+            <RunBox problems={problems} onFocus={focus} run={run} />
+
+            <RunChat
+              exchanges={run.exchanges}
+              awaiting={run.awaiting}
+              parked={run.parked}
+              asking={run.asking}
+              busy={run.busy}
+              labels={Object.fromEntries(
+                nodes.map((node) => [node.id, node.data.definition.label]),
+              )}
+              onSubmit={(text, options) => void run.submit(text, options)}
+              onDecide={(nodeId, approved, note) => void run.decide(nodeId, approved, note)}
+              onAnswer={(nodeId, requestId, answers) =>
+                void run.answer(nodeId, requestId, answers)
+              }
+            />
           </CanvasContext.Provider>
           )}
         </div>
-        {/* The run, docked down the right rather than floating over the line:
-            the controls it starts from, then a thread per machine. It waits for
-            the factory for the same reason the canvas does — a run box listing
-            everything wrong with a graph nobody has loaded yet is noise, not a
-            warning. */}
-        {factory !== null && (
-          <aside className="runpane">
-            <RunBox problems={problems} onFocus={focus} run={run} />
-            <RunChat nodes={nodes} runtimes={run.runtimes} />
-          </aside>
-        )}
       </div>
 
       {/* A sibling of the canvas, never a child: inside React Flow's subtree the
@@ -816,6 +882,21 @@ function CanvasInner({ projectId, onBack }: { projectId: string; onBack: () => v
           `nodrag`/`nowheel`. `onSaved` is what makes each node's "— project
           default —" label update the instant this saves, since `project` feeds
           the context memo above. */}
+      {/* One machine's whole story. A sibling of the canvas for the reason the
+          settings panel is one — inside React Flow's subtree the viewport
+          transform would scale it — and it needs a run to read, so it is drawn
+          only once there is one. */}
+      {logNode && run.run && (
+        <NodeLog
+          runId={run.run.id}
+          node={logNode}
+          nodeRun={run.run.node_runs.find((one) => one.node_id === logNode.id)}
+          upstream={upstream}
+          subscribe={run.subscribe}
+          onClose={() => setLogNodeId(null)}
+        />
+      )}
+
       {settingsOpen && project && (
         <ProjectSettingsPanel
           project={project}
@@ -998,57 +1079,22 @@ function RunBox({
         </p>
       )}
 
-      {/* One form per input node still waiting — submitted once each, and not
-          a chat (DESIGN.md, open question 2). They appear where the run is
-          rather than in a modal, so the canvas never goes away while you
-          answer. The *run record* decides which are shown: the walk starts on
-          the last submission, so a form that vanished because the server said
-          so cannot disagree with the server. */}
-      {run.awaiting.map((node_run) => (
-        <InputForm
-          key={node_run.node_id}
-          nodeRun={node_run}
-          busy={run.busy}
-          remaining={run.awaiting.length}
-          onSubmit={(text, options) => void run.submit(text, options)}
-        />
-      ))}
-
-      {/* And one per human node the walk is parked on. Same place, same
-          reason: the canvas never goes away while you answer. Driven by the
-          *stream* rather than by the run record, which is a snapshot from
-          before the walk and cannot see a node that parks mid-graph. */}
-      {run.parked.map((gate) => (
-        <DecisionForm
-          key={gate.nodeRun.node_id}
-          nodeRun={gate.nodeRun}
-          prompt={gate.prompt}
-          incoming={gate.incoming}
-          busy={run.busy}
-          onDecide={(approved, note) =>
-            void run.decide(gate.nodeRun.node_id, approved, note)
-          }
-        />
-      ))}
-
-      {/* And one per open questionnaire. Same place as the other two forms and
-          for the same reason — the canvas never goes away while you answer —
-          but keyed by request rather than by node: a scope node asks many
-          times, and the form on screen has to be the one being answered. */}
-      {run.asking.map((open) => (
-        <QuestionForm
-          key={open.requestId}
-          nodeRun={open.nodeRun}
-          questions={open.questions}
-          busy={run.busy}
-          onAnswer={(answers) =>
-            void run.answer(open.nodeRun.node_id, open.requestId, answers)
-          }
-        />
-      ))}
+      {/* **The three forms used to be here** — the request, a gate's sign-off,
+          a scope node's questionnaire — and they are the chat panel's now
+          (`RunChat`). They were in the run box because the run box was the only
+          thing beside the canvas, and they were the worst-served thing in it: a
+          sign-off exists so that somebody reads what arrived first, and this
+          column is not a width anybody reads a diff in. What is left here is
+          what this panel is actually for — the run as a whole. */}
 
       {run.status && !run.live && (
-        <p className="ready">
+        // **Coloured by how it ended, not by the fact that it ended.** This line
+        // borrowed `.ready`, which is green because the line it was written for
+        // says the factory is ready to run — so a run that failed announced
+        // itself in the colour of success, with the worktree it left behind for
+        // you to go and look at reading as good news. The status is right here
+        // on the element; the colour comes off it.
+        <p className="ready outcome" data-status={run.status}>
           {/* The detail is often just the status word again ("cancelled"), and
               "cancelled clear" is not a sentence. */}
           {run.detail && run.detail !== run.status
@@ -1062,7 +1108,9 @@ function RunBox({
       )}
 
       {run.live && run.costUsd > 0 && (
-        <p className="ready mono">${run.costUsd.toFixed(4)} so far</p>
+        // Not `.outcome`: a running total is a fact, not a verdict, and it has
+        // no status to take a colour from yet.
+        <p className="ready running-cost mono">${run.costUsd.toFixed(4)} so far</p>
       )}
 
       {run.error && <p className="problems-note">{run.error}</p>}
@@ -1114,376 +1162,5 @@ function RunBox({
         branches only move when you pull.
       </p>
     </div>
-  );
-}
-
-/**
- * What one input node asks a human for.
- *
- * A `request` wants a sentence and a `prd` wants a document, which is the whole
- * reason input submission became per-node: broadcasting one string to every
- * input node stopped being a simplification the moment the two kinds existed.
- *
- * The PRD arrives as a **file read in the browser** and posted as text. No
- * upload endpoint, no file on disk to clean up, and — the reason that decided
- * it — no second path into the container that takes a filename. The name is
- * carried alongside purely as a label: it is shown, and written into the
- * commit's `Factor-ia-Source` trailer, and nothing ever opens it.
- */
-function InputForm({
-  nodeRun,
-  busy,
-  remaining,
-  onSubmit,
-}: {
-  nodeRun: NodeRun;
-  busy: boolean;
-  remaining: number;
-  onSubmit: (text: string, options: { nodeId: string; filename?: string }) => void;
-}) {
-  const [text, setText] = useState("");
-  const [filename, setFilename] = useState<string | null>(null);
-  const [reading, setReading] = useState(false);
-  const [problem, setProblem] = useState<string | null>(null);
-  const isPrd = nodeRun.kind === "prd";
-  const name = nodeRun.label || nodeRun.node_id;
-
-  const take = async (file: File | undefined) => {
-    if (!file) return;
-    setProblem(null);
-    setReading(true);
-    try {
-      const contents = await file.text();
-      if (!contents.trim()) {
-        setProblem(`${file.name} is empty.`);
-        return;
-      }
-      setText(contents);
-      setFilename(file.name);
-    } catch (cause) {
-      setProblem(cause instanceof Error ? cause.message : String(cause));
-    } finally {
-      setReading(false);
-    }
-  };
-
-  return (
-    <form
-      className="request"
-      onSubmit={(event) => {
-        event.preventDefault();
-        if (!text.trim()) return;
-        onSubmit(isPrd ? text : text.trim(), {
-          nodeId: nodeRun.node_id,
-          filename: filename ?? undefined,
-        });
-      }}
-    >
-      <label htmlFor={`run-input-${nodeRun.node_id}`}>
-        {isPrd ? `${name} — hand over a PRD` : "What should this factory do?"}
-        {remaining > 1 && <span className="hint"> · {remaining} inputs waiting</span>}
-      </label>
-
-      {isPrd ? (
-        <div
-          className={`prd-drop${filename ? " has-file" : ""}`}
-          onDragOver={(event) => {
-            event.preventDefault();
-            event.stopPropagation();
-            event.dataTransfer.dropEffect = "copy";
-          }}
-          onDrop={(event) => {
-            event.preventDefault();
-            event.stopPropagation();
-            void take(event.dataTransfer.files[0]);
-          }}
-        >
-          <input
-            id={`run-input-${nodeRun.node_id}`}
-            className="nodrag"
-            type="file"
-            accept=".md,.markdown,.txt,text/markdown,text/plain"
-            onChange={(event) => void take(event.target.files?.[0])}
-          />
-          {filename ? (
-            <span className="prd-chosen">
-              <span className="mono">{filename}</span>
-              <span className="hint">
-                {" "}
-                · {text.split(/\r?\n/).length} lines, {Math.ceil(text.length / 1024)} kB
-              </span>
-            </span>
-          ) : (
-            <span className="hint">
-              {reading ? "Reading…" : "Drop a PRD.md here, or choose one."}
-            </span>
-          )}
-        </div>
-      ) : (
-        <textarea
-          id={`run-input-${nodeRun.node_id}`}
-          className="nodrag nowheel"
-          autoFocus
-          rows={3}
-          value={text}
-          placeholder="Tidy the README and fix the broken link."
-          onChange={(event) => setText(event.target.value)}
-          onKeyDown={(event) => {
-            if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
-              event.currentTarget.form?.requestSubmit();
-            }
-          }}
-        />
-      )}
-
-      {problem && <p className="problems-note">{problem}</p>}
-      <button className="primary" type="submit" disabled={!text.trim() || busy || reading}>
-        {isPrd ? "Submit the PRD" : "Submit the request"}
-      </button>
-    </form>
-  );
-}
-
-/**
- * The form a human node parks the run on: what arrived, and two ways out.
- *
- * Sibling of `InputForm`, and deliberately the same shape — it appears in the
- * run panel beside the canvas rather than in a modal, so the graph the operator
- * is being asked about never goes away while they answer.
- *
- * **Both buttons are always live, and neither is the default.** A sign-off whose
- * reject button is a second click behind a confirmation is a sign-off that gets
- * approved, and this is the one control on the screen whose entire purpose is
- * that somebody read something first. The note is optional on approve and the
- * thing that makes a rejection useful: it replaces what the node passes on, so
- * the fail belt carries a reason rather than a copy of what was rejected.
- */
-/**
- * One questionnaire from a `scope` node, answered under the canvas.
- *
- * The same place and the same shape as `DecisionForm` — a form where the run is
- * rather than a modal, so the canvas never goes away while you answer — and the
- * differences are all the difference between a gate and an interview:
- *
- * - **Options are answers, not buttons.** The agent offers them, so they are a
- *   list you pick from rather than a fixed Approve/Reject pair, and "other" is
- *   always there because an agent's options are a guess at what you will say.
- * - **Keyed by question text.** That is the provider's own contract: the answer
- *   map goes back keyed by the question exactly as asked, so nothing here
- *   rewrites the wording it renders.
- * - **`1`–`9` picks an option**, because an interview is a sequence and reaching
- *   for the mouse once per question is the thing that makes people stop using
- *   one. The listener is scoped to the form, so it cannot eat a digit typed
- *   into a node's label on the canvas behind it.
- */
-function QuestionForm({
-  nodeRun,
-  questions,
-  busy,
-  onAnswer,
-}: {
-  nodeRun: NodeRun;
-  questions: ScopeQuestion[];
-  busy: boolean;
-  onAnswer: (answers: Record<string, string>) => void;
-}) {
-  // Keyed by question text, like the thing being built. `picked` holds the
-  // option labels chosen; `typed` holds whatever was written in "other". A
-  // question with both sends what was typed — you cannot type by accident.
-  const [picked, setPicked] = useState<Record<string, string[]>>({});
-  const [typed, setTyped] = useState<Record<string, string>>({});
-  const name = nodeRun.label || nodeRun.node_id;
-  const form = useRef<HTMLFormElement>(null);
-
-  // **Focus follows the question.** The digit shortcuts are listened for on the
-  // form, so they only work while it holds focus — and a form the operator has
-  // to click before they can answer is a shortcut nobody discovers. This is
-  // also the accessible behaviour: the run stopped to ask something, so the
-  // thing it is asking is where the keyboard should be. Safe to take: a scope
-  // node parks the whole run, so nothing else on the canvas is mid-edit.
-  useEffect(() => {
-    form.current?.focus();
-  }, []);
-
-  const answerFor = (question: ScopeQuestion): string => {
-    const written = (typed[question.question] ?? "").trim();
-    if (written) return written;
-    return (picked[question.question] ?? []).join(", ");
-  };
-  const answers = Object.fromEntries(
-    questions.map((question) => [question.question, answerFor(question)]),
-  );
-  // Every question, or none. A partially answered form posted anyway would be
-  // filtered server-side into a shorter map, and the agent would read the gaps
-  // as questions it has to ask again.
-  const complete = questions.every((question) => answers[question.question] !== "");
-
-  const choose = (question: ScopeQuestion, label: string) => {
-    setPicked((previous) => {
-      const current = previous[question.question] ?? [];
-      if (!question.multi_select) {
-        return { ...previous, [question.question]: current[0] === label ? [] : [label] };
-      }
-      return {
-        ...previous,
-        [question.question]: current.includes(label)
-          ? current.filter((one) => one !== label)
-          : [...current, label],
-      };
-    });
-  };
-
-  return (
-    <form
-      className="request question"
-      ref={form}
-      // Focusable but not in the tab order: the form is a container, and a stop
-      // on the way to its own first button would be a tab stop that does
-      // nothing.
-      tabIndex={-1}
-      onSubmit={(event) => {
-        event.preventDefault();
-        if (complete && !busy) onAnswer(answers);
-      }}
-      onKeyDown={(event) => {
-        // Only a bare digit, and only when the focus is not in a text box —
-        // otherwise "1" would be untypeable in the "other" field.
-        if (event.metaKey || event.ctrlKey || event.altKey) return;
-        const target = event.target as HTMLElement;
-        if (target.tagName === "INPUT" || target.tagName === "TEXTAREA") return;
-        if (busy) return;
-        const digit = Number(event.key);
-        if (!Number.isInteger(digit) || digit < 1 || digit > 9) return;
-        // The first unanswered question, which is the one being read.
-        const open =
-          questions.find((question) => answers[question.question] === "") ?? questions[0];
-        const option = open?.options[digit - 1];
-        if (!option) return;
-        event.preventDefault();
-        choose(open, option.label);
-      }}
-    >
-      <label>{name} is asking</label>
-
-      {questions.map((question) => (
-        <fieldset className="question-block" key={question.question}>
-          <legend>
-            {question.header && <span className="question-chip">{question.header}</span>}
-            {question.question}
-          </legend>
-
-          {question.options.length > 0 && (
-            <ol className="question-options">
-              {question.options.map((option, index) => {
-                const chosen = (picked[question.question] ?? []).includes(option.label);
-                return (
-                  <li key={option.label}>
-                    <button
-                      type="button"
-                      className={`question-option${chosen ? " chosen" : ""}`}
-                      aria-pressed={chosen}
-                      disabled={busy}
-                      onClick={() => choose(question, option.label)}
-                    >
-                      <kbd>{index + 1}</kbd>
-                      <span className="question-label">{option.label}</span>
-                      {option.description && (
-                        <span className="question-what">{option.description}</span>
-                      )}
-                    </button>
-                  </li>
-                );
-              })}
-            </ol>
-          )}
-
-          <input
-            className="nodrag nowheel"
-            value={typed[question.question] ?? ""}
-            aria-label={`another answer to: ${question.question}`}
-            placeholder={
-              question.options.length > 0 ? "…or say something else" : "Your answer"
-            }
-            disabled={busy}
-            onChange={(event) =>
-              setTyped((previous) => ({
-                ...previous,
-                [question.question]: event.target.value,
-              }))
-            }
-          />
-        </fieldset>
-      ))}
-
-      <div className="decision-actions">
-        <button className="primary" type="submit" disabled={busy || !complete}>
-          Answer
-        </button>
-        {!complete && (
-          <span className="question-hint">
-            {questions.length === 1
-              ? "Pick an option or write an answer."
-              : "Every question needs an answer."}
-          </span>
-        )}
-      </div>
-    </form>
-  );
-}
-
-function DecisionForm({
-  nodeRun,
-  prompt,
-  incoming,
-  busy,
-  onDecide,
-}: {
-  nodeRun: NodeRun;
-  prompt: string;
-  incoming: string;
-  busy: boolean;
-  onDecide: (approved: boolean, note: string) => void;
-}) {
-  const [note, setNote] = useState("");
-  const name = nodeRun.label || nodeRun.node_id;
-
-  return (
-    <form className="request decision" onSubmit={(event) => event.preventDefault()}>
-      <label htmlFor={`run-note-${nodeRun.node_id}`}>
-        {prompt || `${name} — approve or reject`}
-      </label>
-
-      {incoming && (
-        <pre className="stream nowheel decision-incoming">{incoming}</pre>
-      )}
-
-      <textarea
-        id={`run-note-${nodeRun.node_id}`}
-        className="nodrag nowheel"
-        rows={2}
-        value={note}
-        placeholder="Optional on approve. On reject, this is what goes back down the line."
-        onChange={(event) => setNote(event.target.value)}
-      />
-
-      <div className="decision-actions">
-        <button
-          className="primary"
-          type="button"
-          disabled={busy}
-          onClick={() => onDecide(true, note)}
-        >
-          Approve
-        </button>
-        <button
-          className="destructive"
-          type="button"
-          disabled={busy}
-          onClick={() => onDecide(false, note)}
-        >
-          Reject
-        </button>
-      </div>
-    </form>
   );
 }
