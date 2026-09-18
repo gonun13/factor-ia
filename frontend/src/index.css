@@ -248,10 +248,22 @@ button:focus-visible {
   gap: 0.85rem;
 }
 
+/* The delete affordance sits over the card, not in it — the card is itself a
+   button now, and a button inside a button is not a thing the DOM has. Same
+   arrangement as `.project-slot`, for the same reason. */
+.skill-slot {
+  position: relative;
+  display: grid;
+}
+
 .skill-card {
   position: relative;
+  width: 100%;
+  height: 100%;
+  font: inherit;
   text-align: left;
   padding: 0.85rem;
+  padding-right: 2.4rem;
   background: var(--panel);
   border: 1px solid var(--edge);
   border-radius: var(--radius);
@@ -260,19 +272,87 @@ button:focus-visible {
   align-content: start;
 }
 
+button.skill-card {
+  cursor: pointer;
+}
+
+button.skill-card:hover {
+  border-color: var(--agent);
+  background: var(--raised);
+}
+
 .skill-card .name {
   font-family: var(--mono);
   font-size: 0.85rem;
   color: var(--ink);
 }
 
+/* Two lines, then an ellipsis. A card says which skill this is; the window
+   says what it does. */
 .skill-card .desc {
   font-size: 0.78rem;
   line-height: 1.4;
   color: var(--ink-dim);
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
 }
 
-.skill-card .meta {
+.skill-card.is-confirming {
+  padding-right: 0.85rem;
+}
+
+.skill-card.is-confirming .desc {
+  -webkit-line-clamp: none;
+  line-clamp: none;
+  display: block;
+}
+
+/* ---- the skill editor ---------------------------------------------------
+   The node log's window, over the library instead of the canvas: a skill is a
+   document, and a document wants a page. */
+.skill-editor {
+  width: min(64rem, 86vw);
+  height: 82vh;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+.skill-editor-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  padding: 0.75rem;
+}
+
+.skill-editor-body textarea {
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+  resize: none;
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  line-height: 1.55;
+  tab-size: 2;
+}
+
+.skill-editor-foot {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.6rem 0.75rem;
+  border-top: 1px solid var(--edge);
+}
+
+.skill-editor-foot .hint {
+  flex: 1 1 auto;
   font-size: 0.72rem;
   color: var(--ink-faint);
 }

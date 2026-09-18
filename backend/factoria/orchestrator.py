@@ -88,9 +88,15 @@ from datetime import datetime, timezone
 from typing import Any
 
 from . import config, gitwork, memory, runcheck, skills, summary, worktree
+from .knowledge import filing as knowledge_filing
 from .knowledge import index as knowledge_index
 from .knowledge import mcp as knowledge_mcp
 from .knowledge import store as knowledge_store
+# Aliased: this module already has an `adapter_for`, and it is the one that
+# picks a provider CLI. Two factory functions with one name, one of which is
+# resolved at call time by whichever was defined last, is a bug that only
+# shows up in the branch that calls the loser.
+from .knowledge.markdown import adapter_for as knowledge_adapter_for
 from .agent.adapter import AgentAdapter, AgentRun, RunConfig
 from .agent.events import PermissionRequest
 from .agent.claude import ClaudeAdapter, PermissionDenied, resolve_permission_mode
@@ -1511,6 +1517,141 @@ class Orchestrator:
                 )
             )
 
+    async def _file_knowledge(
+        self,
+        state: ActiveRun,
+        node: Node,
+        attached: list[tuple[Node, "KnowledgeBase", bool]],
+        text: str,
+    ) -> list[str]:
+        """File one machine's answer into every base it holds a write wire onto.
+
+        **The wire files it, not the agent.** The first build left a write wire
+        meaning only *you may call these tools*, and a capability is not an
+        act: a model with a task in front of it does the task, and the base
+        stayed empty run after run while the canvas showed a write wire that had
+        never carried anything. Nothing was broken and nothing was reported,
+        which is the worst shape a failure can have — so the wire now does what
+        the operator drew it to do, in this process, whether or not the machine
+        ever reaches for a tool.
+
+        This is `_file_memories`, one shelf along, and deliberately the same
+        code shape: the node's final answer is what gets stored, it is stored
+        after the answer is final, and a crash still files what the machine
+        managed to say. The `knowledge_*` write tools stay exactly as they were,
+        for a machine that wants to put something at a path of its own choosing
+        — but nothing now depends on it choosing to.
+
+        **Where it lands is the orchestrator's to decide**, because nobody else
+        can: the adapter is forbidden policy (`knowledge/adapter.py`) and the
+        agent is no longer in the loop. One file per writing machine per
+        project, appended to — `<project>/<machine>.md` — so a base accumulates
+        a legible timeline per contributor rather than a file per run, and so
+        two projects wired to one general base never write over each other's
+        history.
+
+        Returns the failures as sentences. **A failed knowledge write fails the
+        node**, the inverse of a failed memory write, for the reason
+        `_knowledge_failures` gives: a machine that reports success while
+        recording nothing hands the next project a gap that reads as "no
+        decision was made".
+        """
+        if not attached:
+            return []
+        body = (text or "").strip()
+        node_run = state.run.node_run(node.id)
+        lap = node_run.lap if node_run else 0
+        label = node.definition.label or node.id
+        problems: list[str] = []
+
+        for other, base, writable in attached:
+            if not writable:
+                continue
+            # **Asked again here, of the base rather than of the drawing.** The
+            # wire says the operator wants this filed; `is_writable` says
+            # whether anything may ever write to a base of this scope, and it is
+            # the one that wins. A `principles` base reached by a write wire
+            # some older factory file still carries is refused here exactly as
+            # the MCP server would refuse it.
+            if not knowledge_store.is_writable(base.scope):
+                continue
+            if not body:
+                # Nothing to file is not a failure — a machine is allowed to
+                # have found nothing — but it is worth a line on the shelf,
+                # because "nobody wrote" and "nobody was wired" look identical
+                # on a canvas and have completely different fixes.
+                await state.channel.emit(
+                    RunStorageEvent(
+                        run_id=state.run.id,
+                        node_id=other.id,
+                        store="knowledge",
+                        op="offer",
+                        machine_node_id=node.id,
+                        machine_label=label,
+                        lap=lap,
+                        base_id=base.id,
+                        detail="nothing to file: the machine's answer was empty",
+                    )
+                )
+                continue
+
+            relative = knowledge_filing.entry_path(state.run.project_id, label)
+            root = knowledge_store.base_path(base.id)
+            existed = (root / relative).exists()
+            entry = knowledge_filing.render_entry(
+                body,
+                label=label,
+                project=state.run.project_id,
+                run_id=state.run.id,
+                lap=lap,
+                when=utcnow(),
+                heading=not existed,
+            )
+            # The same lock the MCP server takes, for the same reason and in the
+            # same non-blocking way: two machines of one run can be at a base at
+            # once, and a run that blocks on a shelf is a run whose watchdog
+            # fires for a reason nobody can see.
+            lock = knowledge_store.base_lock(base.id)
+            if not lock.acquire(blocking=False):
+                problems.append(
+                    f"another machine is writing to {base.id!r}, so {label!r}'s "
+                    "answer was not filed"
+                )
+                continue
+            try:
+                written = await asyncio.to_thread(
+                    knowledge_adapter_for(base.format).append, root, relative, entry
+                )
+            except (knowledge_store.KnowledgeError, PathEscape, OSError) as exc:
+                problems.append(f"{base.id}/{relative} could not be written: {exc}")
+                continue
+            finally:
+                lock.release()
+            # The next reader's index block is built from the base's contents,
+            # so a spawn later in this same walk must see what this one filed.
+            knowledge_index.forget(base.id)
+
+            await state.channel.emit(
+                RunStorageEvent(
+                    run_id=state.run.id,
+                    node_id=other.id,
+                    store="knowledge",
+                    op="write",
+                    machine_node_id=node.id,
+                    machine_label=label,
+                    lap=lap,
+                    base_id=base.id,
+                    path=written.path,
+                    bytes=written.bytes,
+                    detail=(
+                        f"filed {written.path} into {base.id}"
+                        if written.created
+                        else f"appended to {written.path} in {base.id}"
+                    ),
+                )
+            )
+        return problems
+
     async def _run_human(self, state: ActiveRun, node: Node, incoming: str) -> None:
         """Stop the line and ask a person which belt the run leaves by.
 
@@ -2373,6 +2514,13 @@ class Orchestrator:
         # half an investigation is worth more to the next agent than nothing,
         # and the document names the lap it came from.
         await self._file_memories(state, node, node_run.output_text)
+        # And the shelf that outlives the run, on the same terms: filed from the
+        # final answer, by the wire, before the outcome is routed. What comes
+        # back are failures, held until the crash path below has had its say —
+        # a node that died keeps the more informative reason.
+        unfiled = await self._file_knowledge(
+            state, node, attached_bases, node_run.output_text
+        )
 
         if cause != "completed":
             # **A crash may be rescued, but never retried.** Stage 8 made "a
@@ -2412,7 +2560,12 @@ class Orchestrator:
         # base belongs on the base whether or not the machine survives it.
         await self._storage_from_journal(state, node, attached_bases, knowledge_journal)
 
-        refused = self._knowledge_failures(knowledge_journal)
+        # Both halves of "what did not reach the base": what this process could
+        # not file, and what the server turned away when the agent used a tool
+        # of its own accord. One list, because the node fails the same way for
+        # either and an operator reading the detail does not care which path the
+        # write was attempted down.
+        refused = unfiled + self._knowledge_failures(knowledge_journal)
         if refused:
             state.halt.add(node.id)
             await self._set_node(
@@ -2654,6 +2807,14 @@ class Orchestrator:
         """Everything a spawn needs to reach its bases: the server, the flags,
         the prompt block and where the write journal will land.
 
+        **Every spawn is read-only on every base, without exception.** Writing
+        is the wire's job and happens in this process (`_file_knowledge`), so
+        the write tools are named on the deny list for every node and the grant
+        this child is handed says `writable: false` about every base in it. Two
+        mechanisms and one rule, which is the arrangement this module already
+        had for a node with no write wire — it now covers every node, and the
+        server stays the authoritative half.
+
         The grant document is written here and named in the server's own
         environment, which is the boundary: this process decides what a machine
         may reach, writes it down once, and the child can address nothing else
@@ -2674,7 +2835,10 @@ class Orchestrator:
         grant_path = directory / f"{stem}.grant.json"
         journal_path = directory / f"{stem}.journal.jsonl"
 
-        writable_anywhere = any(writable for _node, _base, writable in attached)
+        # Does this machine's answer get filed anywhere when it finishes? Used
+        # for the prompt and nothing else: it is a fact about what this process
+        # will do afterwards, never a permission handed to the child.
+        contributes_anywhere = any(writable for _node, _base, writable in attached)
         grant = {
             "run_id": state.run.id,
             "node_id": node.id,
@@ -2686,9 +2850,12 @@ class Orchestrator:
                     "scope": base.scope,
                     "format": base.format,
                     "title": base.title,
-                    "writable": writable,
+                    # Never `writable`, whatever the wire says. The child cannot
+                    # call a write tool, and a grant that claimed otherwise would
+                    # be a document describing a permission nothing grants.
+                    "writable": False,
                 }
-                for _other, base, writable in attached
+                for _other, base, _writable in attached
             ],
         }
         grant_path.write_text(json.dumps(grant, indent=2), encoding="utf-8")
@@ -2715,21 +2882,20 @@ class Orchestrator:
                 },
             }
         }
-        allowed = knowledge_mcp.allowed_tool_names(writable=writable_anywhere)
-        # Named on the deny list whenever *nothing* here is writable, which
-        # covers both cases the design names: a node with no write wire, and one
-        # whose only wires reach `principles` bases. A node with a write wire
-        # onto one base and a read wire onto another cannot have the write tools
-        # denied — the server is what refuses the per-base half, which is why it
-        # is the authoritative one.
-        denied = [] if writable_anywhere else knowledge_mcp.denied_tool_names()
+        # The read tools, and only ever the read tools.
+        allowed = knowledge_mcp.allowed_tool_names(writable=False)
+        # And the write tools refused on every spawn, so a model that has heard
+        # of `knowledge_append` from somewhere cannot half-file an entry beside
+        # the one the wire is about to file properly.
+        denied = knowledge_mcp.denied_tool_names()
         block = knowledge_index.compose(
             [
                 knowledge_index.base_block(
-                    base, knowledge_store.base_path(base.id), writable=writable
+                    base, knowledge_store.base_path(base.id), contributes=writable
                 )
                 for _other, base, writable in attached
-            ]
+            ],
+            contributes=contributes_anywhere,
         )
         return servers, allowed, denied, block, journal_path
 

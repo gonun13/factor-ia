@@ -311,9 +311,16 @@ class Skill(SkillSummary):
 
     The body is what gets appended to an agent's system prompt, so it is
     round-tripped byte for byte rather than re-rendered.
+
+    `source` is the whole document, frontmatter included, and it is here for
+    the editor: a screen that offered to change a skill but only held the two
+    frontmatter keys this module reads would drop every other key on save.
+    Reconstructing a header is how that data loss happens quietly, so the file
+    is handed over whole and comes back whole.
     """
 
     body: str
+    source: str = ""
 
 
 class KnowledgeEntry(Base):

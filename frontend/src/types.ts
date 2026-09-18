@@ -228,8 +228,15 @@ export type SkillSummary = {
   updated_at: string;
 };
 
-/** A skill and its instructions. Only the import round-trip needs the body. */
-export type Skill = SkillSummary & { body: string };
+/**
+ * A skill and its instructions.
+ *
+ * `body` is everything under the frontmatter; `source` is the whole document,
+ * frontmatter included. The editor works on `source` — saving a header this
+ * app rebuilt from `name` and `description` would drop any other key the
+ * author put there.
+ */
+export type Skill = SkillSummary & { body: string; source: string };
 
 /**
  * A codebase's live git state — the clean-repo precondition, as data.

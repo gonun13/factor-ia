@@ -5,13 +5,16 @@ The claims this file exists to check, in the order they matter:
 1. **The grant is what a spawn can reach.** The orchestrator writes one document
    per node per lap, and the MCP server named in that spawn reads it and nothing
    else. A base wired to *another* node is not in it.
-2. **The permission on the canvas becomes the permission on the spawn.** A wire
-   *out* of a base gets the read tools on `--allowedTools` and the write tools
-   on `--disallowedTools`; a wire *into* it gets both. Direction is the
-   permission, all the way down to the flags.
-3. **The index reaches the system prompt**, because an agent that has tools onto
+2. **Every spawn is read-only on every base.** The read tools go on
+   `--allowedTools` and the write tools on `--disallowedTools`, for every node
+   and whichever way its wires point, because writing is not the agent's to do.
+3. **A write wire files the machine's answer**, in the orchestrator, when the
+   node finishes — no tool call, and so nothing for a model to decline. That is
+   the claim this file exists to keep true: a base wired for writing is a base
+   that fills.
+4. **The index reaches the system prompt**, because an agent that has tools onto
    a base and no idea what is in it will not call them.
-4. **A refused write fails the node** — the inverse of what a failed memory
+5. **A failed filing fails the node** — the inverse of what a failed memory
    write does, and the sharpest rule in the design.
 """
 
@@ -161,28 +164,31 @@ def test_a_read_wire_grants_the_base_read_only(
     assert captured[0].bases[0]["scope"] == "codebase"
 
 
-def test_a_write_wire_grants_the_base_for_writing(
+def test_a_write_wire_grants_the_child_nothing_extra(
     library: Path, test_store: Store, orch: Orchestrator, repo: Path, monkeypatch
 ) -> None:
+    """**A write wire is not a permission.** It says this machine's answer gets
+    filed by the orchestrator when the node finishes, which happens in this
+    process and needs nothing from the child. A grant that said `writable` would
+    be describing a permission no tool list backs."""
     line(test_store, writes("n-do", "n-base"),
          extra_nodes=[base("n-base", "acme-api")])
     captured = spawns(monkeypatch)
     drive(orch)
-    assert captured[0].bases[0]["writable"] is True
+    assert captured[0].bases[0]["writable"] is False
 
 
-def test_a_machine_wired_both_ways_gets_one_writable_grant(
+def test_a_machine_wired_both_ways_gets_one_grant(
     library: Path, test_store: Store, orch: Orchestrator, repo: Path, monkeypatch
 ) -> None:
     """Reading and writing one base is two wires in opposite directions, and it
-    must come out as **one** grant that is writable — not two entries, and not a
-    permission that depends on which wire the file happens to list first."""
+    must come out as **one** grant — not two entries for one shelf."""
     line(test_store, reads("n-base", "n-do"), writes("n-do", "n-base"),
          extra_nodes=[base("n-base", "acme-api")])
     captured = spawns(monkeypatch)
     drive(orch)
     assert len(captured[0].bases) == 1
-    assert captured[0].bases[0]["writable"] is True
+    assert captured[0].bases[0]["writable"] is False
 
 
 def test_the_wires_may_be_listed_in_either_order(
@@ -192,7 +198,7 @@ def test_the_wires_may_be_listed_in_either_order(
          extra_nodes=[base("n-base", "acme-api")])
     captured = spawns(monkeypatch)
     drive(orch)
-    assert captured[0].bases[0]["writable"] is True
+    assert [entry["id"] for entry in captured[0].bases] == ["acme-api"]
 
 
 def test_a_write_wire_onto_principles_grants_nothing_extra(
@@ -281,15 +287,20 @@ def test_a_read_wire_allows_the_read_tools_and_denies_the_write_ones(
     assert captured[0].config.disallowed_tools == knowledge_mcp.denied_tool_names()
 
 
-def test_a_write_wire_allows_all_five(
+def test_a_write_wire_allows_no_more_tools_than_a_read_one(
     library: Path, test_store: Store, orch: Orchestrator, repo: Path, monkeypatch
 ) -> None:
+    """**No agent holds a knowledge write tool, on any wire.** The wire files,
+    in the orchestrator; a model that reached for `knowledge_append` as well
+    would file a second, half-considered copy beside it."""
     line(test_store, writes("n-do", "n-base"),
          extra_nodes=[base("n-base", "acme-api")])
     captured = spawns(monkeypatch)
     drive(orch)
-    assert len(captured[0].config.allowed_tools) == len(knowledge_mcp.ALL_TOOLS)
-    assert captured[0].config.disallowed_tools == []
+    assert "mcp__knowledge__knowledge_search" in captured[0].config.allowed_tools
+    assert "mcp__knowledge__knowledge_append" not in captured[0].config.allowed_tools
+    assert "mcp__knowledge__knowledge_update" not in captured[0].config.allowed_tools
+    assert captured[0].config.disallowed_tools == knowledge_mcp.denied_tool_names()
 
 
 def test_build_argv_carries_the_server_and_the_tool_lists() -> None:
@@ -353,6 +364,160 @@ def test_the_ladder_is_stated_once_for_two_bases(
     appended = captured[0].config.append_system_prompt or ""
     assert appended.count("principles  >  the project's own docs") == 1
     assert appended.count("## Knowledge:") == 2
+
+
+def test_a_write_wire_tells_the_machine_its_answer_is_filed(
+    library: Path, test_store: Store, orch: Orchestrator, repo: Path, monkeypatch
+) -> None:
+    """The one thing the machine can still get wrong is what its answer says,
+    so that is the whole of what it is told. A spawn that only consults a base
+    hears none of it — its answer goes nowhere permanent."""
+    line(test_store, writes("n-do", "n-base"),
+         extra_nodes=[base("n-base", "acme-api")])
+    captured = spawns(monkeypatch)
+    drive(orch)
+    assert "## What you say is filed" in (captured[0].config.append_system_prompt or "")
+
+    line(test_store, reads("n-base", "n-do"),
+         extra_nodes=[base("n-base", "acme-api")])
+    reader = spawns(monkeypatch)
+    drive(orch)
+    assert "## What you say is filed" not in (reader[0].config.append_system_prompt or "")
+
+
+# ---- the wire files, not the agent ----------------------------------------
+
+
+def _filed(workspace: Path, base_id: str, relative: str) -> str:
+    return (workspace / "_knowledge" / base_id / relative).read_text(encoding="utf-8")
+
+
+def test_the_wire_files_the_answer_without_the_agent_calling_anything(
+    library: Path, test_store: Store, orch: Orchestrator, repo: Path, monkeypatch
+) -> None:
+    """**The failure this exists to end.** The fake agent calls no knowledge
+    tool — no real one reliably did either — and the base is filled anyway,
+    because the operator drew a wire and a wire is the instruction."""
+    line(test_store, writes("n-do", "n-base"),
+         extra_nodes=[base("n-base", "acme-api")])
+    run = drive(orch)
+
+    assert statuses(run)["n-do"] == "succeeded"
+    entry = _filed(library, "acme-api", "demo/n-do.md")
+    # The machine's answer, as the next node down the belt would have got it.
+    assert "Working on: do the thing" in entry
+    assert "Done." in entry
+    # And its provenance, because a base outlives every run that filled it.
+    assert entry.startswith("# n-do — demo")
+    assert f"run {run.id}" in entry
+
+
+def test_the_filing_is_reported_on_the_base(
+    library: Path, test_store: Store, orch: Orchestrator, repo: Path, monkeypatch
+) -> None:
+    """The row the knowledge node's log opens with. Before the wire filed, this
+    log had nothing in it at all on a run where nobody called a tool — which
+    looked exactly like a base nothing was wired to."""
+    line(test_store, writes("n-do", "n-base"),
+         extra_nodes=[base("n-base", "acme-api")])
+    run = drive(orch)
+
+    [row] = _storage(run.id, "n-base")
+    assert row["store"] == "knowledge" and row["op"] == "write"
+    assert row["base_id"] == "acme-api"
+    assert row["path"] == "demo/n-do.md"
+    assert row["bytes"] > 0
+    assert row["machine_node_id"] == "n-do" and row["machine_label"]
+    assert "demo/n-do.md" in row["detail"]
+
+
+def test_two_machines_filing_one_base_keep_separate_files(
+    library: Path, test_store: Store, orch: Orchestrator, repo: Path, monkeypatch
+) -> None:
+    """One file per contributor. Two machines interleaved in one document is a
+    history neither of them can be read out of."""
+    save(
+        test_store,
+        [
+            node("n-in", "input"),
+            agent("n-first"),
+            agent("n-second"),
+            base("n-base", "acme-api"),
+            node("n-out", "output"),
+        ],
+        [
+            belt("n-in", "n-first"),
+            belt("n-first", "n-second"),
+            belt("n-second", "n-out"),
+            writes("n-first", "n-base"),
+            writes("n-second", "n-base"),
+        ],
+    )
+    run = drive(orch)
+    assert statuses(run)["n-second"] == "succeeded"
+    assert _filed(library, "acme-api", "demo/n-first.md")
+    assert _filed(library, "acme-api", "demo/n-second.md")
+    assert len(_storage(run.id, "n-base")) == 2
+
+
+def test_a_machine_that_said_nothing_files_nothing_and_says_so(
+    library: Path, test_store: Store, orch: Orchestrator, repo: Path, monkeypatch
+) -> None:
+    """Nothing to file is not a failure — a machine is allowed to have found
+    nothing. It is still a row, because "nobody wrote" and "nobody was wired"
+    look identical on a canvas and have completely different fixes."""
+    save(
+        test_store,
+        [
+            node("n-in", "input"),
+            agent("n-do", fake_script="silent"),
+            base("n-base", "acme-api"),
+            node("n-out", "output"),
+        ],
+        [belt("n-in", "n-do"), belt("n-do", "n-out"), writes("n-do", "n-base")],
+    )
+    run = drive(orch)
+
+    assert statuses(run)["n-do"] == "succeeded"
+    assert not (library / "_knowledge" / "acme-api" / "demo").exists()
+    [row] = _storage(run.id, "n-base")
+    assert row["op"] == "offer"
+    assert "nothing to file" in row["detail"]
+
+
+def test_a_read_wire_files_nothing(
+    library: Path, test_store: Store, orch: Orchestrator, repo: Path, monkeypatch
+) -> None:
+    """Consulting a base is not contributing to one. The direction is the whole
+    of the difference, here as everywhere else in this file."""
+    line(test_store, reads("n-base", "n-do"),
+         extra_nodes=[base("n-base", "acme-api")])
+    run = drive(orch)
+    assert not (library / "_knowledge" / "acme-api" / "demo").exists()
+    assert _storage(run.id, "n-base") == []
+
+
+def test_a_filing_that_fails_fails_the_node(
+    library: Path, test_store: Store, orch: Orchestrator, repo: Path, monkeypatch
+) -> None:
+    """**The inverse of memory, now on the path that actually writes.** A
+    machine that reports success while the base recorded nothing hands the next
+    project a gap that reads as "no decision was made"."""
+    from factoria.knowledge.markdown import MarkdownAdapter
+    from factoria.knowledge.store import KnowledgeTooLarge
+
+    def boom(self, root, path, content):
+        raise KnowledgeTooLarge("this entry would put the base past its budget")
+
+    monkeypatch.setattr(MarkdownAdapter, "append", boom)
+    line(test_store, writes("n-do", "n-base"),
+         extra_nodes=[base("n-base", "acme-api")])
+    run = drive(orch)
+
+    assert statuses(run)["n-do"] == "failed"
+    detail = next(nr.detail for nr in run.node_runs if nr.node_id == "n-do")
+    assert "knowledge was not recorded" in detail
+    assert "past its budget" in detail
 
 
 # ---- a refused write fails the node ---------------------------------------
@@ -475,6 +640,16 @@ def _storage(run_id: str, node_id: str) -> list[dict]:
     ]
 
 
+def _from_journal(run_id: str, node_id: str) -> list[dict]:
+    """The rows the *server* produced, as opposed to the one the wire files.
+
+    A base wired for writing now has both on it — what the orchestrator filed
+    when the node finished, and whatever the spawn's own tool calls did — and
+    the tool name is what tells them apart: only a journal line carries one.
+    """
+    return [record for record in _storage(run_id, node_id) if record.get("tool")]
+
+
 def test_a_write_is_reported_on_the_base_not_only_on_the_machine(
     library: Path, test_store: Store, orch: Orchestrator, repo: Path, monkeypatch
 ) -> None:
@@ -491,7 +666,7 @@ def test_a_write_is_reported_on_the_base_not_only_on_the_machine(
     run = drive(orch)
 
     assert statuses(run)["n-do"] == "succeeded"
-    filed = _storage(run.id, "n-base")
+    filed = _from_journal(run.id, "n-base")
     assert len(filed) == 1, filed
     assert filed[0]["store"] == "knowledge"
     assert filed[0]["op"] == "write"
@@ -520,7 +695,7 @@ def test_a_refused_write_is_reported_on_the_base_even_though_the_node_failed(
     run = drive(orch)
 
     assert statuses(run)["n-do"] == "failed"
-    filed = _storage(run.id, "n-base")
+    filed = _from_journal(run.id, "n-base")
     assert len(filed) == 1, filed
     assert filed[0]["refused"] == "too_large"
     assert "was refused: too_large" in filed[0]["detail"]
@@ -546,7 +721,7 @@ def test_a_base_wired_to_another_machine_gets_none_of_this(
     ])
     run = drive(orch)
 
-    assert len(_storage(run.id, "n-base")) == 1
+    assert len(_from_journal(run.id, "n-base")) == 1
     assert _storage(run.id, "n-other") == []
 
 

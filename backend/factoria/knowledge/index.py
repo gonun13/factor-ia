@@ -66,6 +66,44 @@ resolving:
 Search before you assume. A base you were given is a base somebody filled on
 purpose, and rediscovering what is in it costs the run twice."""
 
+#: Shown once, below every block, to a machine whose answer is filed into a base
+#: when it finishes. The counterpart to `memory.WRITER_CONTRACT`, and now the
+#: same *kind* of thing it is: a description of where this machine's words are
+#: about to end up, not a request for a tool call.
+#:
+#: **The first version of this asked the agent to file, and that was the bug.**
+#: A write wire used to mean only "you may call these tools", and a capability
+#: is not an act: a model with a task in front of it does the task, and the base
+#: stayed empty run after run under a wire the operator had drawn on purpose.
+#: The wire files now (`orchestrator._file_knowledge`), no agent holds a write
+#: tool, and what is left to say is the thing the machine can still get wrong —
+#: what its answer says.
+#:
+#: Last in the section, after the blocks, on `verdict.compose_system_prompt`'s
+#: least-negotiable-last rule.
+FILING_CONTRACT = """## What you say is filed
+
+Your final answer is filed, word for word, into the knowledge base wired to this
+node when you finish. That base is permanent, it is shared across projects, and
+somebody will read your entry months from now with none of this run in front of
+them. You do not write to it yourself and you cannot revise it afterwards — the
+answer is the entry.
+
+- Lead with what stays true: a decision and the reason for it, a constraint you
+  hit, an interface somebody else has to match, a fact that cost you an hour to
+  establish. An account of what you did is worth nothing to that reader.
+- Search the base first. If it already covers this, say what is different now
+  rather than filing the same thing again in other words.
+- Spell things exactly: paths with line numbers, function and type names as the
+  source spells them, exact commands, exact values.
+- Say what you checked and what you did **not**. A reader who cannot tell the
+  difference will trust a gap.
+- Write for somebody who was not here: no "as discussed", no "the above", no run
+  ids, and no paths into a worktree that is about to be deleted.
+- Nothing secret, and nothing that expires.
+- If nothing durable came out of this, say so in one line. A short honest entry
+  is worth more than a long one written to fill the space."""
+
 #: What each scope means to the agent reading it, in one clause. Said per base
 #: because the scope is a property of *that* base and is the reason it sits
 #: where it does in the ladder above.
@@ -105,16 +143,18 @@ def fingerprint(base: KnowledgeBase, root: Path) -> str:
     return digest.hexdigest()
 
 
-def base_block(base: KnowledgeBase, root: Path, *, writable: bool) -> str:
-    """One base's block: what it is, what is in it, and how to reach it.
+def base_block(base: KnowledgeBase, root: Path, *, contributes: bool) -> str:
+    """One base's block: what it is, what is in it, and what this node puts in it.
 
-    `writable` is the **node's** answer, not the base's: a base of a writable
-    scope reached by a node with no write wire is read-only for this spawn, and
-    saying otherwise here would be the prompt promising a permission the spawn
-    does not grant. `store.is_writable` has already had the final word for
-    `principles`, which no handle can lift.
+    `contributes` is the **node's** answer, not the base's: it means the
+    operator drew a write wire onto this base, so this machine's final answer
+    will be filed into it when the node finishes. It is never a permission —
+    **no agent holds a knowledge write tool** — which is why the line it
+    produces says what will happen rather than what this machine may do. Saying
+    "Read and write." here, as the first build did, was the prompt describing a
+    capability nobody had and an act nobody was going to perform.
     """
-    key = f"{base.id}:{int(writable)}"
+    key = f"{base.id}:{int(contributes)}"
     stamp = fingerprint(base, root)
     with _cache_guard:
         cached = _cache.get(key)
@@ -122,12 +162,16 @@ def base_block(base: KnowledgeBase, root: Path, *, writable: bool) -> str:
             return cached[1]
 
     note = SCOPE_NOTE.get(base.scope, "durable reference")
-    permission = "Read and write." if writable else "Read-only."
-    if not writable and base.scope in ("principles",):
+    permission = (
+        "Read-only to you — your final answer is filed into it when you finish."
+        if contributes
+        else "Read-only."
+    )
+    if not contributes and base.scope in ("principles",):
         permission = (
             "Read-only — principles are what your work is measured against, so "
-            "nothing may edit them from inside a run. If you believe one is "
-            "wrong, say so in your output instead."
+            "nothing writes to them from inside a run, this node included. If "
+            "you believe one is wrong, say so in your output instead."
         )
     lines = [
         f"## Knowledge: {base.title}  (base: {base.id})",
@@ -135,12 +179,42 @@ def base_block(base: KnowledgeBase, root: Path, *, writable: bool) -> str:
         f"What it holds: {_one_paragraph(base.about)}",
         "Contents:",
         *_contents(base),
-        f'Use `knowledge_search`/`knowledge_get` with base "{base.id}".',
+        _call_to_action(base, contributes=contributes),
     ]
     block = _fit("\n".join(lines))
     with _cache_guard:
         _cache[key] = (stamp, block)
     return block
+
+
+def _call_to_action(base: KnowledgeBase, *, contributes: bool) -> str:
+    """The block's closing line: what to do with this base, and when.
+
+    Three endings rather than one, because the useful thing to say depends on
+    whether anything is in there. A base with files is one to consult *before*
+    deriving an answer it may already hold — naming the tools without saying
+    when to reach for them is how a filled base goes unread. An empty base is a
+    shelf, and sending an agent to search it spends a call on a certain miss.
+
+    The empty-and-contributing ending is the one where the useful thing to say
+    is what happens next rather than what to call, and it is the state every new
+    base is in for exactly one run.
+    """
+    if base.entries:
+        return (
+            "Consult it before you answer anything it covers — `knowledge_search`"
+            f'/`knowledge_get` with base "{base.id}". It was filled on purpose, and '
+            "an answer already in there beats one derived a second time."
+        )
+    if contributes:
+        return (
+            f'Nothing is filed in "{base.id}" yet — your answer will be the first '
+            "entry in it."
+        )
+    return (
+        f'Nothing is filed here yet, so `knowledge_search` on base "{base.id}" '
+        "will come back empty. Say in your output what you needed and could not find."
+    )
 
 
 def _one_paragraph(about: str) -> str:
@@ -209,8 +283,14 @@ def _fit(block: str) -> str:
     return "\n".join(kept)
 
 
-def compose(blocks: list[str]) -> str | None:
-    """The whole knowledge section: the ladder once, then the blocks.
+def compose(blocks: list[str], *, contributes: bool = False) -> str | None:
+    """The whole knowledge section: the ladder once, the blocks, the contract.
+
+    `contributes` is the spawn's answer over all its bases, not any one base's:
+    true when the operator drew a write wire onto any of them, so this machine's
+    answer is going to be filed somewhere permanent. One contract for the node,
+    said once beside the ladder, because it is one fact about this machine's
+    output and not a property of any shelf.
 
     **Capped at `SECTION_MAX_TOKENS`, and bases are dropped whole rather than
     cut.** Half a base's block is an index that names files and stops, which
@@ -218,13 +298,18 @@ def compose(blocks: list[str]) -> str | None:
     must never make. A base that did not fit is named in a closing line, so the
     agent knows a tool it has may address something the prompt did not describe.
 
+    **The contract is paid for before the first base, so a base is dropped
+    before it is.** It is the only part of this section that changes what the
+    machine writes, and cutting it to fit one more table of contents would be
+    choosing the description over the output being described.
+
     `None` when there is nothing to say, which is what keeps every agent with no
     knowledge wire spawning exactly as it did before this existed.
     """
     if not blocks:
         return None
     parts = [PRECEDENCE]
-    used = _tokens(PRECEDENCE)
+    used = _tokens(PRECEDENCE) + (_tokens(FILING_CONTRACT) if contributes else 0)
     dropped = 0
     for block in blocks:
         cost = _tokens(block)
@@ -239,6 +324,8 @@ def compose(blocks: list[str]) -> str | None:
             "this machine but too large to describe here. `knowledge_list` on the "
             "base id named in your tools will say what is in them.)"
         )
+    if contributes:
+        parts.append(FILING_CONTRACT)
     return "\n\n".join(parts)
 
 

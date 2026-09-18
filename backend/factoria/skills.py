@@ -169,6 +169,9 @@ def validate(text: str, filename: str | None = None) -> Skill:
     `updated_at` and `bytes` describe the text in hand rather than a file,
     because this also runs on an import that has not been written yet.
     """
+    # The document as it will be stored and as an editor should see it again:
+    # BOM off, one newline convention, nothing else touched.
+    stripped = text.lstrip("\ufeff").replace("\r\n", "\n").replace("\r", "\n")
     encoded = text.encode("utf-8")
     if len(encoded) > SKILL_MAX_BYTES:
         raise SkillInvalid(
@@ -216,6 +219,7 @@ def validate(text: str, filename: str | None = None) -> Skill:
         bytes=len(encoded),
         updated_at=datetime.now(timezone.utc),
         body=body,
+        source=stripped,
     )
 
 
@@ -291,7 +295,7 @@ def list_skills(root: Path | None = None) -> list[SkillSummary]:
             skill = _load(path)
         except SkillError:
             continue
-        found.append(SkillSummary(**skill.model_dump(exclude={"body"})))
+        found.append(SkillSummary(**skill.model_dump(exclude={"body", "source"})))
     return found
 
 

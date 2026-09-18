@@ -29,6 +29,7 @@ import {
   type KnowledgeBaseSummary,
   type KnowledgeScope,
   type Project,
+  type Skill,
   type SkillSummary,
 } from "../types";
 
@@ -288,9 +289,12 @@ export function ProjectList({ onOpen }: { onOpen: (projectId: string) => void })
  * by URL" a copy and a paste rather than a hole in the container's network
  * posture.
  *
- * There is no edit here, deliberately: these files are committed with the
- * team, so the editor is the workspace and the history is git. Replacing one
- * is an import that says so.
+ * **Editing is here, but writing still is not.** A card opens the document in
+ * a window (`SkillEditor`) so a skill can be read and changed without leaving
+ * for a terminal — but saving posts the whole document back through the import
+ * path, so `skills.create_skill` remains the only writer of `_skills/` and the
+ * document still names itself. The files are committed with the team; git is
+ * still the history.
  */
 function SkillLibrary() {
   const [skills, setSkills] = useState<SkillSummary[] | null>(null);
@@ -306,6 +310,9 @@ function SkillLibrary() {
   const [problem, setProblem] = useState<string | null>(null);
   const [confirming, setConfirming] = useState<string | null>(null);
   const [deleting, setDeleting] = useState<string | null>(null);
+  /** The skill whose document is open, by name. The card is the index; the
+   *  window is the document. */
+  const [editing, setEditing] = useState<string | null>(null);
   const cancelDeleteButton = useRef<HTMLButtonElement | null>(null);
 
   useEffect(() => {
@@ -506,63 +513,246 @@ function SkillLibrary() {
         </p>
       ) : (
         <div className="skill-grid">
-          {skills.map((skill) =>
-            confirming === skill.name ? (
-              <div
-                key={skill.name}
-                className="skill-card is-confirming"
-                onKeyDown={(event) => {
-                  if (event.key === "Escape" && !deleting) setConfirming(null);
-                }}
-              >
-                <span className="name">Delete {skill.name}?</span>
-                <span className="desc">
-                  Removes <code>_skills/{skill.name}.md</code>. Any agent still
-                  wearing it will refuse to run until it is replaced.
-                </span>
-                <span className="card-actions">
-                  <button
-                    type="button"
-                    className="destructive"
-                    onClick={() => void remove(skill.name)}
-                    disabled={deleting !== null}
-                  >
-                    {deleting === skill.name ? "Deleting…" : "Delete"}
-                  </button>
-                  <button
-                    ref={cancelDeleteButton}
-                    type="button"
-                    className="link-button"
-                    onClick={() => setConfirming(null)}
-                    disabled={deleting !== null}
-                  >
-                    Cancel
-                  </button>
-                </span>
-              </div>
-            ) : (
-              <div key={skill.name} className="skill-card">
-                <span className="name">{skill.name}</span>
-                <span className="desc">{skill.description}</span>
-                <span className="meta">
-                  {Math.max(1, Math.round(skill.bytes / 1024))} kB · updated{" "}
-                  {new Date(skill.updated_at).toLocaleDateString()}
-                </span>
-                <button
-                  type="button"
-                  className="card-delete"
-                  aria-label={`Delete ${skill.name}`}
-                  title="Delete skill"
-                  onClick={() => setConfirming(skill.name)}
+          {skills.map((skill) => (
+            <div key={skill.name} className="skill-slot">
+              {confirming === skill.name ? (
+                <div
+                  className="skill-card is-confirming"
+                  onKeyDown={(event) => {
+                    if (event.key === "Escape" && !deleting) setConfirming(null);
+                  }}
                 >
-                  ×
-                </button>
-              </div>
-            ),
-          )}
+                  <span className="name">Delete {skill.name}?</span>
+                  <span className="desc">
+                    Removes <code>_skills/{skill.name}.md</code>. Any agent still
+                    wearing it will refuse to run until it is replaced.
+                  </span>
+                  <span className="card-actions">
+                    <button
+                      type="button"
+                      className="destructive"
+                      onClick={() => void remove(skill.name)}
+                      disabled={deleting !== null}
+                    >
+                      {deleting === skill.name ? "Deleting…" : "Delete"}
+                    </button>
+                    <button
+                      ref={cancelDeleteButton}
+                      type="button"
+                      className="link-button"
+                      onClick={() => setConfirming(null)}
+                      disabled={deleting !== null}
+                    >
+                      Cancel
+                    </button>
+                  </span>
+                </div>
+              ) : (
+                <>
+                  {/* Two lines and a name: what a card is for is telling these
+                      apart at a glance. The document itself is a window away. */}
+                  <button
+                    type="button"
+                    className="skill-card"
+                    title={`Open ${skill.name}`}
+                    onClick={() => setEditing(skill.name)}
+                  >
+                    <span className="name">{skill.name}</span>
+                    <span className="desc">{skill.description}</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="card-delete"
+                    aria-label={`Delete ${skill.name}`}
+                    title="Delete skill"
+                    onClick={() => setConfirming(skill.name)}
+                  >
+                    ×
+                  </button>
+                </>
+              )}
+            </div>
+          ))}
         </div>
       )}
+
+      {editing && (
+        <SkillEditor
+          name={editing}
+          onClose={() => setEditing(null)}
+          onSaved={(saved) =>
+            setSkills((current) => {
+              const rest = (current ?? []).filter((one) => one.name !== saved.name);
+              return [...rest, saved].sort((a, b) => a.name.localeCompare(b.name));
+            })
+          }
+        />
+      )}
     </section>
+  );
+}
+
+/**
+ * One skill, whole, in a window big enough to read it in — the node log's
+ * bargain (`NodeLog`), for the same reason: a card can say which skill this is,
+ * but only a page can say what it tells an agent to do.
+ *
+ * **Saving is an import that overwrites.** There is still no `PUT`: this posts
+ * the edited document down the same path a dropped file takes, so the one
+ * writer of `_skills/` stays `skills.create_skill` and the document keeps
+ * naming itself. Which is also why the `name:` line is load-bearing here and
+ * the hint under the editor says so — change it and this saves a *new* skill
+ * rather than renaming this one, because the file is addressed by its name.
+ *
+ * The whole document is edited, frontmatter included, rather than a form over
+ * the two keys this app reads. A form would silently drop every other key on
+ * save, and these files are committed with the team.
+ */
+function SkillEditor({
+  name,
+  onClose,
+  onSaved,
+}: {
+  name: string;
+  onClose: () => void;
+  onSaved: (skill: SkillSummary) => void;
+}) {
+  const [loaded, setLoaded] = useState<Skill | null>(null);
+  const [text, setText] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [problem, setProblem] = useState<string | null>(null);
+  /** An unsaved edit is not thrown away by a stray Esc or a click on the
+   *  backdrop: the way out asks first, in the footer, where the buttons are. */
+  const [discarding, setDiscarding] = useState(false);
+  const dirty = loaded !== null && text !== loaded.source;
+
+  useEffect(() => {
+    let live = true;
+    setLoaded(null);
+    setProblem(null);
+    api
+      .skill(name)
+      .then((skill) => {
+        if (!live) return;
+        setLoaded(skill);
+        setText(skill.source);
+      })
+      .catch((cause) => {
+        if (live) setProblem(cause instanceof Error ? cause.message : String(cause));
+      });
+    return () => {
+      live = false;
+    };
+  }, [name]);
+
+  // Esc closes, like the node log and the settings panel — with the dirty
+  // guard in front of it, so it cannot be the thing that loses the edit.
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || busy) return;
+      if (dirty) setDiscarding(true);
+      else onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [dirty, busy, onClose]);
+
+  function leave() {
+    if (busy) return;
+    if (dirty) setDiscarding(true);
+    else onClose();
+  }
+
+  async function save() {
+    if (!text.trim() || busy) return;
+    setBusy(true);
+    setProblem(null);
+    try {
+      const saved = await api.importSkill(text, `${name}.md`, true);
+      onSaved(saved);
+      onClose();
+    } catch (cause) {
+      setProblem(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="node-log-backdrop" onMouseDown={leave}>
+      <section
+        className="skill-editor panel"
+        role="dialog"
+        aria-label={`Skill ${name}`}
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <header className="node-log-head">
+          <span className="who mono">{name}</span>
+          {loaded && (
+            <span className="eyebrow">
+              {Math.max(1, Math.round(loaded.bytes / 1024))} kB · updated{" "}
+              {new Date(loaded.updated_at).toLocaleDateString()}
+            </span>
+          )}
+          {dirty && <span className="eyebrow">unsaved</span>}
+          <span className="spacer" />
+          <button className="node-log-close" onClick={leave} aria-label="Close">
+            ✕
+          </button>
+        </header>
+
+        <div className="skill-editor-body">
+          {problem && <div className="error">{problem}</div>}
+          {loaded === null && !problem ? (
+            <p className="dim">Opening…</p>
+          ) : (
+            <textarea
+              autoFocus
+              spellCheck={false}
+              value={text}
+              aria-label={`${name} markdown`}
+              onChange={(event) => setText(event.target.value)}
+            />
+          )}
+        </div>
+
+        <footer className="skill-editor-foot">
+          {discarding ? (
+            <>
+              <span className="hint">Discard your changes?</span>
+              <button type="button" className="destructive" onClick={onClose}>
+                Discard
+              </button>
+              <button
+                type="button"
+                className="link-button"
+                onClick={() => setDiscarding(false)}
+              >
+                Keep editing
+              </button>
+            </>
+          ) : (
+            <>
+              <span className="hint">
+                The <code>name:</code> in the frontmatter is the filename — change
+                it and this saves a new skill rather than renaming this one.
+              </span>
+              <button
+                type="button"
+                className="primary"
+                disabled={!dirty || busy || !text.trim()}
+                onClick={() => void save()}
+              >
+                {busy ? "Saving…" : "Save"}
+              </button>
+              <button type="button" className="link-button" onClick={leave}>
+                Close
+              </button>
+            </>
+          )}
+        </footer>
+      </section>
+    </div>
   );
 }
 

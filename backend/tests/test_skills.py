@@ -256,3 +256,21 @@ def test_updated_at_comes_from_the_file(workspace: Path) -> None:
     earlier = time.time() - 86_400
     os.utime(path, (earlier, earlier))
     assert skills.list_skills()[0].updated_at.timestamp() == pytest.approx(earlier, abs=2)
+
+
+def test_source_is_the_whole_document_and_round_trips(workspace: Path) -> None:
+    """The editor's contract: what `get_skill` hands out is what `create_skill`
+    can take back, extra frontmatter keys included. A screen that rebuilt the
+    header from `name` and `description` would drop `allowed-tools` on save."""
+    text = TEMPLATE.replace("---\n\n# Repo", "allowed-tools: Read, Grep\n---\n\n# Repo")
+    skills.create_skill(text)
+    source = skills.get_skill("repo-recon").source
+    assert source.startswith("---\n")
+    assert "allowed-tools: Read, Grep" in source
+    assert "# Repo recon" in source
+
+    edited = source.replace("One sentence", "Two sentences")
+    skills.create_skill(edited, overwrite=True)
+    again = skills.get_skill("repo-recon")
+    assert "allowed-tools: Read, Grep" in again.source
+    assert "Two sentences" in again.body

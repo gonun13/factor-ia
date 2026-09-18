@@ -1,7 +1,7 @@
 import type { NodeProps } from "@xyflow/react";
 import { nodeKind, type FlowNode } from "../graph";
 import { NO_OFFER, providerInForce, useCanvas } from "../canvasContext";
-import { HoverNote, useHoverNote } from "./NodeNote";
+import { useHoverNote } from "./NodeNote";
 import { NodeShell } from "./NodeShell";
 import { CodebaseGlyph, ModelGlyph, SkillGlyph } from "./Glyphs";
 
@@ -53,7 +53,6 @@ export function AgentNode({ id, data }: NodeProps<FlowNode>) {
   const attached = codebases.find((codebase) => codebase.id === attachedId);
   const missing = attachedId !== null && attached === undefined;
   const git = attachedId ? gitStates[attachedId] : undefined;
-  const artifact = data.runtime?.artifact ?? null;
   // Git's answer where there is one, the workspace's otherwise — a checkout
   // someone switched under you is exactly what this line is here to show.
   const branch = attached ? (git?.branch ?? attached.branch) : null;
@@ -162,7 +161,15 @@ export function AgentNode({ id, data }: NodeProps<FlowNode>) {
 
             DESIGN.md accepts host-side git activity during a run as its
             residual risk and names visibility as the mitigation — so this sits
-            on the node that owns it, not in a status bar somewhere else. */}
+            on the node that owns it, not in a status bar somewhere else.
+
+            **And nothing else.** The plate is the codebase's answer to "which
+            checkout, in what state", and that is a two-word answer. What a run
+            did to it — the worktree it cut, the branch it worked on, the commit
+            it left — belongs to the run, and the run panel is where a run is
+            read; the file names behind a dirty count belong there too. A
+            machine that grows a line every time something happens stops being
+            readable at a glance, which is the only thing a canvas is for. */}
         {(branch || git) && (
           <span className="branch-state">
             {branch && <span className="branch mono">{branch}</span>}
@@ -180,34 +187,10 @@ export function AgentNode({ id, data }: NodeProps<FlowNode>) {
                         git.change_count === 1 ? "" : "s"
                       }`
                     : "clean"}
-                {git.dirty && git.changes.length > 0 && (
-                  <HoverNote
-                    className="mono"
-                    note={
-                      <span className="note-lines">
-                        {git.changes.map((change) => (
-                          <span key={change}>{change.trim()}</span>
-                        ))}
-                      </span>
-                    }
-                  >
-                    {" "}
-                    {git.changes[0].trim().split(/\s+/).slice(-1)[0]}
-                    {git.change_count > 1 ? ` +${git.change_count - 1}` : ""}
-                  </HoverNote>
-                )}
               </span>
             )}
           </span>
         )}
-        {artifact && (
-          <HoverNote className="worktree-line mono" note={artifact.path}>
-            ⎇ {artifact.branch}
-            {artifact.commitSha ? ` · ${artifact.commitSha.slice(0, 8)}` : " · isolated worktree"}
-          </HoverNote>
-        )}
-        {missing && <span className="warn">No longer discovered under /workspace.</span>}
-        {!attachedId && <span className="warn">An agent cannot run without one.</span>}
       </div>
 
       {/* Never `.empty`. An unset model is the normal, correct state — it means

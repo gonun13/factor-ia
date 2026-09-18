@@ -8,11 +8,12 @@ here: a base is a source of truth, and "invalid" is not a thing you can act on.
 
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
 
 import pytest
 
-from factoria.knowledge import index, store as knowledge
+from factoria.knowledge import filing, index, store as knowledge
 from factoria.knowledge.markdown import MarkdownAdapter
 from factoria.knowledge.store import (
     KnowledgeConflict,
@@ -302,6 +303,65 @@ def test_a_base_over_budget_is_refused(base: Path, monkeypatch) -> None:
         MarkdownAdapter().append(base, "timeline.md", "y" * 300)
 
 
+# ---- where a filed answer lands --------------------------------------------
+
+
+def test_the_entry_path_is_one_file_per_machine_per_project() -> None:
+    """A file per *run* fills a base with hundreds of near-empty documents and
+    pushes it into the degraded contents list; one file for the whole base is a
+    history neither contributor can be read out of."""
+    assert filing.entry_path("acme", "Research") == "acme/research.md"
+    assert filing.entry_path("acme", "Deep Research Bot") == "acme/deep-research-bot.md"
+
+
+def test_the_entry_path_falls_back_rather_than_failing() -> None:
+    """A label is operator input and may be anything, including nothing. A run
+    that failed over a name nobody had needed to give would be a bad trade."""
+    assert filing.entry_path("acme", "") == "acme/machine.md"
+    assert filing.entry_path("", "  🙂  ") == "factory/machine.md"
+
+
+def test_the_first_entry_carries_the_title_and_later_ones_do_not() -> None:
+    """`index.py` builds an entry's one-line summary from a file's opening
+    heading, so a file that opened with a date would be described by the day it
+    happened to start for the rest of its life."""
+    when = datetime(2026, 9, 18, 21, 11)
+    first = filing.render_entry(
+        "The client moved to v3.", label="Research", project="acme",
+        run_id="run-1", lap=1, when=when, heading=True,
+    )
+    assert first.startswith("# Research — acme")
+    assert "## 2026-09-18 21:11 · Research · run run-1" in first
+    assert first.endswith("The client moved to v3.")
+
+    later = filing.render_entry(
+        "And then to v4.", label="Research", project="acme",
+        run_id="run-2", lap=1, when=when, heading=False,
+    )
+    assert not later.startswith("#\n")
+    assert later.startswith("## ")
+
+
+def test_a_lap_is_named_only_when_there_was_more_than_one() -> None:
+    """Every node on a line runs once, and "lap 1" on every entry in a base is
+    a column of noise that means nothing until a loop makes it mean something."""
+    when = datetime(2026, 9, 18, 21, 11)
+    once = filing.render_entry("x", label="a", project="p", run_id="r", lap=1,
+                               when=when, heading=False)
+    twice = filing.render_entry("x", label="a", project="p", run_id="r", lap=2,
+                                when=when, heading=False)
+    assert "lap" not in once
+    assert "· lap 2" in twice
+
+
+def test_the_body_is_filed_exactly_as_the_machine_said_it() -> None:
+    """A store that edits what it was handed is one nobody can quote from."""
+    body = "### Findings\n\n- `store.py:120` does the check\n"
+    entry = filing.render_entry(body, label="a", project="p", run_id="r", lap=1,
+                                when=datetime(2026, 9, 18), heading=False)
+    assert entry.endswith(body.strip())
+
+
 # ---- the index block -------------------------------------------------------
 
 
@@ -309,7 +369,7 @@ def test_the_block_names_the_base_its_scope_and_its_files(workspace: Path) -> No
     root = make_base(workspace, "engineering-principles")
     (root / "naming.md").write_text("# Naming\n\nThe rules.\n", encoding="utf-8")
     base = knowledge.get_base("engineering-principles")
-    block = index.base_block(base, root, writable=False)
+    block = index.base_block(base, root, contributes=False)
     assert "(base: engineering-principles)" in block
     assert "Scope: principles" in block
     assert "naming.md" in block and "Naming" in block
@@ -318,17 +378,20 @@ def test_the_block_names_the_base_its_scope_and_its_files(workspace: Path) -> No
 
 def test_a_principles_block_says_what_to_do_instead_of_writing(workspace: Path) -> None:
     root = make_base(workspace, "engineering-principles")
-    block = index.base_block(knowledge.get_base("engineering-principles"), root, writable=False)
+    block = index.base_block(knowledge.get_base("engineering-principles"), root, contributes=False)
     assert "Read-only" in block and "say so in your output" in block
 
 
-def test_a_read_only_node_on_a_writable_base_still_says_read_only(workspace: Path) -> None:
-    """`writable` is the *node's* answer, not the base's. Saying otherwise would
-    be the prompt promising a permission the spawn does not grant."""
+def test_no_block_ever_promises_the_agent_a_write(workspace: Path) -> None:
+    """**No agent holds a knowledge write tool.** A contributing node is told
+    what happens to its answer, not what it may call: the first build said
+    "Read and write." and described a capability nobody had."""
     root = make_base(workspace, "acme", scope="general")
     base = knowledge.get_base("acme")
-    assert "Read-only." in index.base_block(base, root, writable=False)
-    assert "Read and write." in index.base_block(base, root, writable=True)
+    assert "Read-only." in index.base_block(base, root, contributes=False)
+    contributing = index.base_block(base, root, contributes=True)
+    assert "Read and write." not in contributing
+    assert "your final answer is filed into it" in contributing
 
 
 def test_a_large_base_degrades_to_directories_with_counts(workspace: Path) -> None:
@@ -338,7 +401,7 @@ def test_a_large_base_degrades_to_directories_with_counts(workspace: Path) -> No
     (root / "2026").mkdir()
     for n in range(60):
         (root / "2026" / f"note-{n:03}.md").write_text(f"# Note {n}\n", encoding="utf-8")
-    block = index.base_block(knowledge.get_base("acme"), root, writable=True)
+    block = index.base_block(knowledge.get_base("acme"), root, contributes=True)
     assert "too many to list" in block
     assert "2026/ — 60 files" in block
     assert "note-001.md" not in block
@@ -346,7 +409,7 @@ def test_a_large_base_degrades_to_directories_with_counts(workspace: Path) -> No
 
 def test_an_empty_base_says_so(workspace: Path) -> None:
     root = make_base(workspace, "acme", scope="general")
-    assert "empty" in index.base_block(knowledge.get_base("acme"), root, writable=True)
+    assert "empty" in index.base_block(knowledge.get_base("acme"), root, contributes=True)
 
 
 def test_compose_states_the_ladder_once(workspace: Path) -> None:
@@ -369,11 +432,76 @@ def test_the_section_is_capped_and_says_what_it_dropped() -> None:
     assert "too large to describe here" in section
 
 
+def test_a_filled_base_says_to_consult_it_before_answering(workspace: Path) -> None:
+    """Naming the tools is not telling anyone when to reach for them, and a
+    base whose index is read but never searched is a base paid for twice."""
+    root = make_base(workspace, "acme", scope="general")
+    (root / "naming.md").write_text("# Naming\n", encoding="utf-8")
+    block = index.base_block(knowledge.get_base("acme"), root, contributes=False)
+    assert "Consult it before you answer" in block
+    assert 'base "acme"' in block
+
+
+def test_an_empty_base_this_node_fills_says_so(workspace: Path) -> None:
+    """Sending an agent to search an empty base spends a call on a certain
+    miss. What is useful there is what is about to happen to it."""
+    root = make_base(workspace, "acme", scope="general")
+    block = index.base_block(knowledge.get_base("acme"), root, contributes=True)
+    assert "your answer will be the first entry" in block
+    assert "knowledge_append" not in block
+
+
+def test_an_empty_read_only_base_says_the_search_will_miss(workspace: Path) -> None:
+    root = make_base(workspace, "acme", scope="general")
+    block = index.base_block(knowledge.get_base("acme"), root, contributes=False)
+    assert "will come back empty" in block
+    assert "knowledge_append" not in block
+
+
+# ---- the write contract ----------------------------------------------------
+
+
+def test_a_contributing_spawn_is_told_its_answer_is_the_entry(workspace: Path) -> None:
+    """**A capability was not an act.** The first build asked the agent to call
+    a write tool and it did not; the wire files now, so what is left to say is
+    what the answer has to contain."""
+    section = index.compose(["## Knowledge: A"], contributes=True)
+    assert section is not None
+    assert "## What you say is filed" in section
+    assert "filed, word for word," in section
+    assert "You do not write to it yourself" in section
+
+
+def test_a_consulting_spawn_gets_no_contract(workspace: Path) -> None:
+    """Nothing happens to its answer, so there is nothing true to tell it."""
+    section = index.compose(["## Knowledge: A"])
+    assert section is not None
+    assert "## What you say is filed" not in section
+
+
+def test_the_contract_is_last_so_nothing_reads_as_overriding_it(workspace: Path) -> None:
+    """`verdict.compose_system_prompt`'s least-negotiable-last rule, applied
+    inside the section: the blocks describe shelves, this one asks for work."""
+    section = index.compose(["## Knowledge: A", "## Knowledge: B"], contributes=True)
+    assert section is not None
+    assert section.index("## What you say is filed") > section.index("## Knowledge: B")
+
+
+def test_a_base_is_dropped_before_the_contract_is(workspace: Path) -> None:
+    """The only part of the section that changes what the machine writes
+    outranks one more table of contents."""
+    huge = "\n".join("x" * 80 for _ in range(300))
+    section = index.compose([huge, huge, huge], contributes=True)
+    assert section is not None
+    assert "too large to describe here" in section
+    assert index.FILING_CONTRACT in section
+
+
 def test_the_cache_is_invalidated_by_an_edit_in_the_workspace(workspace: Path) -> None:
     """A base edited by hand must not serve yesterday's table of contents."""
     root = make_base(workspace, "acme", scope="general")
-    first = index.base_block(knowledge.get_base("acme"), root, writable=True)
+    first = index.base_block(knowledge.get_base("acme"), root, contributes=True)
     assert "later.md" not in first
     (root / "later.md").write_text("# Later\n", encoding="utf-8")
-    second = index.base_block(knowledge.get_base("acme"), root, writable=True)
+    second = index.base_block(knowledge.get_base("acme"), root, contributes=True)
     assert "later.md" in second

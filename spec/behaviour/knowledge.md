@@ -74,11 +74,13 @@ to do with what it reads.
 
 Scope controls exactly two things.
 
-**1. Whether an agent may write.** A `principles` base is **read-only to
-agents**, permanently and without a per-base override. Principles are what the
-agents are measured against; a machine that can edit the standard it is judged by
-is a machine that can pass its own review. The other three scopes follow the
-node's handles (below) — an agent writes if, and only if, someone drew the wire.
+**1. Whether anything may write.** A `principles` base is **read-only inside a
+run**, permanently and without a per-base override — no agent, and no wire.
+Principles are what the agents are measured against; a machine that can edit the
+standard it is judged by is a machine that can pass its own review. The other
+three scopes follow the node's handles (below) — a run fills a base if, and only
+if, someone drew the wire. (No agent writes to a base under any scope; the wire
+does, in the orchestrator. See *A write wire files the machine's answer*.)
 
 **2. Precedence when sources disagree**, which the agent is told in as many
 words:
@@ -98,9 +100,10 @@ Scope does **not** do anything else, and the omissions are deliberate:
 - it does not validate bindings — attaching a `project`-scoped base to a second
   project is allowed, because "this base was written for project alpha, and beta
   now needs it too" is exactly how a base earns a wider scope;
-- it does not constrain the *shape* of a write — append-only logs, task records
-  and curated prose are conventions a base's own manifest describes to the agent,
-  not a schema this code enforces.
+- it does not constrain the *shape* of an entry beyond the one layout the wire
+  files in (`knowledge/filing.py`) — a base's own manifest describes to the
+  agent what a good entry *says*, and that is prose, not a schema this code
+  enforces.
 
 Both are easy to add later and hard to remove once something depends on them.
 
@@ -295,7 +298,15 @@ knowledge_append (base, path, content)         → a new entry at the end
 knowledge_update (base, path, old, new)        → an exact-match replacement
 ```
 
-Five tools, whatever the base is made of. v1 ships one adapter — markdown — and
+Five tools, whatever the base is made of. **Three of them are reachable by an
+agent**: `knowledge_append` and `knowledge_update` are refused on every spawn,
+because a run's writing is done by the wire and not by a model
+(*A write wire files the machine's answer*). They stay in the server because it
+is the authoritative half of that refusal and because the orchestrator's filing
+goes through the same adapter call behind them — a server that could not write
+would be a server that could not refuse a write either.
+
+v1 ships one adapter — markdown — and
 the uniform surface is what makes the second one cheap: a sqlite base maps
 `search` to a query and `append` to an insert without the agent learning a second
 vocabulary, and without SQL crossing the seam. An agent that had to know a base's
@@ -305,7 +316,7 @@ storage format to read it would make every base's format part of the contract.
 without parsing prose:
 
 ```json
-{ "base": "acme-api-timeline", "scope": "codebase", "writable": true,
+{ "base": "acme-api-timeline", "scope": "codebase", "writable": false,
   "path": "2026-q3.md", "bytes": 8213, "truncated": false, "next": null }
 ```
 
@@ -319,7 +330,7 @@ returned half a base would be read as the whole of it.
 |---|---|---|
 | `unknown_base` | no such base | stop naming it; it is a wiring bug |
 | `not_wired` | real base, not wired to this node | proceed without it, and say so |
-| `read_only_scope` | a write to `principles` | report the proposed change in its output instead |
+| `read_only_scope` | a write to `principles`, or any write from a spawn | report the proposed change in its output instead |
 | `not_found` | no such path in the base | `knowledge_list` first |
 | `too_large` | over a budget | split the entry |
 | `locked` | another writer holds the base | retry once, then report |
@@ -351,7 +362,9 @@ Contents:
   - review-standards.md (4.1 kB) — what a review must check, and in what order
   - naming.md (2.8 kB) — the naming rules, with the arguments for them
   - refusals.md (6.0 kB) — designs we have rejected, and why
-Use `knowledge_search`/`knowledge_get` with base "engineering-principles".
+Consult it before you answer anything it covers — `knowledge_search`/`knowledge_get`
+with base "engineering-principles". It was filled on purpose, and an answer
+already in there beats one derived a second time.
 ```
 
 **An index, not a catalogue.** Tool descriptions alone would leave the agent
@@ -364,9 +377,88 @@ every machine wired to a base, exactly like `memory.WRITER_CONTRACT`'s ~190.
 
 The precedence ladder is stated once, above all the blocks, not per base.
 
-The index is cached per base and invalidated by the manifest's `updated` field
-plus a hash of the content mtimes and sizes — a base edited by a human in the
-workspace must not serve yesterday's table of contents.
+**The closing line says what to do, not just which tools exist**, and it depends
+on what is in the base. A base with files is one to consult *before* deriving an
+answer it may already hold. An empty base is a shelf: sending an agent to search
+it spends a call on a certain miss, so an empty base this node contributes to
+says the machine's own answer will be its first entry, and an empty one it only
+consults says the search will come back empty and to report what was missing.
+
+### A write wire files the machine's answer
+
+**The wire writes, not the agent.** When an agent node holds a write wire onto a
+base, the orchestrator files that node's final answer into the base as the node
+finishes — `orchestrator._file_knowledge`, beside `_file_memories` and on the
+same terms: the answer is what gets stored, it is stored once the answer is
+final, and a machine that crashed still files what it managed to say.
+
+This is the second design of this and the first one failed in the field. A write
+wire used to mean *you may call `knowledge_append`*, and a capability is not an
+act: run after run, a worker wired to write did its task, called nothing, and
+left a base empty under a wire somebody had drawn on purpose. Nothing was
+broken, so nothing was reported — the knowledge node's log opened empty because
+a log built from tool calls can only show the calls that were made. Asking
+harder in the prompt is the fix that cannot be relied on, because the thing being
+asked is a model's discretion.
+
+So the discretion is gone: **no agent holds a knowledge write tool.**
+`knowledge_append` and `knowledge_update` are on `--disallowedTools` for every
+spawn, the grant document says `writable: false` about every base in it, and the
+server refuses a write it is somehow asked for, exactly as it always did for a
+read-only node. What an agent may still do to a base is consult it.
+
+**Where an entry lands** is `knowledge/filing.py`, because it is nobody else's
+to decide — the adapter is forbidden policy and the agent is no longer in the
+loop. One file per writing machine per project, appended to:
+
+```
+<base>/<project>/<machine>.md
+
+    # Research — acme
+    ## 2026-09-18 21:11 · Research · run run-20260918T211120-0251d6
+    …the machine's answer, filed exactly as it said it…
+```
+
+A file per *run* fills a base with hundreds of near-empty documents and pushes it
+into the degraded contents list above; one file for the whole base interleaves two
+machines' histories into a document neither can be read out of. Per machine per
+project also keeps two projects wired to one `general` base from writing over
+each other's history. The `#` title is written only on the first entry, because
+`index.py` builds a file's one-line summary from its opening heading. The body is
+never reformatted: a store that edits what it was handed is one nobody can quote.
+
+**An empty answer files nothing and still reports.** A machine is allowed to have
+found nothing; what is not allowed is silence, because *nobody wrote* and *nobody
+was wired* look identical on a canvas and have completely different fixes. The
+base gets a row saying the answer was empty.
+
+**And a failed filing fails the node** — see below; that rule is unchanged, and
+it now sits on the path that actually does the writing.
+
+### What the contributing machine is told
+
+A spawn whose answer is going to be filed gets `index.FILING_CONTRACT` once,
+below every block — ~300 tokens, paid only by machines that hold a write wire,
+and now the same *kind* of thing `memory.WRITER_CONTRACT` is: a description of
+where this machine's words are about to end up, not a request for a tool call.
+
+It says the answer is filed word for word into a permanent, shared base that
+somebody will read months from now with none of this run in front of them; that
+the machine cannot revise it afterwards, because the answer *is* the entry; and
+then what that reader needs — what stays true rather than an account of the run,
+exact paths and names and values, what was checked and what was not, no "as
+discussed" and no run ids, nothing secret, nothing that expires, and one honest
+line when there is nothing durable to say.
+
+The base's own block changes with it. A base this node contributes to is
+described as *"Read-only to you — your final answer is filed into it when you
+finish"*, and an empty one says the machine's answer will be its first entry.
+**No block ever says "Read and write."**, which is what the first build said and
+what nobody could act on.
+
+The contract is charged against the section's 2 500-token cap before the first
+base, so a base's table of contents is dropped before it is: it is the only part
+of the section that changes what the machine writes.
 
 ## Permissions — the part prose cannot enforce
 
@@ -377,16 +469,20 @@ The handles on the canvas are a claim about what a machine may do. The thing tha
 denied, because nobody is home to answer (`backend/factoria/agent/claude.py`).
 So:
 
-- the knowledge tools this node may use are named on **`--allowedTools`**, or
-  every call fails as an unanswered permission prompt;
-- a node with no write wire — and *every* node wired to a `principles` base —
-  has `knowledge_append` and `knowledge_update` named on **`--disallowedTools`**,
-  beside the existing `DENIED_TOOLS`;
-- the server independently refuses the same writes with `read_only_scope`.
+- the knowledge tools this node may use — the three read tools, and only ever
+  those — are named on **`--allowedTools`**, or every call fails as an
+  unanswered permission prompt;
+- `knowledge_append` and `knowledge_update` are named on **`--disallowedTools`**
+  on **every** spawn, beside the existing `DENIED_TOOLS`, because writing is the
+  wire's job and happens in the orchestrator;
+- the grant document handed to the server says `writable: false` about every
+  base in it, so the child holds no document claiming otherwise;
+- the server independently refuses a write with `read_only_scope`.
 
-Two mechanisms for one rule is not redundancy here: the deny list stops the call
-being made, and the server stops a call that was made anyway. **The server is
-authoritative.** If they ever disagree, the flag is the bug.
+Three mechanisms for one rule is not redundancy here: the deny list stops the
+call being made, the grant stops a call that was made anyway, and the server is
+the one that has the last word. **The server is authoritative.** If they ever
+disagree, the flag is the bug.
 
 This means `RunConfig` (`backend/factoria/agent/adapter.py`) gains `mcp_servers`,
 `allowed_tools` and `disallowed_tools`, and they are **orchestrator policy, never
@@ -397,8 +493,11 @@ its own allowed tools would be the hole every other boundary exists to close.
 
 **One writer at a time per base.** An in-process lock keyed by base id, plus
 `store.atomic_write` for the file itself, so a reader never sees a half-written
-entry. Contention is reported as `locked` and not queued: a run that blocks on a
-shelf is a run whose watchdog fires for a reason nobody can see.
+entry. The orchestrator's filing takes the same lock in the same non-blocking
+way the server does — two machines of one run can reach a base at once, and the
+lock is the only thing that makes "one writer" true across both paths.
+Contention is reported as `locked` and not queued: a run that blocks on a shelf
+is a run whose watchdog fires for a reason nobody can see.
 
 A write is visible to the next reader immediately and invalidates that base's
 cached index. Concurrency beyond this machine — two people, two containers, one
@@ -412,18 +511,31 @@ succeeded run's memory, a base survives every outcome, which is the point of it.
 **And a failed knowledge write fails the node** — the deliberate inverse of
 memory, where a failed write is a note beside an outcome. A memory is an
 optimisation, so losing one costs a repeated question. A knowledge write is the
-work: a machine told to record a decision, which reports success while recording
+work: a node wired to record a decision, which goes green while recording
 nothing, hands the next project a gap that reads as "no decision was made". That
 is a lie with a long half-life, and it is worth a red node now.
+
+Both paths into a base fail the node the same way and their failures are
+reported as one list: what the wire could not file, and whatever the server
+turned away. An operator reading the node's detail does not care which of the
+two a write was attempted down.
 
 ## What the base reports
 
 A base is the piece of storage whose story **outlives the run**, so *what this
 run put in it, what it consulted, and what was turned away* is asked of the base
-long after the machine that asked is gone. Every call a spawn makes against a
-base is therefore emitted a second time as a `run.storage` addressed to the
-**knowledge node**, carrying the machine's id, label and lap, the `base_id`, the
-MCP `tool`, the `path`, and `refused` (the code, empty when the call landed).
+long after the machine that asked is gone. Everything that happens to a base is
+therefore emitted as a `run.storage` addressed to the **knowledge node**,
+carrying the machine's id, label and lap, the `base_id`, the `path`, and
+`refused` (the code, empty when it landed). There are two sources for those
+rows and the `tool` field is what tells them apart:
+
+- **the wire's filing**, one row per contributing machine per lap, with no
+  `tool` on it — this is the row a knowledge node's log opens with, and the one
+  that made the log stop opening empty;
+- **the spawn's own calls**, read out of the write journal, each carrying the
+  MCP `tool` that made it. In practice these are reads, because no spawn holds
+  a write tool any more.
 
 Two things had to change underneath it:
 
@@ -440,8 +552,10 @@ It is a `run.storage` and not a `run.artifact` because half of what it carries
 is reads, and a read creates nothing — an artifact means *this now exists*, and
 a union that also meant "somebody looked" is not one a client can draw.
 
-Emitted **before** the node is failed: what a spawn did to a base belongs to the
-base whether or not the machine survives it.
+Emitted **before** the node is failed: what happened to a base belongs to the
+base whether or not the machine survives it. That includes the machine that had
+nothing to file — an empty answer leaves a row saying so, because "nobody wrote"
+and "nobody was wired" look identical on a canvas and have different fixes.
 
 ### The node, and its log
 
@@ -471,7 +585,9 @@ and gets no card on the timeline.
 |---|---|
 | The base, the manifest, the budgets | `backend/factoria/knowledge/store.py` |
 | The adapter Protocol, and the markdown one | `knowledge/adapter.py`, `knowledge/markdown.py` |
-| The index block and its cache | `knowledge/index.py` |
+| The index block, the filing contract and the cache | `knowledge/index.py` |
+| Where a filed answer lands, and what it looks like | `knowledge/filing.py` |
+| The wire that files it | `orchestrator._file_knowledge` |
 | The MCP server and its five tools | `knowledge/mcp.py` |
 | The library API — `POST`/`DELETE`, no `PUT` | `backend/factoria/knowledge_api.py`, a fifth router in `main.py` |
 | The node type, and "attached, not on the line" | `models.NodeType`, `models.ATTACHED_TYPES` |
@@ -487,7 +603,7 @@ and gets no card on the timeline.
 
 ## As built
 
-Four things the design left open, and what the build decided.
+Five things the design left open, and what the build decided.
 
 **1. How a failed write reaches the run.** The design says a failed knowledge
 write fails the node and does not say how the orchestrator learns of one — the
@@ -496,7 +612,8 @@ answer is a **grant document and a write journal**, both under
 `_runs/<run-id>/_knowledge/` and both removed with the run:
 
 - the orchestrator writes one `grant.json` per agent spawn per lap, naming the
-  bases that node's wires reach and, per base, whether it may write;
+  bases that node's wires reach — and, since writing stopped being the agent's
+  to do, saying `writable: false` about every one of them;
 - the server named in that spawn reads it once at startup and can address
   nothing else for its whole life — which is what makes the grant, rather than
   the prompt, the boundary;
@@ -508,6 +625,12 @@ about the refusal by a typed error in the same turn, and the case this protects
 against is precisely an agent that decided to carry on regardless. Keyed by lap
 so a reviewer sending a writer round again does not fail it for a write it
 already fixed.
+
+The mechanism stands, and decision **5** below moved the writing out from under
+it: the journal is now mostly a record of reads, and the failure that fails a
+node usually comes from the orchestrator's own filing instead. It stays because
+the server is still the authoritative refusal and a journal of reads is half of
+what a base has to be able to say about itself.
 
 **2. MCP is hand-rolled.** No SDK. `knowledge/mcp.py` implements the four
 methods a stdio tool server needs — `initialize`, `tools/list`, `tools/call`,
@@ -532,6 +655,15 @@ to be able to not render one.
 description is its opening markdown heading, read off disk. Asking a person to
 restate in a manifest the heading they already wrote at the top of the file is
 how an index goes stale.
+
+**5. The wire files, not the agent** — see
+[`../decisions/0015`](../decisions/0015-the-wire-files-not-the-agent.md), which
+supersedes the design's "an agent writes if someone drew the wire". The first
+build made a write wire mean *you may call `knowledge_append`*, and across real
+runs the agents did not call it: the base stayed empty, the knowledge node's log
+opened empty, and nothing anywhere was red, because a capability nobody used is
+indistinguishable from a capability nobody has. The orchestrator now files the
+node's answer itself and no spawn holds a write tool.
 
 Two smaller decisions, recorded because both are refusals somebody will meet:
 
