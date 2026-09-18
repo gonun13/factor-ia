@@ -158,6 +158,21 @@ export function MergeGlyph() {
   );
 }
 
+/**
+ * Discard: the commit circle, crossed out. Nothing leaves, nothing is kept.
+ *
+ * Deliberately not a bin — a discard output is not a mistake being thrown
+ * away, it is a line that was never meant to produce a branch.
+ */
+export function DiscardGlyph() {
+  return (
+    <svg viewBox="0 0 16 16" aria-hidden>
+      <circle cx="8" cy="8" r="5.2" {...stroke} />
+      <path d="m4.6 11.4 6.8-6.8" {...stroke} />
+    </svg>
+  );
+}
+
 /** Codebase: a stack — deliberately not an arrow, because it is not a flow. */
 export function CodebaseGlyph() {
   return (

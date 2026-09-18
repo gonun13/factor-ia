@@ -19,9 +19,18 @@ from pathlib import Path
 
 import pytest
 
-from factoria import runcheck, worktree
-from factoria.models import Codebase, Edge, Factory, Node, NodeDefinition, Project
+from factoria import gitwork, runcheck, worktree
+from factoria.models import (
+    Codebase,
+    Edge,
+    Factory,
+    Node,
+    NodeDefinition,
+    Project,
+    RunDecision,
+)
 from factoria.orchestrator import Orchestrator, prd_title
+from factoria.runlog import run_dir
 from factoria.store import Store
 
 from .conftest import git, make_git_repo
@@ -49,12 +58,21 @@ def belt(source: str, target: str) -> Edge:
     return Edge(id=f"{source}->{target}", source=source, target=target)
 
 
-def line(*, inputs: list[Node], output: Node, codebase_id: str = "project-a") -> Factory:
+def line(
+    *,
+    inputs: list[Node],
+    output: Node,
+    codebase_id: str = "project-a",
+    fake_script: str = "",
+) -> Factory:
     """One agent between whatever inputs and one output."""
     agent = Node(
         id="n-agent",
         definition=NodeDefinition(
-            type="agent", label="Agent", codebase_id=codebase_id, config={}
+            type="agent",
+            label="Agent",
+            codebase_id=codebase_id,
+            config={"fake_script": fake_script} if fake_script else {},
         ),
     )
     factory = Factory(id="main", project_id="demo", name="main")
@@ -376,6 +394,169 @@ def test_a_pushing_output_with_no_remote_is_refused_before_a_run_starts(
     # A plain commit output needs none of it.
     factory.nodes[-1] = node("n-out", "output", "Commit")
     assert runcheck.run_problems(factory, codebases) == []
+
+
+# ---- the discard output ----------------------------------------------------
+
+
+def test_a_discard_output_succeeds_and_commits_nothing(
+    test_store: Store, orch: Orchestrator, repo: Path
+) -> None:
+    """The kind that says there was never meant to be a branch.
+
+    The agent really does edit a file — the fake's writes are real writes — so
+    this is the case where a `commit` output would have had something to
+    commit. A discard leaves it exactly where it was.
+    """
+    save(
+        test_store,
+        line(
+            inputs=[node("n-req", "input", "Request")],
+            output=node("n-out", "output", "Discard", kind="discard"),
+        ),
+    )
+    run = drive(orch, [{"text": "tidy the readme"}])
+
+    assert run.status == "succeeded", run.detail
+    made = run.worktrees[0]
+    assert made.commit_sha is None
+    assert made.files == []
+    # Nothing was produced, so nothing claims to have been.
+    assert made.pushed_branch is None and made.merged_into is None
+    assert "discarded" in (run.node_runs[-1].detail or "")
+    # The branch is still where it was cut from: no commit ever landed on it.
+    assert git(repo, "rev-parse", run.branch or "") == made.base_commit
+
+
+def test_a_discard_output_succeeds_when_nothing_reached_a_codebase(
+    test_store: Store, orch: Orchestrator, repo: Path
+) -> None:
+    """The case the three committing kinds cannot express.
+
+    A gate says no and the line leaves by its fail belt straight to the output,
+    so no agent ever ran and no worktree was ever cut. For a `commit` output
+    that is *"nothing reached the commit node"* and a failed run — correctly,
+    because a commit node with nothing to commit produced nothing. A discard
+    output is the end that never had a branch to produce, so the same walk is
+    what it looks like: a run that stopped on purpose.
+    """
+    gate = node("n-gate", "human", "Ship it?", prompt="Ship it?")
+    output = node("n-out", "output", "Discard", kind="discard")
+    factory = line(inputs=[node("n-req", "input", "Request")], output=output)
+    factory.nodes.insert(1, gate)
+    factory.edges = [
+        belt("n-req", "n-gate"),
+        Edge(id="gate-ok", source="n-gate", target="n-agent", source_handle="success"),
+        belt("n-agent", "n-out"),
+        Edge(id="gate-no", source="n-gate", target="n-out", source_handle="fail"),
+    ]
+    save(test_store, factory)
+
+    async def go():
+        run = await orch.start("demo", "main")
+        await orch.submit_input(run.id, "just walk the line")
+        for _ in range(500):
+            parked = orch._active[run.id].run
+            if (parked.node_run("n-gate") or None) and parked.node_run(
+                "n-gate"
+            ).status == "waiting_input":
+                break
+            await asyncio.sleep(0.01)
+        await orch.submit_decision(
+            run.id, RunDecision(node_id="n-gate", approved=False, note="not today")
+        )
+        task = orch._active[run.id].task
+        assert task is not None
+        await asyncio.wait_for(task, 15)
+        return orch.get(run.id)
+
+    run = asyncio.run(go())
+
+    assert run.status == "succeeded", run.detail
+    assert run.worktrees == []
+    assert run.node_run("n-agent").status == "pending", "the agent ran anyway"
+    assert "discarded" in (run.node_run("n-out").detail or "")
+
+
+def test_a_discarded_run_loses_its_worktree_and_keeps_its_branch(
+    test_store: Store, orch: Orchestrator, repo: Path
+) -> None:
+    """Discard discards the *worktree*, never a ref.
+
+    `gitwork._check` refuses `-d`/`-D`/`--delete` outright — "refs are never
+    deleted, not even ours" — so what is left behind is an empty branch at the
+    commit it was cut from. That is the deliberate half of this, and the
+    assertion is here so nobody later tidies it away.
+    """
+    save(
+        test_store,
+        line(
+            inputs=[node("n-req", "input", "Request")],
+            output=node("n-out", "output", "Discard", kind="discard"),
+        ),
+    )
+    run = drive(orch, [{"text": "tidy the readme"}])
+
+    assert run.status == "succeeded", run.detail
+    made = run.worktrees[0]
+    assert made.kept is False
+    assert not Path(made.path).exists()
+    assert gitwork.branch_exists(repo, run.branch or "")
+
+
+def test_a_failed_discard_run_keeps_its_worktree_like_any_other(
+    test_store: Store, orch: Orchestrator, repo: Path
+) -> None:
+    """The cleanup policy is not a property of the output kind.
+
+    A discard run that fails on the way to its output keeps its worktree for
+    the post-mortem, exactly as a commit run does — one policy, in one place
+    (`worktree.RunWorkspaces.cleanup`).
+    """
+    save(
+        test_store,
+        line(
+            inputs=[node("n-req", "input", "Request")],
+            output=node("n-out", "output", "Discard", kind="discard"),
+            fake_script="failure",
+        ),
+    )
+    run = drive(orch, [{"text": "tidy the readme"}])
+
+    assert run.status == "failed"
+    made = run.worktrees[0]
+    assert made.kept is True and Path(made.path).is_dir()
+
+
+def test_a_discard_output_needs_no_remote(test_store: Store, repo: Path) -> None:
+    """It puts nothing anywhere, so the expensive pre-flight does not apply."""
+    factory = line(
+        inputs=[node("n-req", "input", "Request")],
+        output=node("n-out", "output", "Discard", kind="discard"),
+    )
+    codebases = [Codebase(id="project-a", name="project-a", path=str(repo))]
+    assert runcheck.run_problems(factory, codebases) == []
+
+
+def test_the_summary_says_nothing_came_out_on_purpose(
+    test_store: Store, orch: Orchestrator, repo: Path
+) -> None:
+    """A reader of `summary.md` must not have to wonder where the commit went."""
+    save(
+        test_store,
+        line(
+            inputs=[node("n-req", "input", "Request")],
+            output=node("n-out", "output", "Discard", kind="discard"),
+        ),
+    )
+    run = drive(orch, [{"text": "tidy the readme"}])
+    text = (run_dir(run.id) / "summary.md").read_text(encoding="utf-8")
+
+    assert "Nothing, deliberately" in text
+    assert "`discard` output" in text
+    assert run.branch is not None and run.branch in text
+    # The misleading line from the committing path must not appear.
+    assert "No commit" not in text
 
 
 # ---- the two ends of the line ----------------------------------------------

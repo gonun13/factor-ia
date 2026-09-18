@@ -178,7 +178,8 @@ direction when asked to build it.
   with no gap and no repeat.
 - **Output: a commit on the run's own branch**, in the operator's own repository,
   with two further reaches the operator draws rather than configures —
-  `commit-push` and `commit-merge`. See
+  `commit-push` and `commit-merge` — and one shorter one, `discard`, for lines
+  whose deliverable is knowledge rather than a diff. See
   [`behaviour/git-output.md`](behaviour/git-output.md).
 - **Sign-in and a git key from the UI**, both headless, both kept in a
   container-owned volume the host never mounts.

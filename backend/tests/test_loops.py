@@ -294,6 +294,36 @@ def test_a_reviewers_fail_belt_that_runs_forward_closes_nothing(
     assert not any("loop" in problem for problem in runcheck.run_problems(factory))
 
 
+def test_a_discard_output_inside_a_loop_is_refused_in_its_own_words(
+    test_store: Store, project: None, repo: Path
+) -> None:
+    """The refusal is about the end of the line, not about committing.
+
+    A `discard` output commits nothing, so the sentence the operator reads
+    changes — but a line that ends on every lap is still a graph mistake, and
+    the rule stays type-wide (`runcheck._loop_problems`).
+    """
+    factory = save(
+        test_store,
+        [
+            node("n-in", "input"),
+            agent("n-work"),
+            node("n-out", "output", kind="discard"),
+            reviewer("n-review", "verdict-pass"),
+        ],
+        [
+            belt("n-in", "n-work"),
+            belt("n-work", "n-out"),
+            belt("n-out", "n-review"),
+            belt("n-review", "n-work", "fail"),
+        ],
+    )
+    problems = runcheck.run_problems(factory)
+
+    assert any("end the line on every lap" in problem for problem in problems), problems
+    assert not any("commit on every lap" in problem for problem in problems)
+
+
 def test_an_output_node_inside_a_loop_is_refused_because_it_would_commit_twice(
     test_store: Store, project: None, repo: Path
 ) -> None:

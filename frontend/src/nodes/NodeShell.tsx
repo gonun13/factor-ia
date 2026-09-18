@@ -32,6 +32,7 @@ import { useCanvas } from "../canvasContext";
 import { useHoverNote } from "./NodeNote";
 import {
   AgentGlyph,
+  DiscardGlyph,
   HumanGlyph,
   InputGlyph,
   KnowledgeGlyph,
@@ -67,6 +68,7 @@ const KIND_GLYPHS: Record<string, () => ReactNode> = {
   prd: PrdGlyph,
   reviewer: ReviewerGlyph,
   scope: ScopeGlyph,
+  discard: DiscardGlyph,
   "commit-push": PushGlyph,
   "commit-merge": MergeGlyph,
 };
@@ -87,6 +89,7 @@ const KIND_NAME: Record<string, string> = {
   reviewer: "reviewer",
   approval: "sign-off",
   scope: "scope",
+  discard: "discard",
   commit: "commit",
   "commit-push": "commit & push",
   "commit-merge": "commit & merge",
@@ -98,12 +101,19 @@ export function NodeShell({
   id,
   kind,
   data,
+  report,
   note,
   children,
 }: {
   id: string;
   kind: ShellKind;
   data: NodeData;
+  /** **Storage has something to report.** The log icon is otherwise drawn on a
+      node the walk has *reached*, which storage never is — a memory and a base
+      have no runtime and must not grow one. They do have a story, though: what
+      was filed, what was written, what was turned away. This says there is one
+      to open, and only a memory or a base ever passes it. */
+  report?: boolean;
   /** What this machine is for, shown under the pointer after a second's
       dwell (`NodeNote`) rather than inside the chassis. */
   note?: ReactNode;
@@ -293,15 +303,17 @@ export function NodeShell({
             a button laid out as one of its rows would sit *above* the name
             rather than beside it. */}
         <div className="node-titlerow">
-        {/* **In front of the name, and only on a machine the run has reached.**
+        {/* **In front of the name, and only where there is something to read.**
             A node this size has no room for a control that does nothing, and a
-            log icon on a node the walk never came to would be a promise of a
-            page that does not exist. What it opens is the whole of what this
+            log icon on a node nothing has happened to would be a promise of a
+            page that does not exist. For a machine that is "the walk reached
+            it"; for storage, which the walk never reaches, it is `report` —
+            something was filed here, or written, or refused. What it opens is the whole of what this
             machine did — every lap, every tool and its arguments, the words and
             the thinking — which is the half of a run the canvas has never been
             able to show, because the chassis holds a few lines at most and the
             reducer behind it keeps about that much. */}
-        {live && (
+        {(live || report) && (
           <>
             {logNote.popup}
             <button

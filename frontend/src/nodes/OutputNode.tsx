@@ -1,15 +1,18 @@
 import type { NodeProps } from "@xyflow/react";
 import { nodeKind, type FlowNode } from "../graph";
+import { PUSHING_OUTPUT_KINDS, type OutputKind } from "../types";
 import { useCanvas } from "../canvasContext";
 import { HoverNote } from "./NodeNote";
 import { NodeShell } from "./NodeShell";
 
 /**
- * What comes off the end of the line, in three degrees of reach.
+ * What comes off the end of the line, in four degrees of reach.
  *
- * `commit` leaves the branch in the operator's own repository and nothing
- * leaves the machine. `commit-push` also puts that branch on the remote under
- * its own name. `commit-merge` additionally fast-forwards the base branch **on
+ * `discard` is reach zero: nothing is committed and the worktree goes with the
+ * run — a factory being tested, or one whose whole deliverable is a knowledge
+ * base write. `commit` leaves the branch in the operator's own repository and
+ * nothing leaves the machine. `commit-push` also puts that branch on the remote
+ * under its own name. `commit-merge` additionally fast-forwards the base branch **on
  * the remote** — never locally, because the operator has that branch checked
  * out and moving the ref under their working tree is the one thing this design
  * promises not to do (`gitwork`, module docstring).
@@ -35,14 +38,22 @@ export function OutputNode({ id, data }: NodeProps<FlowNode>) {
       kind="output"
       data={data}
       note={
-        <p>
-          A commit on <code>factor-ia/&lt;factory&gt;/&lt;run&gt;</code>, left
-          in the attached codebase for review.
-        </p>
+        kind === "discard" ? (
+          <p>
+            Ends the line and keeps nothing: no commit, and the run&rsquo;s
+            worktrees go when it finishes. For factories that only build
+            knowledge, and for trying a line out.
+          </p>
+        ) : (
+          <p>
+            A commit on <code>factor-ia/&lt;factory&gt;/&lt;run&gt;</code>, left
+            in the attached codebase for review.
+          </p>
+        )
       }
     >
 
-      {kind !== "commit" && (
+      {PUSHING_OUTPUT_KINDS.includes(kind as OutputKind) && (
         <div className="slot reach">
           <span className="slot-head">
             remote · {kind === "commit-merge" ? "merges" : "pushes"}

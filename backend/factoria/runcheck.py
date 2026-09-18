@@ -1014,10 +1014,18 @@ def _loop_problems(
                 ),
                 "a reviewer",
             )
+            # A `discard` output commits nothing, so the sentence changes but
+            # the refusal does not: an output is the end of the line, and a
+            # line that ends on every lap is a graph mistake whatever the end
+            # does with the branch.
+            twice = (
+                "would end the line on every lap"
+                if node_kind(node) == "discard"
+                else "would commit on every lap"
+            )
             problems.append(
                 f"“{label(node)}” is inside the loop that “{closer}” closes, so it "
-                "would commit on every lap. Move it onto the reviewer’s success "
-                "belt, below the loop."
+                f"{twice}. Move it onto the reviewer’s success belt, below the loop."
             )
     return problems
 

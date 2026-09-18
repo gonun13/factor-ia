@@ -12,6 +12,8 @@ import type {
   GraphWrite,
   Health,
   KnowledgeBase,
+  KnowledgeEntryText,
+  MemoryDocument,
   KnowledgeBaseSummary,
   LoginState,
   Project,
@@ -84,6 +86,13 @@ export const api = {
   knowledge: () => request<KnowledgeBaseSummary[]>("/api/knowledge"),
   knowledgeBase: (id: string) =>
     request<KnowledgeBase>(`/api/knowledge/${encodeURIComponent(id)}`),
+  /** One file out of a base, as text — the read half of "the file is the
+      editor". There is no write twin and there will not be one: editing a base
+      is editing the files and committing them. */
+  knowledgeEntry: (id: string, path: string) =>
+    request<KnowledgeEntryText>(
+      `/api/knowledge/${encodeURIComponent(id)}/entry?path=${encodeURIComponent(path)}`,
+    ),
   /** Create a base, or import a `manifest.md` the browser already read.
       **No `overwrite`**, unlike a skill import: replacing a base would silently
       re-scope a store other projects are reading. */
@@ -243,6 +252,14 @@ export const api = {
   nodeEvents: (runId: string, nodeId: string, fromSeq = 0) =>
     request<NodeEventPage>(
       `/api/runs/${runId}/nodes/${encodeURIComponent(nodeId)}/events?from=${fromSeq}`,
+    ),
+
+  /** One memory node's document, as text. **404 is an ordinary answer here**:
+      a memory is discarded when the run ends and kept only when the run failed,
+      so the error carries the sentence that says which of the two happened. */
+  memoryDocument: (runId: string, nodeId: string) =>
+    request<MemoryDocument>(
+      `/api/runs/${runId}/memory/${encodeURIComponent(nodeId)}`,
     ),
 
   sshKey: () => request<SshKeyStatus>("/api/ssh/key"),

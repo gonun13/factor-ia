@@ -242,11 +242,37 @@ def test_the_journal_records_a_refused_write(workspace: Path, tmp_path: Path) ->
     assert entry["ok"] is False and entry["code"] == "stale"
 
 
-def test_a_read_writes_no_journal_line(workspace: Path, tmp_path: Path) -> None:
+def test_a_read_is_journaled_as_a_read(workspace: Path, tmp_path: Path) -> None:
+    """**This used to assert the opposite**, and the reversal is the point.
+
+    A read took no lock and left no line, so a base could not say who had
+    consulted it — the one half of its story that lived nowhere but the agent's
+    own transcript. It is journaled now, marked `kind: "read"` so the two
+    readers of this file can never disagree about what it was: the storage log
+    turns it into a row on the base, and `_knowledge_failures` skips it, because
+    a refused read must never fail a node the way a refused write does.
+    """
     journal = tmp_path / "journal.jsonl"
     server = make_server(workspace, ("acme", "codebase", True), journal=journal)
     server.call("knowledge_list", {"base": "acme"})
-    assert not journal.exists()
+
+    entry = json.loads(journal.read_text(encoding="utf-8").splitlines()[0])
+    assert entry["kind"] == "read"
+    assert entry["tool"] == "knowledge_list"
+    assert entry["ok"] is True and entry["code"] is None
+
+
+def test_a_write_is_journaled_as_a_write(workspace: Path, tmp_path: Path) -> None:
+    """The flag both readers key off, written down rather than re-derived from
+    the tool name in two places — one of which fails a node over the answer."""
+    journal = tmp_path / "journal.jsonl"
+    server = make_server(workspace, ("acme", "codebase", True), journal=journal)
+    server.call(
+        "knowledge_append", {"base": "acme", "path": "notes.md", "content": "hi"}
+    )
+
+    entry = json.loads(journal.read_text(encoding="utf-8").splitlines()[0])
+    assert entry["kind"] == "write" and entry["ok"] is True
 
 
 # ---- the tool names the spawn has to agree with ----------------------------

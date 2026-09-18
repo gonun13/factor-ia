@@ -115,6 +115,100 @@ def read_stream(
 # ---- control ---------------------------------------------------------------
 
 
+MEMORY_GRAPH = {
+    "nodes": [
+        {"id": "n-in", "definition": {"type": "input", "label": "Request"}},
+        {
+            "id": "n-write",
+            "definition": {
+                "type": "agent",
+                "label": "Research",
+                "position": {"x": 240, "y": 0},
+                "codebase_id": "project-a",
+            },
+        },
+        {
+            "id": "n-mem",
+            "definition": {"type": "memory", "label": "Findings", "position": {"x": 240, "y": 180}},
+        },
+        {
+            "id": "n-read",
+            "definition": {
+                "type": "agent",
+                "label": "Planner",
+                "position": {"x": 480, "y": 0},
+                "codebase_id": "project-a",
+            },
+        },
+        {
+            "id": "n-out",
+            "definition": {"type": "output", "label": "Commit", "position": {"x": 720, "y": 0}},
+        },
+    ],
+    "edges": [
+        {"id": "e-1", "source": "n-in", "target": "n-write"},
+        {"id": "e-2", "source": "n-write", "target": "n-read"},
+        {"id": "e-3", "source": "n-read", "target": "n-out"},
+        {"id": "w-1", "source": "n-write", "target": "n-mem"},
+        {"id": "w-2", "source": "n-mem", "target": "n-read"},
+    ],
+}
+
+
+def _run_with_a_memory(client: TestClient, **write_config) -> dict:
+    graph = json.loads(json.dumps(MEMORY_GRAPH))
+    if write_config:
+        graph["nodes"][1]["definition"]["config"] = write_config
+    assert client.put("/api/projects/demo/factories/main", json=graph).status_code == 200
+    run = start(client)
+    client.post(f"/api/runs/{run['id']}/input", json={"text": "look into it"})
+    read_stream(client, f"/api/runs/{run['id']}/events")
+    return client.get(f"/api/runs/{run['id']}").json()
+
+
+def test_a_memory_document_is_served_while_it_exists(runnable: TestClient) -> None:
+    """The contents of the shelf, which nothing served before.
+
+    A failed run keeps its memory (the cleanup policy), and a post-mortem whose
+    first step is opening a terminal to find the file is one nobody performs.
+    """
+    run = _run_with_a_memory(runnable, fake_script="failure")
+    assert run["status"] == "failed"
+
+    got = runnable.get(f"/api/runs/{run['id']}/memory/n-mem")
+    assert got.status_code == 200, got.text
+    body = got.json()
+    assert body["slug"] == "findings"
+    assert body["text"].startswith("---")
+    assert "# Findings" in body["text"]
+    assert body["kept"] is True
+
+
+def test_a_discarded_memory_says_so_rather_than_looking_empty(
+    runnable: TestClient,
+) -> None:
+    """**The honest 404.** A memory is discarded when the run ends, which is the
+    feature — so "the memory was empty" and "the memory was cleaned up" are
+    different answers, and a reader who cannot tell them apart goes looking for
+    a bug that is not there. The path is named because on a kept run that is
+    where to look."""
+    run = _run_with_a_memory(runnable)
+    assert run["status"] == "succeeded"
+
+    gone = runnable.get(f"/api/runs/{run['id']}/memory/n-mem")
+    assert gone.status_code == 404
+    detail = gone.json()["detail"]
+    assert "discarded when the run ended" in detail
+    assert "_memory/findings" in detail
+
+
+def test_a_memory_nothing_was_filed_into_is_its_own_404(runnable: TestClient) -> None:
+    run = _run_with_a_memory(runnable)
+    missing = runnable.get(f"/api/runs/{run['id']}/memory/n-nope")
+    assert missing.status_code == 404
+    assert "nothing was ever filed" in missing.json()["detail"]
+
+
 def test_start_asks_for_the_request_then_runs_to_completion(runnable: TestClient) -> None:
     run = start(runnable)
     assert run["status"] == "waiting_input"

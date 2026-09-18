@@ -221,8 +221,11 @@ otherwise (commit `9207d6f`). The name rides whichever end the *base* is:
 to decide a permission.
 
 And a write wire **carries no outcome**, exactly as a memory's does not: it
-leaves the machine by its ordinary way out, never by `success` or `fail`,
-because a base is contributed to whatever the machine's outcome.
+leaves the machine by its ordinary way out, because a base is contributed to
+whatever the machine's outcome. Only the **`fail`** port is refused —
+`edge_outcome` reads `null` and `"success"` as one answer, and a reviewer has no
+unnamed port to draw from, so "any named handle" would make a reviewer that
+contributes to a base undrawable.
 
 The cost of letting direction carry this, stated because it is real: a machine
 that both reads and writes one base draws two wires in opposite directions
@@ -412,6 +415,55 @@ optimisation, so losing one costs a repeated question. A knowledge write is the
 work: a machine told to record a decision, which reports success while recording
 nothing, hands the next project a gap that reads as "no decision was made". That
 is a lie with a long half-life, and it is worth a red node now.
+
+## What the base reports
+
+A base is the piece of storage whose story **outlives the run**, so *what this
+run put in it, what it consulted, and what was turned away* is asked of the base
+long after the machine that asked is gone. Every call a spawn makes against a
+base is therefore emitted a second time as a `run.storage` addressed to the
+**knowledge node**, carrying the machine's id, label and lap, the `base_id`, the
+MCP `tool`, the `path`, and `refused` (the code, empty when the call landed).
+
+Two things had to change underneath it:
+
+- **Reads are journaled now.** `mcp.Server.call` used to return a read before
+  any journal line was written, so *who consulted this base* lived nowhere but
+  the agent's own transcript. A read takes no lock — nothing changes, so there
+  is nothing to serialise — and the line is marked `kind: "read"`.
+- **And a refused read must not fail the node.** `_knowledge_failures` reads the
+  same journal and now skips reads. The rule it exists for is about a machine
+  told to *record* something that recorded nothing; a machine that asked for a
+  file that is not there has been told so, in a typed error, and may carry on.
+
+It is a `run.storage` and not a `run.artifact` because half of what it carries
+is reads, and a read creates nothing — an artifact means *this now exists*, and
+a union that also meant "somebody looked" is not one a client can draw.
+
+Emitted **before** the node is failed: what a spawn did to a base belongs to the
+base whether or not the machine survives it.
+
+### The node, and its log
+
+On the canvas the node gains a line reading `n written this run`, and the run
+footer one chip per base, in the danger colour when anything was refused — reads
+are left out of both, because the footer is what a run *did* and consulting a
+base did nothing to it.
+
+The node draws the **log icon** and opens on the same four tabs a memory does
+(`behaviour/memory.md`): **Written**, **Read**, **Content**, **Run events**. The
+difference between the two shelves is in what the panes say, not in which panes
+there are — and the sharpest of those differences is Content. A base is durable,
+so its files can always be opened: the entry list comes from
+`GET /api/knowledge/{id}` and one click fetches the text from
+`GET /api/knowledge/{id}/entry?path=…`. That route reads through the **same
+adapter the agents read through**, so the containment check, the byte window and
+the 64 KiB ceiling are one set of limits rather than two that drift. There is
+still **no write twin and there will not be one** — editing a base is editing
+the files and committing them.
+
+Like a memory, none of this is a status. A base has no `runtime`, gets no pip
+and gets no card on the timeline.
 
 ## Where the code lives
 

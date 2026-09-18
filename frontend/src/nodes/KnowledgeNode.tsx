@@ -47,7 +47,16 @@ function size(bytes: number): string {
  * a station the walk stopped at, and this is a shelf. The pip stays dark.
  */
 export function KnowledgeNode({ id, data }: NodeProps<FlowNode>) {
-  const { knowledgeBases, patch } = useCanvas();
+  const { knowledgeBases, patch, storage } = useCanvas();
+  /** What this run did to this base.
+   *
+   * Off the storage log rather than off a runtime, which this node has not got
+   * and must not grow. It is also the one thing on this node that belongs to
+   * the *run*: everything else — the base, its scope, whether anything may
+   * write — is true whether or not a run is happening. */
+  const touched = storage[id] ?? [];
+  const wrote = touched.filter((entry) => entry.op === "write");
+  const refused = wrote.filter((entry) => entry.refused).length;
   const selected = knowledgeBase(data.definition);
   const base = selected ? knowledgeBases.get(selected) : undefined;
   const missing = Boolean(selected) && knowledgeBases.size > 0 && base === undefined;
@@ -58,6 +67,10 @@ export function KnowledgeNode({ id, data }: NodeProps<FlowNode>) {
       id={id}
       kind="knowledge"
       data={data}
+      // A base anything reached for has a story worth opening — what was
+      // written, and by whom, but also who merely consulted it, which is the
+      // half that used to live nowhere but the agent's own transcript.
+      report={touched.length > 0}
       note={
         <>
           {/* The scope, in words, because it is the one thing about a base
@@ -112,6 +125,19 @@ export function KnowledgeNode({ id, data }: NodeProps<FlowNode>) {
         <p className="filed-line is-empty">
           <span className="filed-dot" aria-hidden="true" />
           {missing ? "base is missing" : "no base selected"}
+        </p>
+      )}
+
+      {/* **What this run did to it**, under what is durably true of it. Only
+          when there is something: a base is almost always only read, and a
+          line reading "0 written" on every base in every factory would be
+          noise about the normal case. A refusal is said in the danger colour —
+          a machine was told to change a source of truth and did not. */}
+      {wrote.length > 0 && (
+        <p className={`filed-line${refused ? " is-refused" : ""}`}>
+          <span className="filed-dot" aria-hidden="true" />
+          {wrote.length - refused} written this run
+          {refused > 0 && ` · ${refused} refused`}
         </p>
       )}
     </NodeShell>

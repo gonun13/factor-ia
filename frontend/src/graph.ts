@@ -617,6 +617,7 @@ export const DEFAULT_LABELS: Record<string, string> = {
   approval: "Sign-off",
   memory: "Memory",
   knowledge: "Knowledge",
+  discard: "Discard",
   commit: "Commit",
   "commit-push": "Commit & push",
   "commit-merge": "Commit & merge",

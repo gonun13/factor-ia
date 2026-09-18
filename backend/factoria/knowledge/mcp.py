@@ -399,7 +399,20 @@ class Server:
         grant = self._base(arguments, writing=writing)
         adapter = adapter_for(grant.format)
         if not writing:
-            return handler(adapter, grant, arguments)
+            # **A read is journaled too, and takes no lock.** Nothing about the
+            # base changes, so there is nothing to serialise — but *who
+            # consulted this base, and for what* is half the story a base has to
+            # tell, and it was the half nobody could ask about: a read returned
+            # here and left no trace anywhere outside the agent's own
+            # transcript. What reads it must never do is fail a node, which is
+            # why `orchestrator._knowledge_failures` looks at write tools only.
+            try:
+                result = handler(adapter, grant, arguments)
+            except Refusal as refusal:
+                self._journal(grant, tool, arguments, ok=False, code=refusal.code)
+                raise
+            self._journal(grant, tool, arguments, ok=True, code=None)
+            return result
         # **One writer at a time per base, and contention is reported rather
         # than queued.** A run that blocks on a shelf is a run whose watchdog
         # fires for a reason nobody can see.
@@ -517,6 +530,11 @@ class Server:
                 "node_id": self.grant.node_id,
                 "base": grant.id,
                 "tool": tool,
+                # Written down rather than re-derived from the tool name by each
+                # reader. Two readers already exist (the failure check and the
+                # storage log) and they must never disagree about whether a line
+                # was a write — one of them fails a node over the answer.
+                "kind": "write" if tool in WRITE_TOOLS else "read",
                 "path": str(arguments.get("path") or ""),
                 "ok": ok,
                 "code": code,

@@ -15,7 +15,7 @@ late joiner starts at 0 and gets the log from the beginning. There is no
 wall-clock ordering anywhere in the protocol, because two events in the same
 millisecond are common and a clock that steps backwards is not.
 
-Seven envelope types, not one with optional fields:
+Each is an envelope type of its own, never one type with optional fields:
 
 - `run.status` — the run as a whole moved.
 - `node.status` — one node's state machine moved. The canvas's pips.
@@ -31,6 +31,9 @@ Seven envelope types, not one with optional fields:
 - `run.artifact` — a worktree was created, a commit was made, or a memory was
   written. The one event that still means something after the process that
   wrote it is gone.
+- `run.storage` — a machine reached for a shelf: wrote to it, was handed a
+  pointer to it, or read it. Addressed to the *shelf*, and the only place that
+  names which machine was at the other end.
 - `run.cost`   — a **delta**, never the adapter's cumulative number. Stage 4
   recorded that `turn.end.total_cost_usd` accumulates for the process; a
   consumer that treats it as per-turn double-counts, so the orchestrator
@@ -194,6 +197,11 @@ class RunArtifactEvent(RunEventBase):
     #: process that wrote it — which is the case an operator reads the log to
     #: understand. It is the first kind with no codebase and no branch behind
     #: it, which is why the two fields below have defaults now.
+    #: **A knowledge write is not in here**, although a base is as durable as a
+    #: branch. It goes on `RunStorageEvent` with everything else that happens to
+    #: a shelf, because the question asked of a base is "who touched it, and
+    #: what was turned away" — and half of that is reads, which create nothing
+    #: and have no business in a union that means *this now exists*.
     kind: Literal["worktree", "commit", "push", "merge", "memory"]
     #: Defaulted rather than required since `memory`. Widening a default is
     #: additive: every `events.jsonl` line ever written still parses.
@@ -224,6 +232,61 @@ class RunArtifactEvent(RunEventBase):
     merged_into: str | None = None
 
 
+class RunStorageEvent(RunEventBase):
+    """Something touched storage: **who**, **which shelf**, and **how**.
+
+    A sixth envelope rather than a `run.artifact`, and the line between them is
+    the word *durable*. An artifact says something now exists that outlives the
+    process — a branch, a document on disk. This says a machine **reached for**
+    a shelf, and reaching for one creates nothing. Bending the artifact union to
+    carry reads would have left it meaning "something happened, somewhere",
+    which is not a thing a client can draw.
+
+    **Addressed to the storage node**, never to the machine. The machine's own
+    log already says what it tried to do; this is the shelf's side of it, and
+    the shelf is where somebody looks to find out what is actually in there. It
+    is also the only record that names the pair: a memory write's artifact is
+    addressed to the memory and never said *who wrote it*.
+
+    **Storage still has no status.** This is a history, not a state — a node
+    with a `runtime` is a station the walk stopped at, and neither of these is
+    (`models.ATTACHED_TYPES`). The canvas keeps drawing state off
+    `run.artifact` (`kind="memory"`) and the pip stays dark.
+    """
+
+    type: Literal["run.storage"] = "run.storage"
+    #: The memory or knowledge node.
+    node_id: str
+    store: Literal["memory", "knowledge"]
+    #: **`offer` and `read` are different facts and both are worth having.** A
+    #: memory reader is handed a *pointer* — a path in its system prompt — and
+    #: is free never to open it, so reporting the offer as a read would be the
+    #: log inventing a read that did not happen. `read` is only ever emitted for
+    #: something that actually reached the bytes: a knowledge read tool, or a
+    #: tool call whose path landed inside the memory's granted directory.
+    op: Literal["write", "offer", "read"]
+    #: The machine at the other end, and which lap it was on. The whole reason
+    #: this envelope exists.
+    machine_node_id: str = ""
+    machine_label: str = ""
+    lap: int = 0
+    path: str = ""
+    #: Set on a memory write: the document's body and how many sections it holds
+    #: — the same numbers the artifact carries, so a client never parses
+    #: `detail` to draw a row.
+    bytes: int = 0
+    sections: int = 0
+    truncated: bool = False
+    #: Set on `knowledge`: the base, the MCP tool, and the refusal code when the
+    #: call did not land. `refused` is empty when it did — a string rather than
+    #: a boolean because the code is what the operator acts on, and "which
+    #: refusal" is a question a flag cannot answer.
+    base_id: str = ""
+    tool: str = ""
+    refused: str = ""
+    detail: str = ""
+
+
 class RunCostEvent(RunEventBase):
     type: Literal["run.cost"] = "run.cost"
     node_id: str
@@ -244,6 +307,7 @@ RunEvent = Annotated[
         RunQuestionEvent,
         AgentStreamEvent,
         RunArtifactEvent,
+        RunStorageEvent,
         RunCostEvent,
     ],
     Field(discriminator="type"),

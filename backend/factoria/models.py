@@ -86,11 +86,16 @@ whose `config` gained a key still loads in a reader that has never heard of it,
 and falls back to `request`, which is what it used to be.
 """
 
-OutputKind = Literal["commit", "commit-push", "commit-merge"]
+OutputKind = Literal["discard", "commit", "commit-push", "commit-merge"]
 """What an `output` node does with the branch the run produced.
 
 Strictly increasing reach, and each step is one the operator drew on purpose:
 
+- `discard` — reach zero. Nothing is committed and the worktree goes with the
+  run. What the line was worth is whatever it wrote to a knowledge base, or the
+  walk itself: a factory being tested, or one whose whole deliverable is
+  durable knowledge rather than a diff. **This is the one kind for which an
+  agent that changed nothing is not a failure** — see `_run_output`.
 - `commit` — the branch is left in the operator's own repository. Nothing
   leaves the machine.
 - `commit-push` — the run's branch is also pushed to the remote, still on its
@@ -160,7 +165,9 @@ DEFAULT_HUMAN_KIND: HumanKind = "approval"
 DEFAULT_AGENT_KIND: AgentKind = "worker"
 
 INPUT_KINDS: frozenset[str] = frozenset({"request", "prd"})
-OUTPUT_KINDS: frozenset[str] = frozenset({"commit", "commit-push", "commit-merge"})
+OUTPUT_KINDS: frozenset[str] = frozenset(
+    {"discard", "commit", "commit-push", "commit-merge"}
+)
 HUMAN_KINDS: frozenset[str] = frozenset({"approval", "scope"})
 AGENT_KINDS: frozenset[str] = frozenset({"worker", "reviewer"})
 
@@ -785,7 +792,8 @@ class NodeRun(Base):
     node_id: str
     type: NodeType
     #: The node's `config["kind"]` at the moment the run was created — `request`
-    #: or `prd` on an input, `commit`/`commit-push`/`commit-merge` on an output.
+    #: or `prd` on an input, `discard`/`commit`/`commit-push`/`commit-merge` on
+    #: an output.
     #: Copied rather than re-read, because the factory file is editable while a
     #: run is in flight and a run record has to describe the run that happened.
     kind: str = ""

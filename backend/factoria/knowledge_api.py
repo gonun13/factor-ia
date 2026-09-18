@@ -28,10 +28,11 @@ them.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Response, status
+from fastapi import APIRouter, HTTPException, Query, Response, status
 from pydantic import BaseModel, ConfigDict, Field
 
 from .knowledge import store as knowledge
+from .knowledge.markdown import adapter_for
 from .models import KNOWLEDGE_SCOPES, KnowledgeBase, KnowledgeBaseSummary
 from .paths import PathEscape
 
@@ -96,6 +97,39 @@ def get_base(base_id: str) -> KnowledgeBase:
         return knowledge.get_base(base_id)
     except Exception as exc:
         raise _translate(exc) from exc
+
+
+@router.get("/knowledge/{base_id}/entry")
+def get_entry(base_id: str, path: str = Query(min_length=1)) -> dict[str, object]:
+    """One file out of a base, as text. **Read-only, and it stays that way.**
+
+    The module's rule above is about *writing* — the file is the editor, and a
+    second authority over a document git owns would disagree the first time
+    somebody pulled. Reading has no such problem, and its absence was costing
+    something real: a base's log could say a machine wrote `timeline.md` and
+    the operator had no way to see what `timeline.md` says without leaving the
+    canvas for a terminal.
+
+    **Nothing here opens a file itself.** The bytes come back through the same
+    adapter the agents read with (`markdown.MarkdownAdapter.get`), which
+    resolves the path through `store.entry_path` — every segment against an
+    allowlist, an absolute path refused outright, containment re-checked
+    afterwards — and applies the same byte window, the same 64 KiB ceiling and
+    the same `truncated` answer. A second way into a base would be a second set
+    of limits for somebody to keep in step.
+    """
+    try:
+        base = knowledge.get_base(base_id)
+        chunk = adapter_for(base.format).get(knowledge.base_path(base_id), path)
+    except Exception as exc:
+        raise _translate(exc) from exc
+    return {
+        "base_id": base_id,
+        "path": path,
+        "text": chunk.text,
+        "bytes": chunk.bytes,
+        "truncated": chunk.truncated,
+    }
 
 
 @router.post("/knowledge", response_model=KnowledgeBase, status_code=status.HTTP_201_CREATED)

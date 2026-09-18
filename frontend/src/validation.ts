@@ -56,6 +56,23 @@ export function blockers(problems: Problem[]): Problem[] {
   return problems.filter((problem) => problem.severity !== "notice");
 }
 
+/**
+ * Does this wire leave by a port that means something other than "whatever
+ * happened"?
+ *
+ * **`success` is not an outcome here, and that is the whole of this function.**
+ * A reviewer and a human node render *only* named ports, so every wire they can
+ * draw carries one — and a check for "has a handle at all" therefore refused
+ * every reviewer that files its answer, although the server has always accepted
+ * it (`models.edge_outcome`, where `null` and `"success"` are the same answer).
+ * The rule being mirrored is about a wire that would file *conditionally*, and
+ * only the `fail` port can ask for that.
+ */
+function leavesByOutcome(wire: FlowEdge): boolean {
+  const handle = (wire.sourceHandle ?? "").trim();
+  return handle !== "" && handle !== DEFAULT_EDGE_OUTCOME;
+}
+
 export function runProblems(
   nodes: FlowNode[],
   edges: FlowEdge[],
@@ -228,7 +245,7 @@ export function runProblems(
       } else {
         writers.get(target.id)?.push(source);
       }
-      if (wire.sourceHandle) {
+      if (leavesByOutcome(wire)) {
         problems.push({
           message: `the wire from “${label(source)}” to “${label(target)}” leaves by an outcome port — a memory is filed whatever the machine’s outcome, so a wire carries no outcome.`,
           nodeIds: [source.id, target.id],
@@ -389,7 +406,7 @@ export function runProblems(
           });
           continue;
         }
-        if (wire.sourceHandle) {
+        if (leavesByOutcome(wire)) {
           problems.push({
             message: `the wire from “${label(source)}” to “${label(target)}” leaves by an outcome port — a base is contributed to whatever the machine’s outcome, so a wire carries no outcome.`,
             nodeIds: [source.id, target.id],
@@ -631,8 +648,16 @@ export function runProblems(
     for (const node of nodes) {
       if (!body.has(node.id)) continue;
       if (node.data.definition.type === "output") {
+        // A `discard` output commits nothing, so the sentence changes but the
+        // refusal does not: an output is the end of the line, and a line that
+        // ends on every lap is a graph mistake whatever the end does with the
+        // branch.
+        const twice =
+          nodeKind(node.data.definition) === "discard"
+            ? "would end the line on every lap"
+            : "would commit on every lap";
         problems.push({
-          message: `“${label(node)}” is inside the loop that “${label(source)}” closes, so it would commit on every lap. Move it onto the reviewer’s success belt, below the loop.`,
+          message: `“${label(node)}” is inside the loop that “${label(source)}” closes, so it ${twice}. Move it onto the reviewer’s success belt, below the loop.`,
           nodeIds: [node.id],
         });
       }

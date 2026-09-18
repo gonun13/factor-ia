@@ -184,6 +184,7 @@ time, by name, rather than being unopenable.
 |---|---|---|
 | `input` | `request` | a sentence, typed when the run starts |
 | `input` | `prd` | a `.md` file, read in the browser and posted as text |
+| `output` | `discard` | nothing is committed; the worktree goes with the run |
 | `output` | `commit` | a commit on the run's branch, in the operator's own repo |
 | `output` | `commit-push` | …and the branch pushed to the remote under its own name |
 | `output` | `commit-merge` | …and the base branch fast-forwarded **on the remote** |

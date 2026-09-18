@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from pathlib import Path
 from typing import Any, AsyncIterator
 
 from fastapi import APIRouter, Header, HTTPException, Query, Request, status
@@ -298,6 +299,56 @@ async def run_events(
             "connection": "keep-alive",
         },
     )
+
+
+@router.get("/runs/{run_id}/memory/{node_id}")
+def memory_document(run_id: str, node_id: str) -> dict[str, Any]:
+    """One memory node's document, as text — the *contents* of the shelf.
+
+    **The one endpoint whose honest answer is often "it is gone".** A memory is
+    discarded when the run ends and kept only when the run failed
+    (`worktree.RunWorkspaces.cleanup`), which is the feature and not an
+    oversight: a memory is scratch a run used to avoid doing work twice, and a
+    copy of it that outlived the run would be a second lifetime for a document
+    whose whole definition is that it has one. So this serves the file while it
+    exists and otherwise says so, naming the path it was at — because "the
+    memory was empty" and "the memory was cleaned up" are different answers and
+    a reader who cannot tell them apart will go looking for a bug.
+
+    Nothing is cached and nothing is copied: the record on the run says where
+    the document is, and this reads it.
+    """
+    run = orchestrator().get(run_id)
+    if run is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"no such run: {run_id}")
+    record = next((one for one in run.memory if one.node_id == node_id), None)
+    if record is None:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND,
+            "nothing was ever filed into this memory on this run.",
+        )
+    try:
+        text = Path(record.path).read_text(encoding="utf-8")
+    except FileNotFoundError:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND,
+            f"the document was discarded when the run ended — it was at {record.path}",
+        ) from None
+    except OSError as exc:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, f"the document could not be read: {exc}"
+        ) from None
+    return {
+        "run_id": run_id,
+        "node_id": node_id,
+        "slug": record.slug,
+        "path": record.path,
+        "text": text,
+        "bytes": record.bytes,
+        "sections": record.sections,
+        "truncated": record.truncated,
+        "kept": record.kept,
+    }
 
 
 @router.get("/runs/{run_id}/nodes/{node_id}/events")

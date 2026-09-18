@@ -85,6 +85,7 @@ import uuid
 from pathlib import Path
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from typing import Any
 
 from . import config, gitwork, memory, runcheck, skills, summary, worktree
 from .knowledge import index as knowledge_index
@@ -137,6 +138,7 @@ from .runevents import (
     AgentStreamEvent,
     NodeStatusEvent,
     RunArtifactEvent,
+    RunStorageEvent,
     RunCostEvent,
     RunDecisionEvent,
     RunDecisionRequestEvent,
@@ -1486,6 +1488,28 @@ class Orchestrator:
                     detail=f"{slug} · {record.bytes} bytes",
                 )
             )
+            # **And who wrote it.** The artifact above is addressed to the
+            # memory and says what is on the shelf now, which is what the canvas
+            # draws; it has never been able to say whose work this was. A
+            # document written by two machines over three laps is a history, and
+            # a history nobody recorded is one the run cannot be asked about
+            # afterwards.
+            await state.channel.emit(
+                RunStorageEvent(
+                    run_id=state.run.id,
+                    node_id=target.id,
+                    store="memory",
+                    op="write",
+                    machine_node_id=node.id,
+                    machine_label=node.definition.label or node.id,
+                    lap=node_run.lap if node_run else 0,
+                    path=str(path),
+                    bytes=record.bytes,
+                    sections=len(doc.sections),
+                    truncated=record.truncated,
+                    detail=f"filed into {slug}",
+                )
+            )
 
     async def _run_human(self, state: ActiveRun, node: Node, incoming: str) -> None:
         """Stop the line and ask a person which belt the run leaves by.
@@ -1921,10 +1945,21 @@ class Orchestrator:
         failed-run policy), which is where the operator can see what the agent
         actually did with its time.
 
-        **The three kinds are one code path with two optional steps**, in
-        increasing order of reach (`models.OutputKind`):
+        **`discard` is the one kind that never reaches that failure**, because
+        it is the kind that says there was never meant to be a branch: a
+        factory being tested, or one whose deliverable is a knowledge base
+        write. It leaves before the guards below, including the one about
+        having reached a codebase at all — a knowledge-only line legitimately
+        never made a worktree, and refusing it would be refusing the whole
+        point of the kind. Nothing is removed here either: the run's worktrees
+        go at the end of the run under the one cleanup policy that governs
+        every kind (`worktree.RunWorkspaces.cleanup`), so a *failed* discard
+        run still keeps its worktree for the post-mortem.
 
-        1. commit on the run's branch — every kind does this;
+        **The three committing kinds are one code path with two optional
+        steps**, in increasing order of reach (`models.OutputKind`):
+
+        1. commit on the run's branch — every committing kind does this;
         2. push that branch to the remote — `commit-push` and `commit-merge`;
         3. fast-forward the base branch on the remote to it — `commit-merge`.
 
@@ -1937,6 +1972,23 @@ class Orchestrator:
         assert state.workspaces is not None
         kind = node_kind(node)
         made_all = state.workspaces.all
+        if kind == "discard":
+            # No commit, no artifact event: nothing was produced, and an
+            # artifact is a claim that something was. The worktrees are still
+            # recorded — they existed, and the run record describes the run
+            # that happened — and `cleanup` removes them when the run ends.
+            if node_run is not None:
+                node_run.output_text = incoming
+            state.run.worktrees = made_all
+            detail = "discarded — nothing committed"
+            if made_all:
+                count = len(made_all)
+                detail += (
+                    f" · {count} worktree{'s' if count != 1 else ''} "
+                    "will go when the run ends"
+                )
+            await self._set_node(state, node.id, "succeeded", detail)
+            return
         if not made_all:
             await self._set_node(
                 state,
@@ -2168,10 +2220,14 @@ class Orchestrator:
             knowledge_journal,
         ) = self._knowledge_spawn(state, node, attached_bases, lap=node_run.lap)
         assert state.workspaces is not None
-        add_dirs = [
-            str(state.workspaces.ensure_memory_dir(memory.memory_slug(other)))
+        # The same mapping twice over: what the CLI is granted, and — keyed by
+        # the directory — which memory node each grant belongs to, so a tool
+        # call that opens a file under one can be reported on the right shelf.
+        granted: dict[str, Node] = {
+            str(state.workspaces.ensure_memory_dir(memory.memory_slug(other))): other
             for other in reads
-        ]
+        }
+        add_dirs = list(granted)
         appended = verdict.compose_system_prompt(
             appended,
             reviewer=reviewer,
@@ -2197,6 +2253,30 @@ class Orchestrator:
         ]
         if pointers:
             prompt = "\n\n".join([prompt, *pointers]) if prompt else "\n\n".join(pointers)
+        # **An offer, which is not a read.** What this machine was handed is a
+        # path in its prompt; whether it opens the file is its own business, and
+        # a great many pointers are never followed. Recorded anyway, and
+        # recorded as what it is: "nobody read this memory" and "nobody was ever
+        # told about it" are different faults with different fixes, and until
+        # this event existed the canvas could not tell them apart.
+        for other in reads:
+            record = written[other.id]
+            await state.channel.emit(
+                RunStorageEvent(
+                    run_id=state.run.id,
+                    node_id=other.id,
+                    store="memory",
+                    op="offer",
+                    machine_node_id=node.id,
+                    machine_label=node.definition.label or node.id,
+                    lap=node_run.lap,
+                    path=record.path,
+                    bytes=record.bytes,
+                    sections=record.sections,
+                    truncated=record.truncated,
+                    detail="handed a pointer to this memory",
+                )
+            )
         cwd = await self._worktree_for(state, node, codebase)
         adapter = adapter_for(node, state.settings, lap=node_run.lap)
         agent_run = adapter.create_run(
@@ -2217,11 +2297,41 @@ class Orchestrator:
         cumulative = 0.0
         cause = "crash"
         detail: str | None = None
+        # One row per memory per lap, not one per tool call: a machine that
+        # greps a document, reads it and greps it again read it *once* as far as
+        # anybody reading this log is concerned, and four identical rows would
+        # bury the fact under the repetition.
+        opened: set[str] = set()
         try:
             async for event in agent_run:
                 await state.channel.emit(
                     AgentStreamEvent(run_id=state.run.id, node_id=node.id, event=event)
                 )
+                if event.type == "tool.start":
+                    # **The read, as opposed to the offer.** The pointer above
+                    # said this machine was told where the document is; this
+                    # says a tool call actually went there. Matched on the
+                    # granted directory rather than on the tool's name, because
+                    # what counts is the bytes being reached — Read, Grep, Glob
+                    # and a shell command that cats the file are the same event
+                    # to a shelf, and a name list would be a list to keep up to
+                    # date for ever.
+                    touched = _memory_touched(event.input, granted)
+                    if touched is not None and touched.id not in opened:
+                        opened.add(touched.id)
+                        await state.channel.emit(
+                            RunStorageEvent(
+                                run_id=state.run.id,
+                                node_id=touched.id,
+                                store="memory",
+                                op="read",
+                                machine_node_id=node.id,
+                                machine_label=node.definition.label or node.id,
+                                lap=node_run.lap,
+                                tool=event.name,
+                                detail=f"opened by {event.name}",
+                            )
+                        )
                 if event.type == "session.init":
                     node_run.session_id = event.session_id
                     # The CLI's own answer, which is the only honest one: we may
@@ -2298,6 +2408,10 @@ class Orchestrator:
         # path so a node that died keeps the more informative reason, and before
         # every success so neither a worker nor a passing reviewer can go green
         # over a source of truth it did not actually change.
+        # Before the refusal check below, deliberately: what this spawn did to a
+        # base belongs on the base whether or not the machine survives it.
+        await self._storage_from_journal(state, node, attached_bases, knowledge_journal)
+
         refused = self._knowledge_failures(knowledge_journal)
         if refused:
             state.halt.add(node.id)
@@ -2619,6 +2733,92 @@ class Orchestrator:
         )
         return servers, allowed, denied, block, journal_path
 
+    def _knowledge_entries(self, journal: Path | None) -> list[dict]:
+        """One spawn's write journal, parsed. `[]` when there is nothing to read.
+
+        Both readers of the journal go through here, so "what does a line look
+        like" is answered once. A journal that cannot be read is **no entries**,
+        not an error, for the reason `_knowledge_failures` gives at length.
+        """
+        if journal is None:
+            return []
+        try:
+            lines = journal.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            return []
+        entries: list[dict] = []
+        for line in lines:
+            if not line.strip():
+                continue
+            try:
+                entry = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(entry, dict):
+                entries.append(entry)
+        return entries
+
+    async def _storage_from_journal(
+        self,
+        state: ActiveRun,
+        node: Node,
+        attached: list[tuple[Node, "KnowledgeBase", bool]],
+        journal: Path | None,
+    ) -> None:
+        """Put every call this spawn made against a base on the **base's** node.
+
+        A base is the one piece of storage with a story that outlives the run,
+        so *"what did this run put in here, what did it consult, and what was
+        turned away"* is a question asked of the base long after the machine
+        that asked is gone. Without this the knowledge node was the only node in
+        a factory with nothing addressed to it at all — its log opened empty,
+        because every trace of the call lived on the agent.
+
+        Addressed to the knowledge node rather than the agent, which already has
+        its own record of the turn. The agent's log says what it tried to do;
+        the base's says what happened to the base — and, unlike the agent's, it
+        says it in one place for every machine that touched the same shelf.
+        """
+        if not attached:
+            return
+        # The journal names a base id; the canvas names a node. A base may be
+        # wired to one node twice over (read and write are one node), so the
+        # first match is the only match.
+        node_for: dict[str, Node] = {}
+        for other, base, _writable in attached:
+            node_for.setdefault(base.id, other)
+        node_run = state.run.node_run(node.id)
+        for entry in self._knowledge_entries(journal):
+            target = node_for.get(str(entry.get("base") or ""))
+            if target is None:
+                continue
+            writing = entry.get("kind") != "read"
+            tool = str(entry.get("tool") or "a knowledge call")
+            where = str(entry.get("path") or "")
+            code = "" if entry.get("ok") else str(entry.get("code") or "unknown")
+            if code:
+                detail = f"{tool} to {where or 'the base'} was refused: {code}"
+            elif writing:
+                detail = f"{tool} wrote {where or 'the base'}"
+            else:
+                detail = f"{tool} read {where or 'the base'}"
+            await state.channel.emit(
+                RunStorageEvent(
+                    run_id=state.run.id,
+                    node_id=target.id,
+                    store="knowledge",
+                    op="write" if writing else "read",
+                    machine_node_id=node.id,
+                    machine_label=node.definition.label or node.id,
+                    lap=node_run.lap if node_run else 0,
+                    base_id=str(entry.get("base") or ""),
+                    tool=tool,
+                    path=where,
+                    refused=code,
+                    detail=detail,
+                )
+            )
+
     def _knowledge_failures(self, journal: Path | None) -> list[str]:
         """Write failures this spawn's MCP server recorded, as sentences.
 
@@ -2641,21 +2841,17 @@ class Orchestrator:
         one is far more likely to be a run with no writes in it than a lost
         record — and failing a node over its own bookkeeping is the worse trade.
         """
-        if journal is None:
-            return []
-        try:
-            lines = journal.read_text(encoding="utf-8").splitlines()
-        except OSError:
-            return []
         failures: list[str] = []
-        for line in lines:
-            if not line.strip():
-                continue
-            try:
-                entry = json.loads(line)
-            except json.JSONDecodeError:
-                continue
+        for entry in self._knowledge_entries(journal):
             if entry.get("ok"):
+                continue
+            # **Writes only.** Reads are journaled too now, so that a base can
+            # say who consulted it — and a read that was turned away must not
+            # take a node down with it. The rule this method exists for is about
+            # a machine that was told to *record* something and did not; a
+            # machine that asked for a file that is not there has been told so,
+            # in a typed error, and is free to carry on.
+            if entry.get("kind") == "read":
                 continue
             where = entry.get("path") or "the base"
             failures.append(
@@ -2857,6 +3053,32 @@ def _request_line(state: ActiveRun) -> str:
         if node_run and node_run.output_text.strip():
             return prd_title(node_run.output_text, node_run.filename)
     return ""
+
+
+def _memory_touched(tool_input: Any, granted: dict[str, Node]) -> Node | None:
+    """Which memory, if any, a tool call reached into. `None` for almost all.
+
+    **Matched on the granted directory, not on the tool's name.** A memory lives
+    outside every worktree and is reachable only because it was handed over with
+    `--add-dir`, so its path appearing in a tool's arguments *is* the read —
+    whether that tool was `Read`, `Grep`, `Glob`, or a shell command that
+    happened to `cat` the file. A name list would be a list somebody has to keep
+    up to date for every provider for ever, and would silently under-report the
+    day one of them grew a new way to open a file.
+
+    Scanned across the argument values rather than a known key, for the same
+    reason: `file_path`, `path`, `pattern` and `command` are four spellings of
+    the same fact, and the set differs per provider.
+    """
+    if not granted or not isinstance(tool_input, dict):
+        return None
+    for value in tool_input.values():
+        if not isinstance(value, str) or not value:
+            continue
+        for directory, node in granted.items():
+            if directory in value:
+                return node
+    return None
 
 
 def _input_sources(state: ActiveRun) -> list[str]:

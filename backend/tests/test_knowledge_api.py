@@ -76,6 +76,52 @@ def test_creating_the_same_base_twice_is_a_conflict(client: TestClient) -> None:
     assert "never replaces" in again.json()["detail"]
 
 
+def test_an_entry_is_served_as_text(client: TestClient, workspace: Path) -> None:
+    """The read half of "the file is the editor".
+
+    The module refuses to *write* a base's contents, deliberately, and that
+    rule says nothing about reading — whose absence was costing something real:
+    a base's log could report that a machine wrote `timeline.md` and nobody
+    could see what `timeline.md` says without leaving the canvas for a terminal.
+    """
+    create(client, id="acme-api", title="Acme API timeline", scope="codebase",
+           about="Every change we have made, in order.")
+    (workspace / "_knowledge" / "acme-api" / "timeline.md").write_text(
+        "# Timeline\n\nMoved to v3.\n", encoding="utf-8"
+    )
+
+    got = client.get("/api/knowledge/acme-api/entry", params={"path": "timeline.md"})
+    assert got.status_code == 200, got.text
+    body = got.json()
+    assert body["text"] == "# Timeline\n\nMoved to v3.\n"
+    assert body["truncated"] is False and body["bytes"] > 0
+
+
+def test_an_entry_path_cannot_climb_out_of_its_base(
+    client: TestClient, workspace: Path
+) -> None:
+    """Served through the same resolver the agents read through
+    (`store.entry_path` via the adapter), so the containment rule is one rule
+    and not two that drift. A second way into a base would be a second set of
+    limits for somebody to keep in step."""
+    create(client, id="acme-api", title="Acme API timeline", scope="codebase",
+           about="Every change we have made, in order.")
+    secret = workspace / "secret.md"
+    secret.write_text("not yours\n", encoding="utf-8")
+
+    for path in ("../secret.md", "/etc/passwd", "../../secret.md"):
+        refused = client.get("/api/knowledge/acme-api/entry", params={"path": path})
+        assert refused.status_code in (400, 404, 422), (path, refused.status_code)
+        assert "not yours" not in refused.text
+
+
+def test_a_missing_entry_is_404(client: TestClient) -> None:
+    create(client, id="acme-api", title="Acme API timeline", scope="codebase",
+           about="Every change we have made, in order.")
+    gone = client.get("/api/knowledge/acme-api/entry", params={"path": "nope.md"})
+    assert gone.status_code == 404
+
+
 def test_there_is_no_put(client: TestClient) -> None:
     """The file is the editor. An edit endpoint would make this server a second
     authority over a document git already owns."""

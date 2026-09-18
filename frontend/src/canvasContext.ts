@@ -17,6 +17,7 @@ import type {
   NodeDefinition,
   ProjectSettings,
   RunArtifact,
+  RunStorage,
   SkillSummary,
 } from "./types";
 
@@ -90,6 +91,16 @@ export type CanvasContextValue = {
    */
   memories: Record<string, RunArtifact>;
   /**
+   * Every touch of a shelf this run has made, by storage node id.
+   *
+   * The map above answers *what is in this memory now*; this answers *what has
+   * happened to this shelf, and who did it* — writes, offers and reads alike.
+   * Storage has no runtime to hang that off and must not grow one, so it reads
+   * this instead, and that is also what tells a node it has a log worth
+   * opening.
+   */
+  storage: Record<string, RunStorage[]>;
+  /**
    * The workspace's knowledge library, by base id, fetched once per canvas.
    *
    * A `Map` rather than the array the API returns, because every reader of it
@@ -149,6 +160,7 @@ export const CanvasContext = createContext<CanvasContextValue>({
   projectSettings: { default_provider: null, default_model: null },
   skills: [],
   memories: {},
+  storage: {},
   knowledgeBases: new Map(),
   // No graph in hand means nothing to light up. `false` rather than `true`: a
   // default that lit every entry would be a canvas promising drops it cannot

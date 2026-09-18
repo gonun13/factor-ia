@@ -108,7 +108,7 @@ it.
 | type | kinds | what varies |
 |---|---|---|
 | `input` | `request` · `prd` | What it asks a human for: a sentence typed at run start, or a `.md` file handed over whole. |
-| `output` | `commit` · `commit-push` · `commit-merge` | What it does with the branch the run produced — strictly increasing reach, each step one the operator drew on purpose. |
+| `output` | `discard` · `commit` · `commit-push` · `commit-merge` | What it does with the branch the run produced — strictly increasing reach, each step one the operator drew on purpose, starting at nothing. |
 | `human` | `approval` · `scope` | How much it asks for: a gate with one question written into the graph, or a negotiation an agent conducts over several turns. |
 | `agent` | `worker` · `reviewer` | What it is for: doing the job, or judging what it is given and saying so in a verdict. |
 
@@ -148,7 +148,7 @@ change with a test behind it, not an incidental one.
 |---|---|
 | `NodeType` | `input` `agent` `output` `human` `memory` `knowledge` `factory-ref` |
 | `InputKind` | `request` `prd` |
-| `OutputKind` | `commit` `commit-push` `commit-merge` |
+| `OutputKind` | `discard` `commit` `commit-push` `commit-merge` |
 | `HumanKind` | `approval` `scope` |
 | `AgentKind` | `worker` `reviewer` |
 | `EdgeOutcome` | `success` `fail` (on `Edge.source_handle`; `None` means `success`) |
@@ -187,7 +187,8 @@ awkward is not a rule — `main.json` is a file people edit in a pull request.
    rest be acyclic. The same function gives the walk the loop body it resets, so
    what is refused and what is re-run cannot drift.
 5. **No output node may sit on a loop body.** Otherwise it would commit on every
-   lap.
+   lap — or, for a `discard` output, end the line on every lap. The rule is
+   type-wide; only the sentence the operator reads changes.
 6. **An edge into an agent or a human node arrives at one of three entries.**
    `store` takes a wire from a memory or a base, `forward` a belt running down
    the line, `loop` a reviewer's `fail` belt closing one; a human node draws no

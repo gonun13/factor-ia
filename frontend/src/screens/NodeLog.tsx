@@ -21,16 +21,49 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api";
-import type { FlowNode } from "../graph";
-import type { AgentEvent, NodeRun, RunEvent, TodoItem } from "../types";
+import { knowledgeBase, type FlowNode } from "../graph";
+import type {
+  AgentEvent,
+  KnowledgeEntry,
+  NodeRun,
+  RunEvent,
+  TodoItem,
+} from "../types";
 
-type Tab = "input" | "output" | "chat" | "decisions" | "events";
+type Tab =
+  | "input"
+  | "output"
+  | "chat"
+  | "decisions"
+  | "events"
+  | "written"
+  | "read"
+  | "content";
 
 const TABS: { id: Tab; name: string }[] = [
   { id: "input", name: "Input" },
   { id: "output", name: "Output" },
   { id: "chat", name: "Agent chat" },
   { id: "decisions", name: "Decisions" },
+  { id: "events", name: "Run events" },
+];
+
+/** **Storage gets its own four, and they are storage's questions.**
+ *
+ * A memory and a base have no input, no output, no transcript and no decisions
+ * — four tabs that would open on "this machine produced nothing" four times
+ * over, for a node that is not a machine. What a shelf is asked is what went
+ * in, who took something out, and what is in it now; the raw log sits under
+ * all three like everywhere else.
+ *
+ * The same four for both kinds, because a memory and a base **are the same
+ * kind of thing to whoever is reading** — one empties with the run and one
+ * outlives it, and that difference belongs in what the panes say, not in which
+ * panes there are. */
+const STORAGE_TABS: { id: Tab; name: string }[] = [
+  { id: "written", name: "Written" },
+  { id: "read", name: "Read" },
+  { id: "content", name: "Content" },
   { id: "events", name: "Run events" },
 ];
 
@@ -59,9 +92,13 @@ export function NodeLog({
   onClose: () => void;
 }) {
   const nodeId = node.id;
+  // Storage is a shelf, not a machine, and its window is a different window.
+  const storage =
+    node.data.definition.type === "memory" || node.data.definition.type === "knowledge";
+  const tabs = storage ? STORAGE_TABS : TABS;
   const [events, setEvents] = useState<RunEvent[] | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [tab, setTab] = useState<Tab>("chat");
+  const [tab, setTab] = useState<Tab>(storage ? "written" : "chat");
   const seen = useRef(0);
 
   // The history. Refetched from scratch when the window is pointed at a
@@ -158,7 +195,7 @@ export function NodeLog({
         </header>
 
         <nav className="node-log-tabs">
-          {TABS.map((entry) => (
+          {tabs.map((entry) => (
             <button
               key={entry.id}
               className={entry.id === tab ? "on" : undefined}
@@ -174,10 +211,15 @@ export function NodeLog({
           {!error && events === null && <p className="dim">Reading the log…</p>}
           {!error && events !== null && (
             <>
+              {tab === "written" && <WrittenPane node={node} events={events} />}
+              {tab === "read" && <ReadPane node={node} events={events} />}
+              {tab === "content" && <ContentPane node={node} runId={runId} />}
               {tab === "input" && (
                 <InputPane events={events} upstream={upstream} />
               )}
-              {tab === "output" && <OutputPane laps={laps} nodeRun={nodeRun} />}
+              {tab === "output" && (
+                <OutputPane laps={laps} nodeRun={nodeRun} events={events} />
+              )}
               {tab === "chat" && <ChatPane laps={laps} />}
               {tab === "decisions" && <DecisionPane events={events} />}
               {tab === "events" && <EventPane events={events} />}
@@ -488,7 +530,15 @@ function InputPane({
   );
 }
 
-function OutputPane({ laps, nodeRun }: { laps: Lap[]; nodeRun: NodeRun | undefined }) {
+function OutputPane({
+  laps,
+  nodeRun,
+  events,
+}: {
+  laps: Lap[];
+  nodeRun: NodeRun | undefined;
+  events: RunEvent[];
+}) {
   const said = laps.map((lap) => ({
     index: lap.index,
     text: lap.events
@@ -500,17 +550,42 @@ function OutputPane({ laps, nodeRun }: { laps: Lap[]; nodeRun: NodeRun | undefin
   }));
   const collected = nodeRun?.output_text ?? "";
 
-  if (!collected && said.every((lap) => !lap.text)) {
+  /* **What the machine says it did**, which for some machines is the only
+     thing there is to say. A commit node never speaks and streams nothing, and
+     a `discard` output does not even leave a commit behind — so a pane that
+     only knew about text and transcripts reported "nothing" about a node that
+     had just done its whole job. The sentence is the one on the node's last
+     `node.status`, so it is the same words as the pip's tooltip and it replays
+     from the log for a run that finished last week. */
+  const reported = [...events]
+    .reverse()
+    .find(
+      (event): event is Extract<RunEvent, { type: "node.status" }> =>
+        event.type === "node.status" && Boolean(event.detail),
+    )?.detail;
+
+  if (!collected && !reported && said.every((lap) => !lap.text)) {
     return <p className="dim">This machine produced nothing.</p>;
   }
 
   return (
     <div className="log-pane">
+      {reported && (
+        <article className="log-block">
+          <h4>what it did</h4>
+          <pre className="stream">{reported}</pre>
+        </article>
+      )}
       {collected && (
         <article className="log-block">
           {/* What actually travels: the run record's own copy, which is the
-              newest lap only — that is what the belts hand on. */}
-          <h4>what went down the belt</h4>
+              newest lap only — that is what the belts hand on. An output node
+              has no outgoing belt, so for one of those the same field is what
+              it was handed and the heading says so rather than naming a belt
+              that is not drawn. */}
+          <h4>
+            {nodeRun?.type === "output" ? "what it was handed" : "what went down the belt"}
+          </h4>
           <pre className="stream">{collected}</pre>
         </article>
       )}
@@ -522,6 +597,223 @@ function OutputPane({ laps, nodeRun }: { laps: Lap[]; nodeRun: NodeRun | undefin
             <pre className="stream">{lap.text}</pre>
           </article>
         ))}
+    </div>
+  );
+}
+
+/** `8.2 kB`, `640 B` — the same scale the two storage nodes print on the
+ * canvas, because a size is a size wherever it is read. */
+function size(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  const kb = bytes / 1024;
+  return kb < 1024 ? `${kb.toFixed(1)} kB` : `${(kb / 1024).toFixed(1)} MB`;
+}
+
+type StorageEvent = Extract<RunEvent, { type: "run.storage" }>;
+
+/** Every touch of this shelf, in the order it happened.
+ *
+ * **A history, not a state.** The node itself already prints the state — what
+ * is in the memory now, what the base holds — and repeating it here would
+ * answer the question the canvas answered. What the canvas cannot show is the
+ * sequence: a memory that grew over four writes, a base that took two and
+ * refused a third, and, in both cases, **which machine was at the other end**.
+ * Each row is one `run.storage`, which is why this works identically on a run
+ * that finished last week.
+ */
+function touches(events: RunEvent[], ops: StorageEvent["op"][]): StorageEvent[] {
+  return events.filter(
+    (event): event is StorageEvent =>
+      event.type === "run.storage" && ops.includes(event.op),
+  );
+}
+
+/** Who wrote to this shelf, and what landed. */
+function WrittenPane({ node, events }: { node: FlowNode; events: RunEvent[] }) {
+  const written = touches(events, ["write"]);
+  const memory = node.data.definition.type === "memory";
+
+  if (written.length === 0) {
+    return (
+      <p className="dim">
+        {memory
+          ? "Nothing was filed here. Wire a machine into this memory to fill it."
+          : "This run wrote nothing to this base. Most runs do not — a base is a source of truth, and consulting one is the ordinary use."}
+      </p>
+    );
+  }
+
+  return (
+    <div className="log-pane">
+      {written.map((event) => (
+        <article
+          key={event.seq}
+          className={`log-block${event.refused ? " is-refused" : ""}`}
+        >
+          <h4>
+            {event.refused ? `refused · ${event.refused}` : "written"} ·{" "}
+            {event.machine_label || event.machine_node_id}
+            {event.lap > 1 && ` · lap ${event.lap}`}
+          </h4>
+          <pre className="mono">{event.detail}</pre>
+          {memory ? (
+            <p className="dim">
+              {event.sections} section{event.sections === 1 ? "" : "s"} ·{" "}
+              {size(event.bytes)}
+              {event.truncated && " · truncated"} · {event.path}
+            </p>
+          ) : (
+            <p className="dim">
+              {event.tool} · {event.path || "the base"}
+            </p>
+          )}
+        </article>
+      ))}
+    </div>
+  );
+}
+
+/** Who took something out of it — and who was only told where it is.
+ *
+ * **An offer is not a read**, and the two are kept apart because the difference
+ * is the whole answer to "was this shelf any use". A memory reader is handed a
+ * path in its prompt and is free never to open it; a pane that called that a
+ * read would report a cache hit that never happened. A knowledge read is always
+ * a real one: it is a tool call that came back with bytes.
+ */
+function ReadPane({ node, events }: { node: FlowNode; events: RunEvent[] }) {
+  const seen = touches(events, ["offer", "read"]);
+  const memory = node.data.definition.type === "memory";
+
+  if (seen.length === 0) {
+    return (
+      <p className="dim">
+        {memory
+          ? "Nobody was ever told about this memory. Wire it out to a machine below the one that fills it — a memory nobody was pointed at saves no work."
+          : "Nothing consulted this base on this run."}
+      </p>
+    );
+  }
+
+  return (
+    <div className="log-pane">
+      {seen.map((event) => (
+        <article key={event.seq} className={`log-block${event.refused ? " is-refused" : ""}`}>
+          <h4>
+            {event.refused
+              ? `refused · ${event.refused}`
+              : event.op === "offer"
+                ? "offered"
+                : "opened"}{" "}
+            · {event.machine_label || event.machine_node_id}
+            {event.lap > 1 && ` · lap ${event.lap}`}
+          </h4>
+          <pre className="mono">{event.detail}</pre>
+        </article>
+      ))}
+      {memory && touches(events, ["read"]).length === 0 && (
+        // Worth saying rather than leaving as an absence: this is the state a
+        // memory that cost tokens to build and saved none is actually in, and
+        // it looks identical to a healthy one unless somebody says so.
+        <p className="dim">
+          Offered, but never opened — a pointer is a reference, and this machine
+          did not follow it.
+        </p>
+      )}
+    </div>
+  );
+}
+
+/** What is actually in it.
+ *
+ * Fetched when the tab is opened rather than with the window: a document is the
+ * one thing here that can be large, and most visits to this window are about
+ * the two panes before it.
+ *
+ * The two shelves answer differently because they *are* different, and the pane
+ * says which: a base is durable and its files can always be opened, while a
+ * memory is discarded when the run ends and kept only when the run failed. "The
+ * memory was empty" and "the memory was cleaned up" are different answers, and
+ * a reader who cannot tell them apart goes looking for a bug that is not there.
+ */
+function ContentPane({ node, runId }: { node: FlowNode; runId: string }) {
+  const memory = node.data.definition.type === "memory";
+  const baseId = memory ? "" : knowledgeBase(node.data.definition);
+
+  const [text, setText] = useState<string | null>(null);
+  const [entries, setEntries] = useState<KnowledgeEntry[] | null>(null);
+  const [opened, setOpened] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let live = true;
+    setText(null);
+    setEntries(null);
+    setOpened(null);
+    setError(null);
+    const load = memory
+      ? api
+          .memoryDocument(runId, node.id)
+          .then((document) => live && setText(document.text))
+      : baseId
+        ? api.knowledgeBase(baseId).then((base) => live && setEntries(base.entries))
+        : Promise.resolve(setError("This node points at no base yet."));
+    load.catch((cause: unknown) => {
+      if (live) setError(cause instanceof Error ? cause.message : String(cause));
+    });
+    return () => {
+      live = false;
+    };
+  }, [memory, baseId, runId, node.id]);
+
+  const open = (path: string) => {
+    setOpened(path);
+    setText(null);
+    setError(null);
+    api
+      .knowledgeEntry(baseId, path)
+      .then((entry) => setText(entry.text))
+      .catch((cause: unknown) =>
+        setError(cause instanceof Error ? cause.message : String(cause)),
+      );
+  };
+
+  if (error) return <p className="dim">{error}</p>;
+
+  if (memory) {
+    return text === null ? (
+      <p className="dim">Reading the document…</p>
+    ) : (
+      <pre className="stream">{text}</pre>
+    );
+  }
+
+  return (
+    <div className="log-pane">
+      {entries === null && <p className="dim">Reading the base…</p>}
+      {entries?.length === 0 && (
+        <p className="dim">This base has no entries yet.</p>
+      )}
+      {entries && entries.length > 0 && (
+        <nav className="entry-list">
+          {entries.map((entry) => (
+            <button
+              key={entry.path}
+              type="button"
+              className={entry.path === opened ? "on" : undefined}
+              onClick={() => open(entry.path)}
+            >
+              <span className="mono">{entry.path}</span>
+              <span className="dim">
+                {size(entry.bytes)}
+                {entry.summary && ` · ${entry.summary}`}
+              </span>
+            </button>
+          ))}
+        </nav>
+      )}
+      {opened && text === null && <p className="dim">Reading {opened}…</p>}
+      {opened && text !== null && <pre className="stream">{text}</pre>}
     </div>
   );
 }

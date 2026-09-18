@@ -59,6 +59,10 @@ export function MemoryNode({ id, data }: NodeProps<FlowNode>) {
       id={id}
       kind="memory"
       data={data}
+      // Something was filed here, so there is a history to open: who wrote it,
+      // on which lap, and how big it got. A memory the run never reached has
+      // nothing to say and draws no icon.
+      report={filed !== null}
       note={
         <p>
           Wire a machine in to file its answer here, and a machine below it on

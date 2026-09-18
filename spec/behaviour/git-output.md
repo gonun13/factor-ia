@@ -7,7 +7,7 @@ much, what it is structurally unable to do.
 
 ---
 
-## Three kinds, strictly increasing reach
+## Four kinds, strictly increasing reach
 
 Each step is one the operator **drew on purpose**. The kind lives in the node's
 `config`, and a kind this version has never heard of is refused by name before
@@ -15,21 +15,59 @@ the run starts.
 
 | kind | what it does |
 |---|---|
+| `discard` | Reach zero. Nothing is committed and the worktree goes with the run. |
 | `commit` | The branch is left in the operator's own repository. Nothing leaves the machine. |
 | `commit-push` | …and the run's branch is pushed to the remote, still on its own ref. A reviewer elsewhere can see it; nothing they depend on moved. |
 | `commit-merge` | …and the base branch is fast-forwarded to it **on the remote**. |
 
-They are **one code path with two optional steps** after the commit
+The three committing kinds are **one code path with two optional steps**
 (`orchestrator._run_output` → `_push_all`):
 
-1. commit on the run's branch — every kind;
+1. commit on the run's branch — every committing kind;
 2. `git push <remote> <branch>:<branch>` — both pushing kinds;
 3. `git push <remote> <branch>:<base>` — `commit-merge` only.
+
+`discard` leaves before step 1 and does none of them.
 
 **Step 2 runs before step 3.** A refused merge still leaves the work on the
 remote under its own ref, so the operator opens a pull request instead of losing
 the push. The other order would mean a failed merge and nothing to show for a
 run that has already been paid for.
+
+---
+
+## The discard
+
+The end for a line that was never meant to produce a branch: a factory whose
+whole deliverable is a **knowledge base write** — which outlives the run by
+design, and which no commit was ever going to carry — and a factory being
+**tried out**, where walking the line is the point and a branch would be litter.
+
+Three things follow from that, and each is the opposite of what the committing
+kinds do:
+
+- **An agent that changed nothing is not a failure.** The empty-commit refusal
+  below is about a node that promised a commit and produced none. A discard
+  promised nothing.
+- **It does not need to have reached a codebase.** A line that ends here having
+  cut no worktree at all — a gate that said no, a knowledge-only line — is a
+  run that stopped on purpose, not one that lost its work.
+- **It deletes nothing itself.** The worktree goes when the *run* ends, under
+  the one cleanup policy that governs every kind
+  (`worktree.RunWorkspaces.cleanup`), so a discard run that **fails** still
+  keeps its worktree for the post-mortem like any other failed run.
+
+### What it leaves behind, and why
+
+**An empty branch, at the commit it was cut from.** `git worktree add -b` made
+it before the agent ran, and nothing here removes it, because **no code path in
+this process deletes a ref** — `gitwork._check` refuses `-d`/`-D`/`--delete` on
+`branch` and on `push` alike ("refs are never deleted, not even ours"). That
+rule is worth more than the tidiness it costs: the one place it could be relaxed
+"safely" is our own branch, and a process that can delete one ref is a process
+that can be argued into deleting another. `summary.md` names the branches it
+left so the operator can remove them in their own terminal, as a decision of
+theirs.
 
 ---
 
@@ -49,7 +87,8 @@ run that has already been paid for.
   to a printable basename. Nothing ever opens it.
 
 **A run whose agent changed nothing fails.** Never a green tick over an empty
-branch.
+branch. This is about the three committing kinds only — a `discard` output
+promised no branch, so it has none to be empty.
 
 ---
 
@@ -119,7 +158,8 @@ a real push, and a real non-fast-forward refusal, against a local bare repo.
 ## Preconditions, checked before the agent runs
 
 In `runcheck._remote_problems`, for a pushing output kind: a configured remote,
-a key when the URL is ssh, and an `ls-remote` that actually connects.
+a key when the URL is ssh, and an `ls-remote` that actually connects. `commit`
+and `discard` put nothing anywhere, so none of it applies to them.
 
 The most expensive check in the module, and it earns it. A push that fails is a
 run whose whole cost has already been spent, on a problem that takes a minute to

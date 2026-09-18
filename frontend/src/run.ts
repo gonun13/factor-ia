@@ -31,6 +31,7 @@ import {
   type OverallRunStatus,
   type Run,
   type RunArtifact,
+  type RunStorage,
   type RunEvent,
   type ScopeQuestion,
   type ToolActivity,
@@ -70,6 +71,14 @@ export type RunState = {
   /** The branch this run owns, and the commit it produced. Survives the run —
    * it names a ref in the operator's own repository. */
   artifacts: RunArtifact[];
+  /** Every touch of a shelf, by storage node id, in arrival order.
+   *
+   * Kept per node rather than flat because every reader asks the same question
+   * — *what has happened to this shelf* — and because it is what tells a memory
+   * or a base that it has a log worth opening. **No runtime is created for
+   * these nodes**: storage is not a station, the pip stays dark, and nothing
+   * here puts a card on the timeline. */
+  storage: Record<string, RunStorage[]>;
   /**
    * What each memory node has filed, by node id — the **latest** state of the
    * document, not one entry per write.
@@ -113,6 +122,7 @@ const EMPTY: RunState = {
   runtimes: {},
   costUsd: 0,
   artifacts: [],
+  storage: {},
   memories: {},
   decisions: {},
   questions: {},
@@ -317,6 +327,7 @@ export function reduceRunEvent(state: RunState, event: RunEvent): RunState {
       };
     case "run.artifact": {
       const artifact: RunArtifact = {
+        nodeId: event.node_id,
         kind: event.kind,
         codebaseId: event.codebase_id,
         branch: event.branch,
@@ -343,15 +354,43 @@ export function reduceRunEvent(state: RunState, event: RunEvent): RunState {
           event.kind === "memory"
             ? { ...state.memories, [event.node_id]: artifact }
             : state.memories,
-        // **Only onto a machine that is running.** A `memory` artifact names a
-        // node that never runs and has no status of its own, and creating a
-        // runtime for it here would put a pip on the canvas and a card on the
-        // timeline for a node the walk is never going to reach — the canvas
-        // claiming storage is a station on the line. Every other artifact kind
+        // **Only onto a machine that is running.** A `memory` or `knowledge`
+        // artifact names a node that never runs and has no status of its own,
+        // and creating a runtime for it here would put a pip on the canvas and
+        // a card on the timeline for a node the walk is never going to reach —
+        // the canvas claiming storage is a station on the line. Storage reads
+        // its own history out of `artifacts` above, which is a list of what
+        // happened and not a claim that anything ran. Every other artifact kind
         // is emitted by a machine that is mid-run, so it already has one.
         runtimes: state.runtimes[event.node_id]
           ? withNode(state.runtimes, event.node_id, { artifact })
           : state.runtimes,
+      };
+    }
+    case "run.storage": {
+      const entry: RunStorage = {
+        nodeId: event.node_id,
+        store: event.store,
+        op: event.op,
+        machineNodeId: event.machine_node_id,
+        machineLabel: event.machine_label,
+        lap: event.lap,
+        path: event.path,
+        bytes: event.bytes,
+        sections: event.sections,
+        truncated: event.truncated,
+        baseId: event.base_id,
+        tool: event.tool,
+        refused: event.refused,
+        detail: event.detail,
+        seq: event.seq,
+      };
+      return {
+        ...state,
+        storage: {
+          ...state.storage,
+          [event.node_id]: [...(state.storage[event.node_id] ?? []), entry],
+        },
       };
     }
     case "agent":

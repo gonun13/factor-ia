@@ -27,7 +27,7 @@ export type NodeType =
  * `models.InputKind` / `models.OutputKind`.
  */
 export type InputKind = "request" | "prd";
-export type OutputKind = "commit" | "commit-push" | "commit-merge";
+export type OutputKind = "discard" | "commit" | "commit-push" | "commit-merge";
 /**
  * What a `human` node asks a person for — `models.HumanKind`.
  *
@@ -74,7 +74,8 @@ export type EdgeOutcome = "success" | "fail";
 export const DEFAULT_EDGE_OUTCOME: EdgeOutcome = "success";
 export const EDGE_OUTCOMES: EdgeOutcome[] = ["success", "fail"];
 
-/** `commit-push` and `commit-merge` put a ref on a remote; `commit` does not. */
+/** `commit-push` and `commit-merge` put a ref on a remote; `commit` and
+ * `discard` do not. */
 export const PUSHING_OUTPUT_KINDS: OutputKind[] = ["commit-push", "commit-merge"];
 
 /** A node's state machine. No `cancelled`: a cancelled node is `failed` with a
@@ -189,6 +190,30 @@ export type KnowledgeBaseSummary = {
 /** A base with its contents listed — what a picker opens. */
 export type KnowledgeBase = KnowledgeBaseSummary & { entries: KnowledgeEntry[] };
 
+/** One file out of a base. `truncated` is the byte window's answer, the same
+ * one the agents get — a base's files are read through one adapter with one set
+ * of limits, never two. */
+export type KnowledgeEntryText = {
+  base_id: string;
+  path: string;
+  text: string;
+  bytes: number;
+  truncated: boolean;
+};
+
+/** One memory node's document, while it still exists. */
+export type MemoryDocument = {
+  run_id: string;
+  node_id: string;
+  slug: string;
+  path: string;
+  text: string;
+  bytes: number;
+  sections: number;
+  truncated: boolean;
+  kept: boolean;
+};
+
 /**
  * A standing-instructions document in the workspace's `_skills/`.
  *
@@ -270,11 +295,44 @@ export type NodeRuntime = {
   lap?: number;
 };
 
+/**
+ * A machine reached for a shelf — **who**, **which**, and **how**.
+ *
+ * The shelf's side of the story, and the only record that names the pair: a
+ * memory write's artifact is addressed to the memory and never says who wrote
+ * it. `offer` and `read` are kept apart deliberately — a memory reader is
+ * handed a *pointer* it may never follow, and calling that a read would be the
+ * window inventing one.
+ */
+export type RunStorage = {
+  nodeId: string;
+  store: "memory" | "knowledge";
+  op: "write" | "offer" | "read";
+  machineNodeId: string;
+  machineLabel: string;
+  lap: number;
+  path: string;
+  bytes: number;
+  sections: number;
+  truncated: boolean;
+  baseId: string;
+  tool: string;
+  refused: string;
+  detail: string;
+  seq: number;
+};
+
 /** Something durable that now exists outside `/data` — a branch in the
  * operator's own repository, or a memory document on disk. Still true after
  * the run ends, which is why it is its own event and not a line of streamed
- * text. */
+ * text.
+ *
+ * **A knowledge write is not in here.** What happens to a shelf goes on
+ * `RunStorage`, because half of it is reads — and a read creates nothing, so it
+ * has no business in a union that means *this now exists*. */
 export type RunArtifact = {
+  /** The node it belongs on. */
+  nodeId: string;
   kind: "worktree" | "commit" | "push" | "merge" | "memory";
   codebaseId: string;
   branch: string;
@@ -657,6 +715,23 @@ export type RunEvent = { seq: number; run_id: string; timestamp: string } & (
       bytes: number;
       truncated: boolean;
     }
+  | {
+      type: "run.storage";
+      node_id: string;
+      store: "memory" | "knowledge";
+      op: "write" | "offer" | "read";
+      machine_node_id: string;
+      machine_label: string;
+      lap: number;
+      path: string;
+      bytes: number;
+      sections: number;
+      truncated: boolean;
+      base_id: string;
+      tool: string;
+      refused: string;
+      detail: string;
+    }
   | { type: "run.cost"; node_id: string; delta_usd: number; total_usd: number }
 );
 
@@ -670,6 +745,7 @@ export const RUN_EVENT_TYPES: RunEvent["type"][] = [
   "run.question",
   "agent",
   "run.artifact",
+  "run.storage",
   "run.cost",
 ];
 

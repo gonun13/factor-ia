@@ -69,6 +69,7 @@ import {
 import { edgeTypes, nodeTypes } from "../nodes";
 import {
   AgentGlyph,
+  DiscardGlyph,
   HumanGlyph,
   InputGlyph,
   KnowledgeGlyph,
@@ -157,6 +158,7 @@ const PALETTE_GROUPS: {
       { type: "output", kind: "commit", label: "Commit", hint: "a branch you can diff", Glyph: OutputGlyph },
       { type: "output", kind: "commit-push", label: "Commit & push", hint: "branch, then up to the remote", Glyph: PushGlyph },
       { type: "output", kind: "commit-merge", label: "Commit & merge", hint: "fast-forwards the base branch", Glyph: MergeGlyph },
+      { type: "output", kind: "discard", label: "Discard", hint: "nothing is kept; the worktree goes", Glyph: DiscardGlyph },
     ],
   },
   {
@@ -618,7 +620,16 @@ function CanvasInner({ projectId, onBack }: { projectId: string; onBack: () => v
    * The nearest honest answer to "what did this node get": the text the belts
    * actually carried is assembled when a node starts and never written down, so
    * the log pane shows each predecessor's own output and says that is what it
-   * is. Belts only — a wire from a memory is a reference, not an input. */
+   * is. Belts only — a wire from a memory is a reference, not an input.
+   *
+   * **The live text first, the record second.** `run.run` is the record as it
+   * was when the run was created and is refreshed only when a control call
+   * returns one, so during a run — and after one, until the page is reloaded —
+   * every `output_text` on it is still the empty string it was stamped with.
+   * Reading only that made this pane tell a machine with a full belt above it
+   * that nothing had arrived. `runtimes` is the canvas's own live copy,
+   * assembled from the same stream the node is drawn from, so it is what the
+   * operator is already looking at. */
   const upstream = useMemo(() => {
     if (!logNodeId) return [];
     const byId = new Map((run.run?.node_runs ?? []).map((one) => [one.node_id, one]));
@@ -627,10 +638,10 @@ function CanvasInner({ projectId, onBack }: { projectId: string; onBack: () => v
       .map((edge) => ({
         label:
           nodes.find((node) => node.id === edge.source)?.data.definition.label ?? edge.source,
-        text: byId.get(edge.source)?.output_text ?? "",
+        text: run.runtimes[edge.source]?.text || byId.get(edge.source)?.output_text || "",
       }))
       .filter((source) => source.text);
-  }, [logNodeId, edges, nodes, run.run]);
+  }, [logNodeId, edges, nodes, run.run, run.runtimes]);
 
   const context = useMemo(
     () => ({
@@ -646,6 +657,7 @@ function CanvasInner({ projectId, onBack }: { projectId: string; onBack: () => v
       },
       skills,
       memories: run.memories,
+      storage: run.storage,
       knowledgeBases: baseIndex,
       entryAccepts,
       openLog,
@@ -659,6 +671,7 @@ function CanvasInner({ projectId, onBack }: { projectId: string; onBack: () => v
       project,
       skills,
       run.memories,
+      run.storage,
       baseIndex,
       entryAccepts,
       openLog,
@@ -984,6 +997,37 @@ function RunBox({
     clear: () => void;
   };
 }) {
+  /** What this run has written to each knowledge base, by node.
+   *
+   * Counted, not listed: a base written to six times is one base, and the strip
+   * has room for a fact rather than a history — the history is in the node's
+   * own log. Refusals are counted separately because they are the opposite
+   * news: a machine was told to change a source of truth and did not. **Reads
+   * are left out**: the strip is what a run *did*, and consulting a base did
+   * nothing to it. */
+  const knowledgeWrites = useMemo(() => {
+    const tally = new Map<
+      string,
+      { written: number; refused: number; base: string; detail: string }
+    >();
+    for (const entries of Object.values(run.storage)) {
+      for (const entry of entries) {
+        if (entry.store !== "knowledge" || entry.op !== "write") continue;
+        const seen = tally.get(entry.nodeId) ?? {
+          written: 0,
+          refused: 0,
+          base: entry.baseId,
+          detail: "",
+        };
+        if (entry.refused) seen.refused += 1;
+        else seen.written += 1;
+        seen.detail = seen.detail ? `${seen.detail}\n${entry.detail}` : entry.detail;
+        tally.set(entry.nodeId, seen);
+      }
+    }
+    return tally;
+  }, [run.storage]);
+
   const stopping = blockers(problems);
   const runnable = stopping.length === 0;
   const notices = problems.filter((problem) => problem.severity === "notice");
@@ -1120,6 +1164,20 @@ function RunBox({
           {Object.entries(run.memories).map(([nodeId, filed]) => (
             <span key={`memory-${nodeId}`} className="memory" title={filed.path}>
               ▣ filed {filed.fileCount} section{filed.fileCount === 1 ? "" : "s"}
+            </span>
+          ))}
+          {/* One per base this run wrote to, counted rather than listed: a
+              base that took six writes is still one base, and **a refusal is
+              said out loud** — it is the one thing here that means a source of
+              truth did *not* change after a machine was told to change it. */}
+          {[...knowledgeWrites.entries()].map(([nodeId, tally]) => (
+            <span
+              key={`knowledge-${nodeId}`}
+              className={tally.refused ? "danger" : "memory"}
+              title={tally.detail}
+            >
+              ◆ {tally.written} written to {tally.base || "a base"}
+              {tally.refused > 0 && ` · ${tally.refused} refused`}
             </span>
           ))}
         </p>

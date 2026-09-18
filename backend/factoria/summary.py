@@ -39,6 +39,20 @@ def _duration(run: Run) -> str:
     return f"{seconds / 60:.1f} min"
 
 
+def _discarded(run: Run) -> bool:
+    """Did this run end at a `discard` output?
+
+    Read off `NodeRun.kind`, which is frozen onto the record when the run is
+    created, so this asks about the run that happened rather than about a
+    factory file the operator may have edited since. It is also why this
+    module still needs no access to the graph.
+    """
+    return any(
+        node_run.type == "output" and node_run.kind == "discard"
+        for node_run in run.node_runs
+    )
+
+
 def render(run: Run) -> str:
     verdict = {
         "succeeded": "Succeeded",
@@ -64,9 +78,39 @@ def render(run: Run) -> str:
     lines.append(f"> {run.input_text.strip()}" if run.input_text else "_never submitted_")
 
     lines += ["", "## What came out", ""]
-    if not run.worktrees:
+    discarded = _discarded(run)
+    if discarded:
+        # Said plainly rather than left to the branches below, which would
+        # report an absent commit as a shortfall. Nothing came out because
+        # nothing was meant to: the line ends in a discard output, and what the
+        # run was worth is whatever it wrote to a knowledge base, or the walk.
+        lines.append(
+            "**Nothing, deliberately** — this factory ends with a `discard` "
+            "output, so no commit was made."
+        )
+        gone = [made for made in run.worktrees if not made.kept]
+        if gone:
+            lines += [
+                "",
+                "These branches were cut and never committed to, so each still "
+                "points at the commit it came from. Their worktrees went with "
+                "the run; the branches are left where they are because no code "
+                "path here deletes a ref (`gitwork._check`).",
+                "",
+            ]
+            for made in gone:
+                lines.append(
+                    f"- `{made.branch}` in `{made.repo_path}`, still at "
+                    f"`{made.base_commit[:12]}`"
+                )
+        lines.append("")
+    elif not run.worktrees:
         lines.append("Nothing — the run did not reach a codebase.")
-    for made in run.worktrees:
+    # A *failed* discard run keeps its worktrees like any other failed run, and
+    # where they were left is the whole point of this file — so those still get
+    # the full section. Only the ones that were removed are summarised above.
+    reported = [made for made in run.worktrees if made.kept] if discarded else run.worktrees
+    for made in reported:
         lines.append(f"### {made.codebase_name or made.codebase_id}")
         lines.append("")
         lines.append(f"- Repository `{made.repo_path}`")

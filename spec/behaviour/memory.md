@@ -72,7 +72,13 @@ Draw the line first, the way you would with no memory in it. Then attach.
    had not been written yet.
 3. **A wire carries no outcome.** A memory is filed whatever the machine's
    outcome; there is no version of a run where the work happened and the copy
-   should not exist.
+   should not exist. Precisely: the `fail` port is refused, and `null` and
+   `success` are the same answer — a node's ordinary way out (`edge_outcome`).
+   That distinction is load-bearing rather than pedantic, because **a reviewer
+   renders no unnamed port**, so every wire it can draw leaves by `success`;
+   reading the rule as "no handle at all" makes a reviewer that files its
+   findings impossible to draw, which is the opposite of what
+   `_memory_neighbours` is written for.
 
 What is *not* a rule any more, because a memory is not on the line: it does not
 need a belt in and a belt out, it is not refused for "not being on the line",
@@ -154,6 +160,37 @@ set.
 
 What the node does *not* claim is that the file is still there after the run —
 the cleanup policy below decides that, and the node's own note says it.
+
+### Its own log
+
+A memory anything reached for draws the **log icon**, like a machine, and opens
+on **four tabs — Written, Read, Content, Run events** — the same four a
+knowledge base gets, because the two *are* the same kind of thing to whoever is
+reading. Input, output and agent chat are questions about a machine, and a shelf
+would answer all three with "nothing".
+
+- **Written** — one row per `run.storage` with `op: "write"`, naming the machine
+  and the lap. The artifact event has always said *what is on the shelf now*, in
+  the memory's own name; it has never been able to say **whose work it was**,
+  and a document written by two machines over three laps is a history.
+- **Read** — and this is the pane that needed a new event most, because until it
+  existed **nothing anywhere recorded a read**. It shows `offer` and `read`, and
+  keeps them apart: an offer is a pointer in a machine's prompt, a read is a
+  tool call that reached the bytes (matched on the granted directory, so `Read`,
+  `Grep` and a shell command that cats the file all count). *Offered but never
+  opened* is said out loud — it is exactly the state of a memory that cost
+  tokens to build and saved none, and it looks identical to a healthy one.
+- **Content** — the document itself, from
+  `GET /api/runs/{run}/memory/{node}`. **A 404 is an ordinary answer here**: the
+  document is discarded when the run ends and kept only when the run failed, so
+  the error carries the sentence saying which happened, and the path. "The
+  memory was empty" and "the memory was cleaned up" are different answers, and
+  no copy is kept to blur them — a memory has one lifetime by definition.
+- **Run events** — the raw log, as everywhere else.
+
+The icon is drawn off `report`, not off a runtime, so this buys the window
+without buying the pip: storage still has no status, and still no card on the
+timeline.
 
 ## What the agents are told
 

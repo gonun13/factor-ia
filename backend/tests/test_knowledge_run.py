@@ -28,8 +28,10 @@ from factoria.agent.adapter import RunConfig
 from factoria.agent.claude import DENIED_TOOLS, build_argv
 from factoria.agent.fake import FakeAdapter
 from factoria.knowledge import mcp as knowledge_mcp
-from factoria.models import Edge, Factory, Node, NodeDefinition
+from factoria.models import Codebase, Edge, Factory, Node, NodeDefinition
+from factoria import runcheck
 from factoria.orchestrator import Orchestrator
+from factoria.runlog import RunLog
 from factoria.store import Store
 
 from .test_routing import agent, belt, drive, node, project, repo, orch, save, statuses  # noqa: F401
@@ -409,6 +411,185 @@ def test_an_unreadable_journal_is_no_failures(
     in it than a lost record."""
     assert orch._knowledge_failures(Path("/nonexistent/journal.jsonl")) == []
     assert orch._knowledge_failures(None) == []
+
+
+# ---- what a reviewer may wire to ------------------------------------------
+
+
+def test_a_reviewer_may_write_to_a_base_from_its_success_port(
+    library: Path, test_store: Store, orch: Orchestrator, repo: Path
+) -> None:
+    """**A reviewer can only ever wire from a named port**, and that must not
+    stop it filing what it found.
+
+    It renders `success` and `fail` and no third handle, so every wire it can
+    draw carries one. `models.edge_outcome` treats `null` and `"success"` as the
+    same answer — the node's ordinary way out — so a wire from the success port
+    is a wire with no outcome on it, which is exactly what the rule below
+    demands. Only `fail` asks for a *conditional* contribution, and only `fail`
+    is refused.
+
+    This is pinned here because the canvas mirrors the rule and the mirror had
+    drifted: it refused a handle of any name, which made a reviewer that
+    contributes to a base undrawable although the server would have run it.
+    """
+    codebases = [Codebase(id="project-a", name="project-a", path=str(repo))]
+    for handle in (None, "success"):
+        factory = line(
+            test_store,
+            Edge(id="w-1", source="n-do", target="n-base", source_handle=handle),
+            extra_nodes=[base("n-base", "acme-api")],
+        )
+        factory.nodes[1].definition.config["kind"] = "reviewer"
+        assert runcheck.run_problems(factory, codebases) == [], handle
+
+    refused = line(
+        test_store,
+        Edge(id="w-1", source="n-do", target="n-base", source_handle="fail"),
+        extra_nodes=[base("n-base", "acme-api")],
+    )
+    refused.nodes[1].definition.config["kind"] = "reviewer"
+    problems = runcheck.run_problems(refused, codebases)
+    assert any("carries no outcome" in problem for problem in problems), problems
+
+
+# ---- the base's own log ----------------------------------------------------
+
+
+def _journalled(monkeypatch, entries: list[dict]) -> None:
+    """Stand in for the MCP server, which runs in a child the fake never spawns.
+
+    Patched at `_knowledge_entries` rather than by writing a file, because that
+    is the one place both readers of the journal go through — so a test that
+    fixes the entries fixes exactly what production would have parsed, and the
+    artifacts and the failures cannot be given different stories.
+    """
+    monkeypatch.setattr(Orchestrator, "_knowledge_entries", lambda self, journal: entries)
+
+
+def _storage(run_id: str, node_id: str) -> list[dict]:
+    return [
+        record
+        for record in RunLog(run_id).read(0)
+        if record.get("type") == "run.storage" and record.get("node_id") == node_id
+    ]
+
+
+def test_a_write_is_reported_on_the_base_not_only_on_the_machine(
+    library: Path, test_store: Store, orch: Orchestrator, repo: Path, monkeypatch
+) -> None:
+    """A base outlives the run, so *what this run put in it* is a question asked
+    of the base long after the machine that asked is gone. Before this, the
+    knowledge node was the only node in a factory with nothing addressed to it:
+    its log opened empty while every trace of the write sat on the agent."""
+    line(test_store, writes("n-do", "n-base"),
+         extra_nodes=[base("n-base", "acme-api")])
+    _journalled(monkeypatch, [
+        {"ok": True, "code": None, "base": "acme-api", "kind": "write",
+         "tool": "knowledge_append", "path": "timeline.md"},
+    ])
+    run = drive(orch)
+
+    assert statuses(run)["n-do"] == "succeeded"
+    filed = _storage(run.id, "n-base")
+    assert len(filed) == 1, filed
+    assert filed[0]["store"] == "knowledge"
+    assert filed[0]["op"] == "write"
+    assert filed[0]["base_id"] == "acme-api"
+    assert filed[0]["tool"] == "knowledge_append"
+    assert filed[0]["path"] == "timeline.md"
+    assert filed[0]["refused"] == ""
+    assert "wrote timeline.md" in filed[0]["detail"]
+    # The whole point of the envelope: the base can say who was at the other end.
+    assert filed[0]["machine_node_id"] == "n-do"
+    assert filed[0]["machine_label"]
+
+
+def test_a_refused_write_is_reported_on_the_base_even_though_the_node_failed(
+    library: Path, test_store: Store, orch: Orchestrator, repo: Path, monkeypatch
+) -> None:
+    """The refusal is the news, and the base is where somebody looks to find out
+    what is actually in there. Emitted before the node is failed, deliberately:
+    the attempt belongs on the base whether or not the machine survives it."""
+    line(test_store, writes("n-do", "n-base"),
+         extra_nodes=[base("n-base", "acme-api")])
+    _journalled(monkeypatch, [
+        {"ok": False, "code": "too_large", "base": "acme-api", "kind": "write",
+         "tool": "knowledge_append", "path": "timeline.md"},
+    ])
+    run = drive(orch)
+
+    assert statuses(run)["n-do"] == "failed"
+    filed = _storage(run.id, "n-base")
+    assert len(filed) == 1, filed
+    assert filed[0]["refused"] == "too_large"
+    assert "was refused: too_large" in filed[0]["detail"]
+
+
+def test_a_base_wired_to_another_machine_gets_none_of_this(
+    library: Path, test_store: Store, orch: Orchestrator, repo: Path, monkeypatch
+) -> None:
+    """The same containment the grant has: a journal line names a base id, and
+    it lands on the node that selected it — never on a second base that happens
+    to be on the canvas."""
+    # Both bases are on the machine — one written to, one merely consulted —
+    # so the only thing separating them is the base id on the journal line.
+    line(
+        test_store,
+        writes("n-do", "n-base"),
+        reads("n-other", "n-do"),
+        extra_nodes=[base("n-base", "acme-api"), base("n-other", "elsewhere")],
+    )
+    _journalled(monkeypatch, [
+        {"ok": True, "code": None, "base": "acme-api", "kind": "write",
+         "tool": "knowledge_update", "path": "notes.md"},
+    ])
+    run = drive(orch)
+
+    assert len(_storage(run.id, "n-base")) == 1
+    assert _storage(run.id, "n-other") == []
+
+
+def test_a_read_is_reported_on_the_base_and_never_fails_the_node(
+    library: Path, test_store: Store, orch: Orchestrator, repo: Path, monkeypatch
+) -> None:
+    """The half of a base's story that used to be invisible.
+
+    A read returned from `mcp.Server.call` before any journal line was written,
+    so *who consulted this base* was answerable only from the agent's own
+    transcript. It is journaled now — and **a refused read must not fail the
+    node**, which is the inverse of the write rule and the sharper half of it:
+    a machine told to record a decision that recorded nothing is a lie with a
+    long half-life, while a machine that asked for a file that is not there has
+    been told so and can carry on.
+    """
+    line(test_store, reads("n-base", "n-do"), extra_nodes=[base("n-base", "acme-api")])
+    _journalled(monkeypatch, [
+        {"ok": True, "code": None, "base": "acme-api", "kind": "read",
+         "tool": "knowledge_get", "path": "timeline.md"},
+        {"ok": False, "code": "not_found", "base": "acme-api", "kind": "read",
+         "tool": "knowledge_get", "path": "gone.md"},
+    ])
+    run = drive(orch)
+
+    assert statuses(run)["n-do"] == "succeeded", run.node_run("n-do").detail
+    consulted = _storage(run.id, "n-base")
+    assert [entry["op"] for entry in consulted] == ["read", "read"]
+    assert "read timeline.md" in consulted[0]["detail"]
+    assert consulted[1]["refused"] == "not_found"
+
+
+def test_a_base_that_was_only_read_has_no_history_of_its_own(
+    library: Path, test_store: Store, orch: Orchestrator, repo: Path
+) -> None:
+    """A base nothing *called* has nothing to report. The fake agent makes no
+    MCP calls at all, so the journal is empty and the base stays silent — which
+    is what keeps the log icon off a base that was merely wired up."""
+    line(test_store, reads("n-base", "n-do"), extra_nodes=[base("n-base", "acme-api")])
+    run = drive(orch)
+
+    assert statuses(run)["n-do"] == "succeeded"
+    assert _storage(run.id, "n-base") == []
 
 
 # ---- the base outlives the run --------------------------------------------

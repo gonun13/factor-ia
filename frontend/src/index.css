@@ -764,6 +764,14 @@ button:focus-visible {
   color: var(--output);
 }
 
+/* A discard output is the one output that ships nothing, and it should not look
+   like one that does. Muted rather than a colour of its own: it is still an
+   output node — same chassis, same place on the line — and a fifth hue would
+   say it was a fifth kind of thing. */
+.type-output.kind-discard {
+  color: var(--ink-dim);
+}
+
 /* ---- run control -------------------------------------------------------- */
 
 .runbox {
@@ -1388,6 +1396,54 @@ ul.plain {
 
 .log-block .stream {
   max-height: 32rem;
+}
+
+/* A call a shelf turned away. Coloured on the heading only: the line below it
+   is the server's own sentence about what happened, and a whole block in the
+   danger colour would read as an error in the log rather than as a fact in it. */
+.log-block.is-refused h4 {
+  color: var(--danger);
+}
+
+/* A base's files, in the content tab. A list of buttons rather than a tree:
+   a base is a flat handful of documents by design (`store._walk` prunes and
+   caps), and a tree control would be scaffolding around six rows. */
+.entry-list {
+  display: grid;
+  gap: 0.15rem;
+  align-content: start;
+}
+
+.entry-list button {
+  display: flex;
+  gap: 0.6rem;
+  align-items: baseline;
+  justify-content: space-between;
+  width: 100%;
+  padding: 0.35rem 0.5rem;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.entry-list button:hover {
+  background: color-mix(in srgb, var(--knowledge) 10%, transparent);
+}
+
+.entry-list button.on {
+  border-color: color-mix(in srgb, var(--knowledge) 45%, transparent);
+  background: color-mix(in srgb, var(--knowledge) 14%, transparent);
+}
+
+.entry-list .dim {
+  flex: 0 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .dim {

@@ -195,6 +195,113 @@ def test_the_memory_is_recorded_on_the_run_and_in_the_log(
     )
 
 
+def _storage(run_id: str, node_id: str = "n-mem") -> list[dict]:
+    return [
+        record
+        for record in RunLog(run_id).read(0)
+        if record.get("type") == "run.storage" and record.get("node_id") == node_id
+    ]
+
+
+def test_a_write_says_which_machine_wrote_it(
+    test_store: Store, orch: Orchestrator, repo: Path
+) -> None:
+    """The attribution the artifact event never carried.
+
+    `run.artifact` is addressed to the memory and says what is on the shelf now,
+    which is what the canvas draws — it has never been able to say whose work
+    it was. A document written by two machines over three laps is a history, and
+    a shelf that cannot name its writers cannot be asked about one.
+    """
+    line(test_store)
+    run = drive(orch)
+
+    written = [entry for entry in _storage(run.id) if entry["op"] == "write"]
+    assert len(written) == 1, written
+    assert written[0]["store"] == "memory"
+    assert written[0]["machine_node_id"] == "n-write"
+    assert written[0]["machine_label"] == "Research"
+    assert written[0]["lap"] == 1
+    record = run.memory[0]
+    assert (written[0]["bytes"], written[0]["sections"]) == (record.bytes, record.sections)
+
+
+def test_offering_a_memory_to_a_reader_is_recorded_as_an_offer(
+    test_store: Store, orch: Orchestrator, repo: Path
+) -> None:
+    """**An offer is not a read.** What the reader is handed is a path in its
+    prompt, and a great many pointers are never followed. Recorded as what it
+    is, because "nobody read this memory" and "nobody was ever told about it"
+    are different faults with different fixes."""
+    line(test_store)
+    run = drive(orch)
+
+    offered = [entry for entry in _storage(run.id) if entry["op"] == "offer"]
+    assert len(offered) == 1, offered
+    assert offered[0]["machine_node_id"] == "n-read"
+    assert offered[0]["path"] == run.memory[0].path
+    assert "pointer" in offered[0]["detail"]
+
+
+def test_a_tool_that_opens_the_document_is_recorded_as_a_read(
+    test_store: Store, orch: Orchestrator, repo: Path, monkeypatch
+) -> None:
+    """The other half of the read side: a tool call whose path landed inside the
+    granted directory really did reach the bytes.
+
+    Matched on the **directory**, not on the tool's name — `Read`, `Grep` and a
+    shell command that cats the file are the same event to a shelf, and a name
+    list would be one somebody has to keep up to date for every provider for
+    ever. The fake's own scripts only ever touch the worktree, so the follow-up
+    a real agent would make is spliced into its stream here.
+    """
+    line(test_store)
+    _follows_its_pointer(monkeypatch, times=2)
+    run = drive(orch)
+
+    opened = [entry for entry in _storage(run.id) if entry["op"] == "read"]
+    # Twice in the stream, once in the log: a machine that greps a document,
+    # reads it and greps it again read it once as far as anybody reading this
+    # is concerned, and four identical rows would bury the fact.
+    assert len(opened) == 1, opened
+    assert opened[0]["machine_node_id"] == "n-read"
+    assert opened[0]["tool"] == "Read"
+    assert "opened by" in opened[0]["detail"]
+
+
+def test_a_memory_nobody_opened_is_offered_and_not_read(
+    test_store: Store, orch: Orchestrator, repo: Path
+) -> None:
+    """The distinction earning its keep. The fake follows no pointers, so this
+    is the ordinary case: the reader was told where the document is and never
+    went. A window that called that a read would be inventing one."""
+    line(test_store)
+    run = drive(orch)
+
+    assert [entry["op"] for entry in _storage(run.id)] == ["write", "offer"]
+
+
+def _follows_its_pointer(monkeypatch, *, times: int) -> None:
+    """Make every fake run open the first directory it was granted."""
+    from factoria.agent import events as ev
+
+    real = FakeRun.__aiter__
+
+    async def stream(self):
+        if self.add_dirs:
+            for index in range(times):
+                yield ev.ToolStart(
+                    session_id=self.session_id,
+                    tool_use_id=f"read-{index}",
+                    name="Read",
+                    input={"file_path": f"{self.add_dirs[0]}/codebase-index.md"},
+                )
+        async for event in real(self):
+            yield event
+
+    monkeypatch.setattr(FakeRun, "__aiter__", stream)
+
+
 def test_the_label_names_the_file(
     test_store: Store, orch: Orchestrator, repo: Path
 ) -> None:

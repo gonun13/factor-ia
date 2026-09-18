@@ -2,11 +2,22 @@
    them up later reads as one system; the type colour, glyph and body differ. */
 
 .node {
-  /* 12rem, down from 15. The chassis was sized when it carried the agent's
-     words; the transcript is the node log's now, so what is left is a name, a
-     glyph and two or three plates — and a narrower node puts more of the line
-     on screen at once, which is what this canvas is for. */
-  width: 12rem;
+  /* 13.2rem: 12rem, itself down from 15, widened by a tenth. The chassis was
+     sized when it carried the agent's words; the transcript is the node log's
+     now, so what is left is a name, a glyph and two or three plates — and a
+     narrow node puts more of the line on screen at once, which is what this
+     canvas is for. The tenth back is for the plates, whose longest lines — a
+     model id, a branch and its state — were the ones being clipped.
+
+     Nothing inside is allowed past this edge: the chassis is a fixed width on
+     a canvas that scales it, so a plate that overflowed would be drawn over
+     the belts and over its neighbours. Every child that can carry text a
+     factory author chose — a name, a model id, a branch, a tool's argument —
+     either ellipsises or wraps; `overflow-wrap: anywhere` below is the backstop
+     for the ones that wrap, so a single long unbroken token (a URL, a hash)
+     breaks rather than pushing the chassis open. */
+  width: 13.2rem;
+  overflow-wrap: anywhere;
   border-radius: 12px;
   border: 1px solid var(--edge);
   background: linear-gradient(180deg, #1a222e, #141a24);
@@ -14,6 +25,18 @@
   font-size: 0.8rem;
   position: relative;
   transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+
+/* Form controls carry an intrinsic width of their own — around 20 characters
+   for an input, the longest option for a select — and it beats a percentage
+   width unless `min-width` says otherwise. One rule for all of them, so a
+   control added to a plate later cannot reopen the chassis. */
+.node input,
+.node select,
+.node textarea,
+.node button {
+  max-width: 100%;
+  min-width: 0;
 }
 
 .node::before {
@@ -51,7 +74,23 @@
 .node-head .eyebrow {
   color: currentColor;
   opacity: 0.85;
+  /* `min-width: 0` so the row's one flexible cell actually gives way: without
+     it a flex item refuses to shrink below its text, and the pip and the lap
+     chip beside it would be pushed off the chassis. */
   flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The two chips that share the head row with the name never shrink and never
+   wrap — a truncated status word is unreadable, and the name beside them is
+   what gives way instead. */
+.node-head .status-word,
+.node-head .lap {
+  flex: 0 0 auto;
+  white-space: nowrap;
 }
 
 .node-body {
@@ -59,6 +98,10 @@
   display: grid;
   gap: 0.5rem;
   color: var(--ink);
+  /* A grid track is `auto` — that is, at least as wide as its widest content —
+     unless it is told otherwise. `minmax(0, 1fr)` is what makes the body's
+     column obey the chassis rather than the plate inside it. */
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .node-title {
@@ -167,6 +210,8 @@
 
 .slot {
   text-align: left;
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr);
   border: 1px dashed color-mix(in srgb, var(--codebase) 55%, transparent);
   background: color-mix(in srgb, var(--codebase) 9%, transparent);
   border-radius: 8px;
@@ -178,7 +223,13 @@
 
 .slot-head {
   display: flex;
+  /* The label stays on one line — these are two or three uppercase words and a
+     wrapped one reads as two plates — but it clips rather than widening the
+     plate it heads. */
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
   align-items: center;
   gap: 0.35rem;
   font-size: 0.6rem;
@@ -194,7 +245,8 @@
 
 .slot select {
   width: 100%;
-  /* A model id plus "(default)" is longer than a 12rem chassis, so the ellipsis
+  /* A model id plus "(default)" is longer than the chassis even at 13.2rem, so
+     the ellipsis
      is doing real work: a select that simply clips reports "fake-model-1
      (default" and invites the reader to wonder what the missing character was.
      `min-width: 0` is what lets it shrink inside the slot's grid at all. */
@@ -220,7 +272,7 @@
 
 /* Branch and state are one fact about the attached codebase, so they are one
    line: `main · clean`. Wrapping is allowed because "3 uncommitted changes"
-   plus a filename is longer than a 12rem chassis, and a second line of the
+   plus a filename is longer than the chassis, and a second line of the
    same sentence still reads as one thing — a branch stacked above a status
    read as two. */
 .slot .branch-state {
@@ -235,17 +287,26 @@
   font-size: 0.68rem;
 }
 
+/* A branch name is the operator's, not ours, and `release/2026-09-a-long-one`
+   is an ordinary one. It gives way before the plate does — and `block` rather
+   than `flex` is what makes the ellipsis appear at all: text directly inside a
+   flex container is an anonymous flex item, which `text-overflow` does not
+   reach, so a flex branch clipped mid-character with nothing to say it had. */
 .slot .branch {
   font-size: 0.68rem;
   color: var(--ink-faint);
-  display: flex;
-  gap: 0.3rem;
-  align-items: center;
+  display: block;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .slot .warn {
   font-size: 0.68rem;
   color: var(--input);
+  min-width: 0;
 }
 
 /* The codebase's own git state, on the node that owns it. Clean is quiet;
@@ -256,6 +317,8 @@
   display: flex;
   gap: 0.3rem;
   align-items: center;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .slot .gitstate.dirty {
@@ -277,6 +340,7 @@
 
 .slot.reach input {
   width: 100%;
+  min-width: 0;
   font-size: 0.78rem;
   font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
   padding: 0.3rem 0.4rem;
@@ -321,6 +385,16 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  min-width: 0;
+}
+
+/* The words beside the square dot are the part that ellipsises; the dot is
+   fixed (`flex: 0 0 auto` below) and the row itself already hides what runs
+   past it, but a flex child needs saying so on its own account. */
+.filed-line > span:not(.filed-dot) {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* Faint and outlined, so "empty" is legible as a fact rather than as a warning
@@ -561,6 +635,7 @@
 
 .runtime {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 0.35rem;
   border-top: 1px solid var(--edge);
   padding-top: 0.45rem;
@@ -570,6 +645,7 @@
   font-size: 0.7rem;
   line-height: 1.35;
   color: var(--ink-dim);
+  min-width: 0;
 }
 
 .runtime[data-status="failed"] .runtime-detail {
@@ -596,6 +672,7 @@
 }
 
 .runtime .tool .target {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -627,11 +704,15 @@
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
+/* Wraps rather than overflows: the foot is two or three short readings, and a
+   second line of them is better than one line drawn past the chassis. */
 .runtime-foot {
   display: flex;
+  flex-wrap: wrap;
   gap: 0.6rem;
   font-size: 0.65rem;
   color: var(--ink-faint);
+  min-width: 0;
 }
 
 /* The model plate. Neutral on purpose: the codebase slot is violet because it
@@ -793,6 +874,18 @@
   color: var(--ink-faint);
 }
 
+/* A refused write is the opposite: a machine was told to change a source of
+   truth and did not, and the machine that tried has already gone red for it.
+   Coloured on the base too, because the base is where somebody looks to find
+   out what is actually in there. */
+.filed-line.is-refused {
+  color: var(--danger);
+}
+
+.filed-line.is-refused .filed-dot {
+  background: var(--danger);
+}
+
 .slot.base select {
   border-color: color-mix(in srgb, var(--knowledge) 45%, transparent);
   background: color-mix(in srgb, var(--knowledge) 8%, #10141b);
@@ -842,7 +935,7 @@
 }
 
 /* The log icon, in front of a machine's name. Quiet until the pointer is on it:
-   it sits beside an editable title on a 12rem chassis, and a control that
+   it sits beside an editable title on a narrow chassis, and a control that
    announced itself all the time would be competing with the name for the one
    row they share. Drawn only on a node the run has reached (`NodeShell`), so
    its presence is itself the statement that there is something to read. */
@@ -875,4 +968,14 @@
   display: flex;
   align-items: center;
   gap: 0.3rem;
+  min-width: 0;
+}
+
+/* The name is the row's flexible cell: the log button is fixed, so the input is
+   what shrinks. An input carries an intrinsic default width of its own (roughly
+   20 characters) which is wider than this chassis, and `min-width: 0` is what
+   overrides it. */
+.node-titlerow .node-title {
+  min-width: 0;
+  flex: 1 1 auto;
 }
