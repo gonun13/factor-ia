@@ -522,6 +522,13 @@ button:focus-visible {
   font-size: 0.65rem;
 }
 
+/* React Flow pins every panel to its corner and nothing else, so the credit and
+   the zoom controls would stack in the same bottom-left corner. The credit is
+   the one that moves: 26px of button, then a gap. */
+.react-flow__attribution.bottom.left {
+  left: 34px;
+}
+
 .react-flow__handle {
   width: 11px;
   height: 18px;
@@ -887,10 +894,9 @@ button:focus-visible {
   font-weight: 700;
 }
 
-.runbox .stage-note {
-  font-size: 0.68rem;
-  color: var(--ink-faint);
-}
+/* What a run does to your repository is a hover description now
+   (`useHoverNote`), so the panel has nothing left to style for it — the popup
+   is `.node-note-popup` like every other description on this screen. */
 
 /* The run box is the one panel that changes character while a run is live:
    the button becomes a cancel, and the border says what the run is doing. */
@@ -976,7 +982,10 @@ button:focus-visible {
   top: 0.6rem;
   right: 0.6rem;
   z-index: 6;
-  max-height: calc(100% - 1.2rem);
+  /* Half the canvas, not all of it: the chat is placed below this panel and
+     must never be pushed under the fold to stay clear of it. A long list of
+     blockers scrolls inside the panel instead of growing it. */
+  max-height: 50%;
   overflow-y: auto;
   background: color-mix(in srgb, var(--panel) 96%, transparent);
   backdrop-filter: blur(8px);
@@ -1169,22 +1178,27 @@ button:focus-visible {
    so that somebody reads what arrived before approving it, and 25rem minus a
    scrollbar is not a width anybody reads a diff in.
 
-   Top-right and clear of the timeline along the bottom. It is only on screen
-   while there is a conversation, so the width it borrows from the line is
-   borrowed for as long as the run is actually asking for something. */
+   Right edge, starting just below the run panel and clear of the timeline along
+   the bottom. It is only on screen while there is a conversation, so the width
+   it borrows from the line is borrowed for as long as the run is actually
+   asking for something. */
 
 .chatpane {
   position: absolute;
-  top: 0.6rem;
-  /* Clear of the run panel, which is 21rem of floating card at the same top
-     edge. Offsetting rather than stacking: the run panel carries Cancel, and
-     a chat covering the one control that stops a run would be the worst thing
-     on this screen to hide. */
-  right: 22.8rem;
+  /* Below the run panel, never over it: the run panel carries Cancel, and a
+     chat covering the one control that stops a run would be the worst thing on
+     this screen to hide. `--runbox-h` is that panel's measured height, set by
+     the canvas — it grows a branch line and a list of blockers, so the offset
+     is arithmetic rather than a guess. The fallback is a typical idle panel,
+     used for the frame before the first measurement lands. */
+  top: calc(1.2rem + var(--runbox-h, 8rem));
+  right: 0.6rem;
   z-index: 5;
   width: 34rem;
-  max-width: calc(100% - 24rem);
-  max-height: 70%;
+  max-width: calc(100% - 1.2rem);
+  /* Down to the timeline and no further — and never so short it cannot show an
+     exchange, since the run panel above it is capped at half the canvas. */
+  max-height: max(12rem, calc(100% - var(--runbox-h, 8rem) - 6rem));
   display: flex;
   flex-direction: column;
   gap: 0.5rem;

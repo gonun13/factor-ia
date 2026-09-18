@@ -84,6 +84,7 @@ import {
 import { ProjectSettingsPanel } from "./ProjectSettingsPanel";
 import { useRun, type RunState } from "../run";
 import { NodeLog } from "./NodeLog";
+import { useHoverNote } from "../nodes/NodeNote";
 import { RunChat } from "./RunChat";
 import { Timeline } from "./Timeline";
 import { blockers, runProblems, type Problem } from "../validation";
@@ -164,7 +165,7 @@ const PALETTE_GROUPS: {
     type: "agent",
     Glyph: AgentGlyph,
     items: [
-      { type: "agent", kind: "worker", label: "Agent", hint: "operates on a codebase", Glyph: AgentGlyph },
+      { type: "agent", kind: "worker", label: "Worker", hint: "operates on a codebase", Glyph: AgentGlyph },
       { type: "agent", kind: "reviewer", label: "Reviewer", hint: "judges the work; can send it back", Glyph: ReviewerGlyph },
     ],
   },
@@ -241,6 +242,7 @@ function CanvasInner({ projectId, onBack }: { projectId: string; onBack: () => v
   const cogRef = useRef<HTMLButtonElement>(null);
   /** The whole palette, so a pointer landing outside it can close the menu. */
   const paletteRef = useRef<HTMLDivElement>(null);
+  const wrapRef = useRef<HTMLDivElement>(null);
   const { screenToFlowPosition, fitView } = useReactFlow<FlowNode, FlowEdge>();
 
   useEffect(() => {
@@ -426,6 +428,29 @@ function CanvasInner({ projectId, onBack }: { projectId: string; onBack: () => v
       document.removeEventListener("keydown", onKeyDown);
     };
   }, [openGroup]);
+
+  /**
+   * **The run panel's height, published to CSS as `--runbox-h`.**
+   *
+   * The chat hangs below the run panel on the same right edge, and the run
+   * panel is not a fixed height — it grows a branch line, a list of artifacts,
+   * a list of blockers. A hard-coded offset would have the chat either overlap
+   * a tall panel or float away from a short one, so the panel measures itself
+   * and the chat's `top` is arithmetic off that.
+   */
+  useEffect(() => {
+    const wrap = wrapRef.current;
+    const box = wrap?.querySelector<HTMLElement>(".runbox");
+    if (!wrap || !box) return;
+    // The *border* box, not `contentRect`: the panel carries 0.85rem of padding
+    // and a border, and a chat placed off the content height alone starts that
+    // much too high — which is to say, inside the panel it is meant to clear.
+    const observer = new ResizeObserver(() => {
+      wrap.style.setProperty("--runbox-h", `${box.getBoundingClientRect().height}px`);
+    });
+    observer.observe(box);
+    return () => observer.disconnect();
+  }, [factory]);
 
   const onConnect = useCallback(
     (connection: Connection) =>
@@ -698,6 +723,7 @@ function CanvasInner({ projectId, onBack }: { projectId: string; onBack: () => v
             viewport out from under the cursor mid-drop. */}
         <div
           className="canvas-wrap"
+          ref={wrapRef}
           onDragOver={(event) => {
             event.preventDefault();
             event.dataTransfer.dropEffect = "copy";
@@ -734,6 +760,7 @@ function CanvasInner({ projectId, onBack }: { projectId: string; onBack: () => v
               fitViewOptions={{ padding: 0.35, maxZoom: 1 }}
               minZoom={0.25}
               proOptions={{ hideAttribution: false }}
+              attributionPosition="bottom-left"
             >
               <Background
                 variant={BackgroundVariant.Dots}
@@ -742,11 +769,11 @@ function CanvasInner({ projectId, onBack }: { projectId: string; onBack: () => v
                 color="var(--grid)"
               />
               <Controls showInteractive={false} />
-              {/* Beside the zoom controls, not opposite them: the bottom-right
-                  corner is the run pane's edge now, and a minimap tucked against
-                  it reads as part of the pane rather than part of the sheet. */}
+              {/* Opposite the zoom controls, in the corner a minimap belongs in:
+                  the timeline keeps the bottom centre and the run panel keeps the
+                  top edge, so the bottom-right corner is the sheet's own again. */}
               <MiniMap
-                position="bottom-left"
+                position="bottom-right"
                 pannable
                 zoomable
                 bgColor="#131922"
@@ -961,8 +988,27 @@ function RunBox({
   const runnable = stopping.length === 0;
   const notices = problems.filter((problem) => problem.severity === "notice");
 
+  // **What a run does to your repository, under the pointer like a node's.**
+  // It is the same three sentences every session and nobody re-reads them, so
+  // they answer the question the way every description on this screen answers
+  // it now: a second's dwell on the panel, a popup where you are looking.
+  const stageNote = useHoverNote(
+    <>
+      One run at a time. The agent works in its own git worktree on{" "}
+      <code>factor-ia/&lt;factory&gt;/&lt;run&gt;</code> — your working tree is
+      never touched, and the branch is what it leaves behind. A pushing output
+      sends that branch to the remote; nothing is ever forced, and your local
+      branches only move when you pull.
+    </>,
+  );
+
   return (
-    <div className="panel runbox" data-run-status={run.status ?? "idle"}>
+    <div
+      className="panel runbox"
+      data-run-status={run.status ?? "idle"}
+      {...stageNote.handlers}
+    >
+      {stageNote.popup}
       <div className="runbox-head">
         {run.live ? (
           <button className="run cancel" onClick={() => void run.cancel()} disabled={run.busy}>
@@ -1154,11 +1200,14 @@ function RunBox({
         <p className="ready">Every machine is on the line and every agent has a codebase.</p>
       )}
 
-      <p className="stage-note">
-        One run at a time. The agent works in its own git worktree on{" "}
-        <code>factor-ia/&lt;factory&gt;/&lt;run&gt;</code> — your working tree is
-        never touched, and the branch is what it leaves behind. A pushing output
-        sends that branch to the remote; nothing is ever forced, and your local
+      {/* The popup's twin for screen readers: it is `aria-hidden`, and a
+          sentence that exists only while a pointer rests on something is no
+          sentence at all to a reader who has no pointer. */}
+      <p className="offscreen">
+        One run at a time. The agent works in its own git worktree on
+        factor-ia/&lt;factory&gt;/&lt;run&gt; — your working tree is never
+        touched, and the branch is what it leaves behind. A pushing output sends
+        that branch to the remote; nothing is ever forced, and your local
         branches only move when you pull.
       </p>
     </div>

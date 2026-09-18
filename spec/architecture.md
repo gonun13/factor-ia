@@ -41,9 +41,13 @@ backend/     FastAPI app, uv-managed  (factoria.main:app)
              skills.py  the workspace's standing instructions, as files
              skills_api.py  import, list, delete
              agent/    the CLI subprocess layer — the one runtime dependency
-               adapter.py  the AgentAdapter seam · events.py  the event union
+               adapter.py  the AgentAdapter seam, and the permission-mode gate
+               events.py  the event union
                claude.py / cursor.py  real adapters · fake.py  the token-free one
-               normalize.py  stream-json -> events · proc.py  spawn/killpg
+               cursor_config.py  a Cursor spawn's own HOME: mcp.json, cli.json
+               ask_mcp.py  the MCP server a Cursor scope node asks through
+               normalize.py / cursor_normalize.py  stream-json -> events
+               proc.py  spawn/killpg
                cli.py  version, auth status, initialize · login.py  sign-in
 frontend/    Vite + React + TypeScript + React Flow v12, built at image build time
              screens/  project list · canvas   nodes/  node + belt components
@@ -92,7 +96,7 @@ no repeat.
 
 ## Storage
 
-Storage rules in full are in [`DATA.md`](DATA.md); the summary is that factory definitions land in `_factories/<project>/main.json` — indented, stable
+Storage rules in full are in [`data.md`](data.md); the summary is that factory definitions land in `_factories/<project>/main.json` — indented, stable
 key order, one file per factory, meant to be reviewed in a pull request. The
 machine-local project registry lives apart from them in `/data/projects.json`,
 on a volume, untracked. Writes go through an atomic JSON store.
@@ -129,7 +133,7 @@ The answers become a Markdown document on the success belt. A scope node needs a
 **skill** and no codebase — the inverse of an agent node — and its session may
 do nothing but read and ask, enforced server-side whatever its skill says. It is
 also the feature [`PROJECT.md`](PROJECT.md) reserved the right to move off SSE for, and did
-not: a question is an event down and an answer is a POST up. See [`BEHAVIOUR/human-nodes.md`](BEHAVIOUR/human-nodes.md).
+not: a question is an event down and an answer is a POST up. See [`behaviour/human-nodes.md`](behaviour/human-nodes.md).
 
 **A `reviewer` and a `human` node leave by one of two ports**, `success` or
 `fail` (`models.EdgeOutcome`), carried on the belt's `source_handle` — a field
@@ -215,7 +219,7 @@ The rule is therefore enforced on the client alone, as it is drawn
 (`FactoryCanvas.isValidConnection`) and afterwards for a hand-edited file
 (`validation.ts`, as notices rather than blockers). It is the one rule in
 `validation.ts` with no mirror in `runcheck.py`, and
-[`DECISIONS/0012`](DECISIONS/0012-three-entry-handles.md) says why that is
+[`decisions/0012`](decisions/0012-three-entry-handles.md) says why that is
 deliberate.
 
 ### Inputs are submitted per node
@@ -327,9 +331,18 @@ Cursor Agent CLI (`agent`). Project settings and machine Settings can choose
 either; Claude and Cursor keep separate credentials on the shared `agent-home`
 volume.
 
-**Cursor v1** drives worker and reviewer nodes only. Scope nodes refuse under
-Cursor (no permission round-trip). Knowledge MCP inject and memory `--add-dir`
-are omitted; skills still reach the agent by prepending onto the prompt.
+**Both adapters take every field of `RunConfig`**, including `scope` nodes,
+knowledge MCP and memory `--add-dir`
+([`decisions/0014-cursor-parity-without-flags.md`](decisions/0014-cursor-parity-without-flags.md)).
+Cursor has a flag for almost none of it, so its spawn is configured by **files
+and environment** instead — a per-node `HOME` carrying `.cursor/mcp.json` and
+`.cursor/cli.json`, with the credential and the shared data dir pinned back by
+`XDG_CONFIG_HOME` and `CURSOR_DATA_DIR` (`agent/cursor_config.py`). Its CLI has
+no permission round-trip at all, so a scope node's question travels as a
+blocking MCP tool call (`agent/ask_mcp.py`) and reaches the orchestrator as the
+same `permission.request` event Claude produces. The one thing that does not
+translate: a skill body is prepended onto the prompt, because there is no
+`--append-system-prompt`.
 
 Each CLI is pinned in the image. Claude's `stream-json` shape is parsed in
 `normalize.py`; Cursor's in `cursor_normalize.py`. An upgrade is a deliberate
@@ -379,8 +392,29 @@ a real push, and a real non-fast-forward refusal, against a local bare repo.
 This is the one place the implementation amends [`PROJECT.md`](PROJECT.md): *"no writes to the
 default branch"* now has an exception that the operator draws. See the amendment
 under Non-functional requirements there for why the clause is narrowed rather
-than abandoned, and [`BEHAVIOUR/git-output.md`](BEHAVIOUR/git-output.md) for what
+than abandoned, and [`behaviour/git-output.md`](behaviour/git-output.md) for what
 the node actually does.
+
+**A dangerous permission mode needs a server-side opt-in, and the gate is on the
+seam.** `RunConfig.permission_mode` is one word every provider is handed, and
+`adapter.resolve_permission_mode` is the single place it is judged: `default`,
+`acceptEdits` and `plan` pass; `bypassPermissions`, `dontAsk`, `auto` and
+`manual` are refused unless the container was started with
+`FACTOR_IA_DANGEROUS_PERMISSIONS=1`; anything else is refused by name rather
+than handed to a CLI to reject. It lives on the seam rather than in an adapter
+because a gate copied per provider is how two gates drift into one hole — each
+adapter maps the word it is given onto its own CLI (`--permission-mode`;
+`--force` or `--mode plan`) and none of them re-decides it. This is the
+[`PROJECT.md`](PROJECT.md) requirement that a `bypassPermissions`-equivalent be
+gated behind an explicit opt-in.
+
+**The container is the sandbox, and only the container.** Cursor's own
+`--sandbox` needs unprivileged user namespaces, which Docker's default
+seccomp/AppArmor profile denies — inside the image it does not degrade, it
+refuses to start the agent at all. So the spawn carries `--sandbox disabled`
+(`config.cursor_sandbox`, overridable with `FACTOR_IA_CURSOR_SANDBOX=enabled` on
+a host that can host one), which is the same boundary the Claude adapter already
+relies on, stated rather than asked for and silently not received.
 
 The port is published on loopback only — this is remote code execution as a
 service, and LAN access would need auth. The container owns its agent config in
@@ -594,7 +628,7 @@ Each choice with its rationale, and what the web check found.
 | Canvas | **React Flow (`@xyflow/react`) v12** | Operator's explicit choice, and the right one — it's what this entire product category is built on. *Check:* v12 is current, published as `@xyflow/react`, with native subflow support via `parentId` (renamed from `parentNode` in v12 — worth knowing since older tutorials use the old name). UI components were updated in August 2026 for shadcn/ui on React 19 + Tailwind 4. |
 | Backend | **Python + FastAPI** | Operator's comfort zone. Native async fits the orchestrator and child-process supervision. |
 | Agent runtime | **The `claude` CLI, spawned headless**, behind `AgentAdapter` | **Decided** — a reversal from this document's first draft, which recommended the Agent SDK (see Compliance below). The CLI is installed in the image and is the backend's single agent dependency. It speaks `--input-format stream-json --output-format stream-json`, a clean machine interface, and it is how both Overseer and `askill` drive it. Also the cheapest path to multi-provider: `askill` already launches five different CLIs through one script. |
-| Live updates | **SSE** (`StreamingResponse` + `EventSource`) | *Check:* the current recommendation for one-way server→client task/progress streams is SSE over WebSockets — plain HTTP, no extra protocol, browser-native reconnect. Run state is one-way; run *control* (start, cancel) is a normal POST. The documented SSE weakness — the server keeps working after a client disconnect — is handled by making cancellation an explicit endpoint. Note Overseer chose `/ws` instead, because its raw console and permission prompts are genuinely bidirectional; Factor-ia's input is a one-shot request submission (open question 2), so this holds — expect to follow Overseer only if human-in-the-middle nodes turn out to need a live back-channel. *Stage 10: they did not.* The `scope` node negotiates over several turns and does it on SSE down and POST up, one exchange at a time — see open question 2 and [`BEHAVIOUR/human-nodes.md`](BEHAVIOUR/human-nodes.md). This row needs no revisiting; the thing that would still argue for `/ws` is a raw console, and there is none. |
+| Live updates | **SSE** (`StreamingResponse` + `EventSource`) | *Check:* the current recommendation for one-way server→client task/progress streams is SSE over WebSockets — plain HTTP, no extra protocol, browser-native reconnect. Run state is one-way; run *control* (start, cancel) is a normal POST. The documented SSE weakness — the server keeps working after a client disconnect — is handled by making cancellation an explicit endpoint. Note Overseer chose `/ws` instead, because its raw console and permission prompts are genuinely bidirectional; Factor-ia's input is a one-shot request submission (open question 2), so this holds — expect to follow Overseer only if human-in-the-middle nodes turn out to need a live back-channel. *Stage 10: they did not.* The `scope` node negotiates over several turns and does it on SSE down and POST up, one exchange at a time — see open question 2 and [`behaviour/human-nodes.md`](behaviour/human-nodes.md). This row needs no revisiting; the thing that would still argue for `/ws` is a raw console, and there is none. |
 | Persistence | **JSON + Markdown files** | Operator's choice, and it earns it: git-diffable, reviewable, agent-readable, zero infrastructure. JSON for structure and state, Markdown for memory and summaries. No DB process in the container. |
 | Event log | **JSONL, append-only** | Natural fit for a stream; trivially tailable; gives replay later for free. |
 | Isolation | **git worktree per agent run** | See Architecture. Contains blast radius, never touches the dev's working tree. |

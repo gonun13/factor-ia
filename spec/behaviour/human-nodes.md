@@ -90,6 +90,15 @@ allowlist: `Read`, `Grep`, `Glob`, `TodoWrite`, plus the question. Everything
 else is **denied with a reason** — no file it writes is kept, no command it runs
 is permitted, and nothing outside its own empty directory is reachable.
 
+**Under Cursor the same policy is written upside down.** That CLI runs whatever
+its deny list does not name, so "reading and the question, nothing else" can
+only be spelled as *everything else*: `Shell`, `Write`, `Edit`, `Delete`,
+`WebFetch`, `WebSearch`, denied in a `.cursor/cli.json` the run writes for that
+one spawn (`agent/cursor_config.py`, `SCOPE_DENIED_RULES`). It is the same set
+inverted, and the server stays the authoritative half — a scope session has no
+codebase and no worktree, so there is nothing for a write to be part of even if
+a rule here were spelled wrong.
+
 This holds **whatever its skill says**, and that is the point of stating it
 here: the skill is picked from a dropdown by whoever drew the node, and a
 machine whose instructions are chosen that easily should not also be able to
@@ -98,8 +107,8 @@ is appended *after* the skill, for the same reason (`questions.py`).
 
 ## For whoever changes it next
 
-**The mechanism.** The agent asks through the provider's own `AskUserQuestion`
-tool. That tool is deliberately **not** pre-approved, so calling it raises a
+**The mechanism, on Claude.** The agent asks through the provider's own
+`AskUserQuestion` tool. That tool is deliberately **not** pre-approved, so calling it raises a
 permission request; the spawn carries `--permission-prompt-tool stdio`, which is
 what makes the permission engine route the request out to us instead of denying
 it where it stands. The orchestrator parks the walk on it, emits
@@ -115,7 +124,38 @@ Two details are load-bearing and neither is obvious:
   every path that allows an `AskUserQuestion` carries answers, and a form
   submitted empty is refused at the endpoint rather than passed on.
 
-**Stdin is held open.** For every other node the adapter writes one prompt frame
+**The mechanism, on Cursor, which has no permissions at all.** Under `--print`
+that CLI has no approval loop to intercept: no `--permission-prompt-tool`, no
+control channel on stdin, nothing an adapter can sit in front of
+([`../decisions/0014-cursor-parity-without-flags.md`](../decisions/0014-cursor-parity-without-flags.md)).
+So the question does not travel as a permission. It travels as an **MCP tool
+call**, which is the one thing in that CLI an outside process can make the agent
+wait on: `agent/ask_mcp.py` is a stdio server, the run holds a unix socket, and
+a call arrives as the same `permission.request` event the Claude adapter emits.
+`orchestrator._answer_permission` cannot tell the two providers apart, which is
+the test that this belongs behind the seam rather than beside it. The tool's
+input is `AskUserQuestion`'s field for field, so `questions.parse_questions`
+reads both without a branch and the operator sees one form.
+
+**That question is posted and then collected, because the client gives up after
+sixty seconds.** Measured rather than guessed: a tool call that has not returned
+in 60s comes back to the agent as `MCP error -32001: Request timed out`, and the
+agent's response is to call the tool again — which the operator sees as their
+half-written form being replaced. Somebody reading a questionnaire takes longer
+than a minute, so blocking until they answer cannot work however patient the
+server is. `ask_operator` returns inside `ask_mcp.WAIT_SECONDS` with either the
+answers or a **ticket**, and `await_answer` collects that ticket as many times
+as it takes; every call lands well inside the budget, so none of them ever
+fails. Two details are load-bearing and both are tested:
+
+- **Pending is not an `isError`.** An error is what makes a model try something
+  else, and the something else it reaches for is posting the question again.
+- **A poll does not consume the ticket, and a collected one is spent** — so one
+  reply cannot be spread over two tool calls.
+
+**Stdin is held open — on Claude, where the answer travels on it.** (On Cursor
+it travels on the socket, and stdin is closed as usual.) For every other node
+the adapter writes one prompt frame
 and closes stdin, which is what makes the CLI exit after `result`. A scope
 session needs the pipe to answer on, so the close moves to the `turn.end` frame
 — the child still exits on its own, a moment later, and `interrupt()` is still

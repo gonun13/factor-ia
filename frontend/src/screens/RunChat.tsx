@@ -21,7 +21,7 @@
  *
  * Still not a chat in the other sense: there is no free-form message box, and
  * the run is not something you talk to. Input is one-shot and answers are
- * structured (`DECISIONS/0007-one-shot-input-sse-stands.md`). What is shown
+ * structured (`decisions/0007-one-shot-input-sse-stands.md`). What is shown
  * here is exactly what was posted through `/input`, `/decision` and `/answer`.
  */
 

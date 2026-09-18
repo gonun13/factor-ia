@@ -16,6 +16,13 @@ child is blocked in a syscall. Every termination here is therefore SIGTERM,
 a grace period, then SIGKILL — which cannot be declined. Without the escalation a
 single wedged child holds a run "cancelling" forever, and nothing downstream can
 recover from that on its own.
+
+**The corollary, which cost a provider its reputation: a stream is not a life.**
+The first fact says descendants outlive the CLI; a reader that waits for EOF is
+therefore waiting on *them*, not on the child it was told to read. `reap_and_drain`
+is where that stops mattering — every adapter reaps the child it spawned and gives
+the readers a bounded moment afterwards, rather than blocking on an fd a stranger
+holds.
 """
 
 from __future__ import annotations
@@ -30,6 +37,12 @@ KILL_GRACE_S = 5.0
 
 #: Big enough that a `Write` of a large file does not overflow the pipe reader.
 READ_CHUNK = 64 * 1024
+
+#: How long the stdout/stderr readers get to finish *after* the child is reaped.
+#: Generous for its real job — draining what is already buffered in a pipe the
+#: writer has closed, which is microseconds — and short enough that a node whose
+#: streams are being held open by somebody else still hands over promptly.
+DRAIN_GRACE_S = 2.0
 
 
 async def spawn(
@@ -96,6 +109,104 @@ async def terminate_group(
     _signal_group(process, signal.SIGKILL)
     with contextlib.suppress(asyncio.TimeoutError):
         await asyncio.wait_for(process.wait(), timeout=grace_s)
+
+
+async def reap_and_drain(
+    process: asyncio.subprocess.Process,
+    readers: "asyncio.Future[object]",
+    *,
+    grace_s: float = DRAIN_GRACE_S,
+) -> tuple[int | None, bool]:
+    """Wait for the child, then drain its readers. Returns `(code, drained)`.
+
+    **The child's exit is what ends a run, and EOF on its streams is not the
+    same event.** A CLI hands its stdout and stderr to everything it spawns, so
+    any descendant that outlives it — one that broke away with `setsid` and is
+    reparented to PID 1, beyond the reach of `terminate_group` — keeps those
+    write ends open. The reader then sits in `read()` long after the process it
+    was reading is gone, and the node it belongs to cannot hand over.
+
+    That is not a hypothetical. The Cursor CLI leaves a detached `worker-server`
+    holding stderr, with an `npm exec typescript-language-server` tree under it;
+    the child exited 0.4s after its last word and the node finished 219s later,
+    when that tree finally died. Every agent node on that provider landed within
+    a second of the same total, because the total was the orphan's lifetime and
+    not the agent's work.
+
+    **`process.wait()` is no escape from this, which is the whole reason this
+    function is not two lines.** `BaseSubprocessTransport` finishes a child only
+    once the exit status *and* every pipe transport have landed, so `wait()`
+    blocks on the orphan exactly as the readers do. `Process.returncode` does
+    not: the child watcher sets it the moment the child is reaped. So the exit
+    is watched for there, and the streams are given `grace_s` afterwards to
+    drain what is still buffered — which is all a closed pipe ever needs.
+
+    When that grace runs out the read ends are **closed here** rather than left
+    to a garbage collector. Two reasons, and the second is the one that bites:
+    the server is long-lived and would otherwise leak two fds a node, and an
+    abandoned pipe transport is precisely what keeps `wait()` from ever
+    returning. Closing them lets the child be finished properly on the way out.
+
+    `drained` is False when the grace ran out, which is the caller's cue to say
+    so: the run is complete and its output is whatever arrived, but something is
+    holding an fd and an operator reading the log should know it was not the
+    agent being slow.
+
+    Cancellation is left to propagate untouched; killing the process group on
+    the way out is the caller's business, because only it knows whether an
+    interrupt was asked for or merely happened.
+    """
+    exited = asyncio.ensure_future(_exited(process))
+    drained = True
+    try:
+        await asyncio.wait({readers, exited}, return_when=asyncio.FIRST_COMPLETED)
+        if not readers.done():
+            # The child is gone and its streams are not at EOF. Everything it
+            # actually wrote is already in the pipe buffer; this is the moment
+            # to read it, and `grace_s` is far longer than that takes.
+            try:
+                await asyncio.wait_for(readers, grace_s)
+            except asyncio.TimeoutError:
+                drained = False
+    finally:
+        exited.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await exited
+
+    if not drained:
+        _close_pipes(process)
+    return await process.wait(), drained
+
+
+#: How often the exit watch looks at `returncode`. The child watcher offers no
+#: callback a caller may hook, so this is a poll; the interval is the worst-case
+#: delay it adds to a handover, against a wakeup this often for the run's life.
+EXIT_POLL_S = 0.05
+
+
+async def _exited(process: asyncio.subprocess.Process) -> None:
+    """Return once the child has been reaped, whatever its streams are doing."""
+    while process.returncode is None:
+        await asyncio.sleep(EXIT_POLL_S)
+
+
+def _close_pipes(process: asyncio.subprocess.Process) -> None:
+    """Close our read ends of the child's stdout and stderr.
+
+    `get_pipe_transport` is the documented way in; reaching it through
+    `Process._transport` is not, and there is no public accessor for the
+    subprocess transport at all. The alternative is leaking two fds per node on
+    a server that runs for weeks, so this takes the private attribute and says
+    where the line is.
+    """
+    transport = getattr(process, "_transport", None)
+    if transport is None:
+        return
+    for fd in (1, 2):
+        with contextlib.suppress(Exception):
+            pipe = transport.get_pipe_transport(fd)
+            if pipe is not None:
+                pipe.close()
 
 
 def child_env(extra: dict[str, str] | None = None) -> dict[str, str]:

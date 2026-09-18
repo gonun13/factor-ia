@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 import signal
+import subprocess
 import sys
 import time
 
@@ -126,6 +127,17 @@ def main(argv: list[str]) -> int:
                     }
                 ),
                 flush=True,
+            )
+        orphan = os.environ.get("STUB_CURSOR_ORPHAN_S")
+        if orphan:
+            # What the real CLI does: leave a detached `worker-server` (and an
+            # `npm exec typescript-language-server` tree under it) holding this
+            # process's stdout and stderr. `start_new_session` is the point —
+            # it breaks away from the group, so `terminate_group` cannot reach
+            # it and only *not waiting* on the fd gets the node handed over.
+            subprocess.Popen(
+                [sys.executable, "-c", f"import time; time.sleep({float(orphan)})"],
+                start_new_session=True,
             )
         code = int(os.environ.get("STUB_EXIT", "0"))
         return code

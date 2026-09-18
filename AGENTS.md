@@ -9,10 +9,10 @@ Authoritative product and engineering intent lives under [`spec/`](spec/).
 When specs disagree, respect them in this order (higher wins on conflict):
 
 1. [`PROJECT.md`](spec/PROJECT.md)
-2. [`DOMAIN.md`](spec/DOMAIN.md), [`ARCHITECTURE.md`](spec/ARCHITECTURE.md)
-3. [`UIUX.md`](spec/UIUX.md), [`DATA.md`](spec/DATA.md)
-4. [`BEHAVIOUR/`](spec/BEHAVIOUR/), [`DECISIONS/`](spec/DECISIONS/)
-5. [`TESTS.md`](spec/TESTS.md)
+2. [`domain.md`](spec/domain.md), [`architecture.md`](spec/architecture.md)
+3. [`ui-ux.md`](spec/ui-ux.md), [`data.md`](spec/data.md)
+4. [`behaviour/`](spec/behaviour/), [`decisions/`](spec/decisions/)
+5. [`tests.md`](spec/tests.md)
 
 **Implement and review against these docs before inventing behaviour.**
 
@@ -21,13 +21,13 @@ When specs disagree, respect them in this order (higher wins on conflict):
 | path | what it settles |
 |---|---|
 | `spec/PROJECT.md` | Goal, purpose, requirements, non-goals, the happy path, compliance. |
-| `spec/DOMAIN.md` | Entities, the kind vocabularies, and the invariants that must hold. |
-| `spec/ARCHITECTURE.md` | Structure, components, boundaries, the API, storage, the adapter seam, the stack, and the security requirements. |
-| `spec/UIUX.md` | The canvas, the run experience, settings, and the copy rules. |
-| `spec/DATA.md` | Contracts, file formats, persistence, concurrency. |
-| `spec/BEHAVIOUR/` | One file per system: `run-execution`, `review-loops`, `git-output`, `human-nodes`, `knowledge`, `memory`. |
-| `spec/DECISIONS/` | Numbered records for choices that outlive their diff. Read `DECISIONS/README.md` before adding one. |
-| `spec/TESTS.md` | How this project is verified, and what acceptance means. |
+| `spec/domain.md` | Entities, the kind vocabularies, and the invariants that must hold. |
+| `spec/architecture.md` | Structure, components, boundaries, the API, storage, the adapter seam, the stack, and the security requirements. |
+| `spec/ui-ux.md` | The canvas, the run experience, settings, and the copy rules. |
+| `spec/data.md` | Contracts, file formats, persistence, concurrency. |
+| `spec/behaviour/` | One file per system: `run-execution`, `review-loops`, `git-output`, `human-nodes`, `knowledge`, `memory`. |
+| `spec/decisions/` | Numbered records for choices that outlive their diff. Read `decisions/README.md` before adding one. |
+| `spec/tests.md` | How this project is verified, and what acceptance means. |
 
 ## Rules that apply to every change here
 
@@ -38,8 +38,8 @@ tree exists to prevent — so before stating that a control, a rule or a behavio
 holds, check that it does.
 
 **Verify before you write it down.** Every status in
-`spec/ARCHITECTURE.md`'s security table, and every mechanism claim in
-`spec/BEHAVIOUR/`, was checked against the code rather than copied from prose.
+`spec/architecture.md`'s security table, and every mechanism claim in
+`spec/behaviour/`, was checked against the code rather than copied from prose.
 Hold a change to the same standard.
 
 **Update the spec with the code, in the same change.** A behaviour change that
@@ -61,7 +61,7 @@ by design.
   requirements. **Operator-local and gitignored on purpose** (`.gitignore:27`):
   two of those defects describe a working path from a web page to code execution
   on the operator's machine, and this repository is intended to be published.
-  The *requirements* are public, in `spec/ARCHITECTURE.md`; the map is not.
+  The *requirements* are public, in `spec/architecture.md`; the map is not.
 - `README.md` — setup and operation for a person installing this. It is not a
   design document, and feature write-ups do not go in it.
 
@@ -69,7 +69,7 @@ by design.
 
 - **Tests:** `cd backend && uv sync && uv run pytest`. UI tests are Playwright
   scripts under `uitests/`, run through the `uitest` compose profile. See
-  `spec/TESTS.md` for which layer a new proof belongs in.
+  `spec/tests.md` for which layer a new proof belongs in.
 - **Nothing new should need a token to be verified.** `FACTOR_IA_ADAPTER=fake`
   runs the whole execution path without a provider call, and the suite depends
   on that staying true.

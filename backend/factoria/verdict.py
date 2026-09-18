@@ -113,6 +113,14 @@ _TILDE = re.compile(r"^[ \t]{0,3}~{3,}(?P<info>.*)$")
 #: ```python block is somebody else's, and reading it would be guessing.
 _CANDIDATE_INFO: frozenset[str] = frozenset({"", "json"})
 
+#: A fence a reviewer ran straight into its next sentence — ```` ```Full backend
+#: suite finished... ```` with no newline after the ticks. Commonmark reads that
+#: line as an *opening* fence with an info string, so the block it was meant to
+#: close never closes and swallows the rest of the reply. Deliberately looser
+#: than `_FENCE`, which requires an info string with no backticks in it: the
+#: run-on prose is ordinary prose and routinely contains `code spans`.
+_RUN_ON_FENCE = re.compile(r"^[ \t]{0,3}(?P<ticks>`{3,})(?=\S)")
+
 
 def _blocks(text: str) -> tuple[list[str], bool]:
     """Every candidate fenced block in `text`, in order, and whether any tilde
@@ -124,6 +132,15 @@ def _blocks(text: str) -> tuple[list[str], bool]:
     the text is still returned: a reply truncated mid-block is far more likely
     to be a verdict than not, and refusing to read it would report "no verdict"
     for a reviewer that wrote one.
+
+    That tolerance has one failure mode, and it is the one seen in the wild: a
+    reviewer that closed its verdict block and kept typing on the same line. The
+    close is then not a close, the block runs to the end of the reply, and a
+    real verdict is reported as "not JSON". So the unclosed tail — and only the
+    unclosed tail, where the text is already known to be malformed — is cut at
+    the first run-on fence inside it. This stays inside the fence grammar rather
+    than guessing at where the JSON ends: a run of ticks long enough to close
+    the block ends it, whatever the model wrote after them.
     """
     blocks: list[str] = []
     tildes = False
@@ -148,8 +165,23 @@ def _blocks(text: str) -> tuple[list[str], bool]:
             continue
         body.append(line)
     if ticks is not None and info in _CANDIDATE_INFO:
-        blocks.append("\n".join(body))
+        blocks.append("\n".join(_cut_at_a_run_on_fence(body, len(ticks))))
     return blocks, tildes
+
+
+def _cut_at_a_run_on_fence(body: list[str], ticks: int) -> list[str]:
+    """`body` up to the first line that closes it and then keeps talking.
+
+    Only ever called for a block that reached the end of the text unclosed, so
+    there is nothing to lose: either the cut finds the close the reviewer meant
+    and the verdict is read, or there is no such line and the body is returned
+    whole, exactly as before.
+    """
+    for index, line in enumerate(body):
+        match = _RUN_ON_FENCE.match(line)
+        if match is not None and len(match.group("ticks")) >= ticks:
+            return body[:index]
+    return body
 
 
 def _ellipsis(text: str, limit: int = 80) -> str:

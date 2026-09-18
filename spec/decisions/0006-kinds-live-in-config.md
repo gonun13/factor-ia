@@ -37,4 +37,4 @@ Type-level exhaustiveness checking on kinds, and per-type config models —
 `memory` and `knowledge` are node **types**, not kinds, because the orchestrator
 dispatches on `definition.type` and neither does an agent's, an output's or a
 human's job. They have nowhere to be a kind *of*. See
-[`../DOMAIN.md`](../DOMAIN.md).
+[`../domain.md`](../domain.md).

@@ -4,8 +4,8 @@
 
 A record belongs here when the answer to *"why is it like this?"* is a choice
 somebody made and could plausibly have made differently — a rule in
-[`../DOMAIN.md`](../DOMAIN.md) that was contested, a boundary in
-[`../ARCHITECTURE.md`](../ARCHITECTURE.md) that closed off an obvious
+[`../domain.md`](../domain.md) that was contested, a boundary in
+[`../architecture.md`](../architecture.md) that closed off an obvious
 alternative, a requirement in [`../PROJECT.md`](../PROJECT.md) that was
 superseded.
 
@@ -39,3 +39,4 @@ original keeps its number.
 | [0011](0011-a-second-provider-adapter.md) | A second provider adapter — supersedes a non-goal | supersedes part of `PROJECT.md` Non-goals |
 | [0012](0012-three-entry-handles.md) | Three entry handles, and the server never reads them | stands |
 | [0013](0013-the-node-log-is-fetched.md) | The node log is fetched, not hoarded | stands |
+| [0014](0014-cursor-parity-without-flags.md) | Cursor reaches parity through files, not flags | supersedes part of `0011` |

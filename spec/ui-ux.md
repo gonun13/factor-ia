@@ -24,8 +24,13 @@ node type's colour, and each dropping its machines over the canvas two across. A
 category is a folder, not a kind picker: every kind is still its own entry,
 chosen before a node is placed, so nobody drops a generic output and discovers
 later that it merges. Drag a
-**Request**, an **Agent** and a **Commit** out of the palette; drag
-handle-to-handle to belt them together; pick a codebase on the agent.
+**Request**, a **Worker** and a **Commit** out of the palette; drag
+handle-to-handle to belt them together; pick a codebase on the worker.
+
+The two agent machines are named for what they do: a **Worker** operates on a
+codebase, a **Reviewer** judges what it is given. Neither is called "Agent" on
+screen — that word is the category they share and the thing they both are, so
+it labels the palette folder and never a machine in it.
 
 The agent node carries both its knowledge base and its operating target,
 because those are the two things an operator needs to see without clicking
@@ -118,7 +123,9 @@ happening — each with one job:
 - **The chat** appears over the canvas when the run stops to ask something: the
   request, a gate's sign-off, a scope node's questionnaire, with the exchange so
   far above the open form. It is wide because a sign-off exists so that somebody
-  reads what arrived first.
+  reads what arrived first. It hangs on the right edge **below** the run panel,
+  never over it: the run panel carries Cancel, and covering the one control that
+  stops a run would be the worst thing on this screen to hide.
 
 Top-right is the **run panel**: the run as a whole — Run and Cancel, the branch
 it owns, what it cost, what is stopping it. It floats too, and it is as small as
@@ -126,9 +133,17 @@ its contents; nothing here takes a permanent column, so the line is drawn across
 the whole sheet. A floating panel does cover what is under it — the chat has a
 **hide** for exactly that, and it is the way to a node the question is about.
 
+**The right edge is shared, and the arithmetic is real.** The run panel grows a
+branch line and a list of blockers, so it is capped at **half the canvas** and a
+long list scrolls inside it; the chat starts below wherever it actually ends,
+off that panel's measured height rather than a guessed offset, and runs down to
+the timeline. A chat that cannot show an exchange is no use, so it has a floor.
+
 Input is still submitted **once**; this is not a conversation you type into
-freely. The zoom controls and the minimap share the canvas's bottom-left
-corner.
+freely. The zoom controls hold the canvas's bottom-left corner, with the React
+Flow credit pushed clear of them on the same line; the **minimap** takes the
+bottom-right, which is the sheet's own corner again now that the run panel keeps
+the top edge and the timeline keeps the bottom centre.
 
 ### Cancel means cancel
 
@@ -176,3 +191,10 @@ hardcoded — it costs nothing and answers even while signed out.
 - **Never a green tick over nothing.** A run whose agent changed no files fails.
 - **Name what the operator must do next.** The cleanup table, the branch to
   diff, the two commands that review it — in `summary.md`, not left implicit.
+- **A description is a hover, and a hover is never the only copy.** Standing
+  explanations nobody re-reads every session — what a node is for, what a run
+  does to your repository — are a second's dwell and a popup where you are
+  already looking, rather than permanent text that becomes furniture. Each one
+  carries an off-screen twin in the markup, because a sentence that exists only
+  while a pointer rests on something is no sentence at all to a reader who has
+  no pointer.

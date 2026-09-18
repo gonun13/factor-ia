@@ -33,6 +33,11 @@ what keeps a third adapter a new file rather than a refactor.
 
 ## What Cursor does not do, and why that is stated
 
+> **Superseded by [`0014`](0014-cursor-parity-without-flags.md).** Every
+> field of `RunConfig` now reaches both providers, scope nodes included.
+> The section is kept as written, because a record is never edited to
+> change its verdict.
+
 `cursor` drives **worker and reviewer nodes only**:
 
 - **Scope nodes refuse under Cursor** — there is no permission round-trip, and
@@ -50,5 +55,5 @@ separate credentials on the shared `agent-home` volume.
 **This decision describes the working tree, which was uncommitted when the
 record was written.** It was recorded as built on the operator's explicit
 instruction. If that branch is abandoned, this record is superseded rather than
-edited, and [`../ARCHITECTURE.md`](../ARCHITECTURE.md) goes back to naming one
+edited, and [`../architecture.md`](../architecture.md) goes back to naming one
 implementation.

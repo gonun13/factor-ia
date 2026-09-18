@@ -514,7 +514,7 @@ export function runProblems(
       problems.push({
         message:
           type === "agent"
-            ? `“${label(source)}” is a worker agent, which has one way out — its belt cannot leave by “${edge.sourceHandle}”. A machine that judges what it is given is a Reviewer: drop one from the palette in its place, or remove the belt.`
+            ? `“${label(source)}” is a Worker, which has one way out — its belt cannot leave by “${edge.sourceHandle}”. A machine that judges what it is given is a Reviewer: drop one from the palette in its place, or remove the belt.`
             : `“${label(source)}” is a ${type} node, which has one way out — its belt cannot leave by “${edge.sourceHandle}”.`,
         nodeIds: [source.id],
       });

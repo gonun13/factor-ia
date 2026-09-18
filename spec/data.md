@@ -3,7 +3,7 @@
 Contracts, models and persistence. What is written where, in what format, who
 owns it, and what survives a reset.
 
-[`DOMAIN.md`](DOMAIN.md) says what the entities *are*; this file says what they
+[`domain.md`](domain.md) says what the entities *are*; this file says what they
 look like on disk and over the wire.
 
 ---
@@ -106,7 +106,7 @@ file written by a newer Factor-ia still *loads* in an older one — an unknown
 `config["kind"]` is a key a reader that has never heard of it ignores — and is
 refused at run time, by name, rather than being unopenable. This is the entire
 reason kinds live in `config` and not in `NodeType`; see
-[`DOMAIN.md`](DOMAIN.md).
+[`domain.md`](domain.md).
 
 ### The project registry
 
@@ -202,7 +202,7 @@ latest.
   writes.
 - **Saving is explicit**, which is the other half of the same decision: with no
   revision token, a debounce would decide that race by whichever tab twitched
-  last. See [`DECISIONS/0003-explicit-save.md`](DECISIONS/0003-explicit-save.md).
+  last. See [`decisions/0003-explicit-save.md`](decisions/0003-explicit-save.md).
 - **The whole-graph `PUT` is the primary write.** Per-node and per-edge
   endpoints exist and are read-modify-write over the same document. Matching the
   API unit to the file unit keeps atomicity a property of the store.

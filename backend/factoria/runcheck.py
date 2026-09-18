@@ -339,7 +339,7 @@ def _outcome_problems(
             # dead end.
             if source.definition.type == "agent":
                 problems.append(
-                    f"“{label(source)}” is a worker agent, which has one way out — its "
+                    f"“{label(source)}” is a Worker, which has one way out — its "
                     f"belt cannot leave by {outcome!r}. A machine that judges what it is "
                     "given is a Reviewer: drop one from the palette in its place, or "
                     "remove the belt."

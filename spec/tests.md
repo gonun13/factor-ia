@@ -43,11 +43,18 @@ under test is **our parsing of a documented stream shape**, not the vendor's
 binary. Each CLI is pinned in the image; an upgrade is a deliberate change and
 never `@latest`, because the stream shape is a parsing dependency.
 
-> **The standing exception, and it is open.** The scope node's mechanism —
-> `--permission-prompt-tool stdio` surfacing `AskUserQuestion` as a permission
-> request — is verified against a stub that produces those frames, and borrowed
-> from prior art for the claim that the real CLI produces them too. **One live
-> session settles it, and it should be run before that node is relied on.**
+> **The standing exception, and half of it is now closed.** The scope node's
+> mechanism is verified against stubs that produce the frames, and borrowed from
+> prior art for the claim that a real CLI produces them too.
+>
+> - **On Cursor, a live session settled it.** The ask round-trip
+>   (`agent/ask_mcp.py`) was run end to end against the real CLI: one question
+>   posted, answered after 150 seconds, correct document — which is also how the
+>   60-second ceiling that shaped the protocol was found at all
+>   ([`decisions/0014-cursor-parity-without-flags.md`](decisions/0014-cursor-parity-without-flags.md)).
+> - **On Claude it is still open.** `--permission-prompt-tool stdio` surfacing
+>   `AskUserQuestion` as a permission request is stub-only here. **One live
+>   session settles it, and it should be run before that node is relied on.**
 
 ### A test never reaches the operator's workspace
 
@@ -93,6 +100,7 @@ surface, not over the places you thought of.**
 | a change to the walk or ports | `test_execution.py`, `test_routing.py`, `test_loops.py` |
 | a git capability | `test_gitwork.py`, **as a denial first** |
 | a provider's stream shape | `test_normalize.py` / `test_cursor_normalize.py`, against a stub |
+| the ask round-trip, or anything it touches | `test_cursor_ask.py` — the adapter's socket server and the real MCP server module driven against each other, with no CLI in the middle. **Assert on the seam's shapes** (`permission.request`, `resolve_permission`), never on anything spelled `ask_operator`: the claim under test is that the orchestrator cannot tell the providers apart |
 | a new exit for text | `test_scrub.py` — a new exit should be hard to add without noticing |
 | an API shape | `test_api.py`, `test_runs_api.py`, `test_settings_api.py` |
 
@@ -110,7 +118,7 @@ unfinished rather than called done.
    tree exists to prevent.
 3. **A refusal is asserted by its sentence**, not only by its status code.
    Failures are sentences, not codes — that is a product rule
-   ([`UIUX.md`](UIUX.md)), so it is a test rule.
+   ([`ui-ux.md`](ui-ux.md)), so it is a test rule.
 4. **A UI-visible change has a `uitests/` assertion** if it touches the palette,
    a handle, a form, or what lands in the saved file.
 5. **The walkthrough still passes** for a change that touches storage,
@@ -123,11 +131,12 @@ unfinished rather than called done.
 
 Stated so that nobody mistakes silence for coverage:
 
-- **The scope node against a real CLI** — see the standing exception above.
+- **The scope node against a real Claude CLI** — see the standing exception
+  above. The Cursor half has been run live; this one has not.
 - **Concurrency.** There is none to test: one run at a time, last-write-wins on
   two tabs, and both are stated positions rather than gaps
-  ([`DATA.md`](DATA.md)).
-- **The security requirements in [`ARCHITECTURE.md`](ARCHITECTURE.md)** — R1–R6
+  ([`data.md`](data.md)).
+- **The security requirements in [`architecture.md`](architecture.md)** — R1–R6
   are unmet, so the tests that would hold them do not exist yet. Each carries
   its acceptance criteria in the operator-local PRD, and R1's belongs beside the
   existing origin cases in `test_auth.py`, which today only vary `Origin`.

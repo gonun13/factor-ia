@@ -78,7 +78,7 @@ export const ATTACHED_TYPES = new Set<string>(["memory", "knowledge"]);
  * every decision about where a run goes next is taken off `source_handle`. So
  * these names change what a canvas draws and what a reviewer can read, and
  * change nothing about how a factory runs. See
- * `DECISIONS/0012-three-entry-handles.md`.
+ * `decisions/0012-three-entry-handles.md`.
  */
 export const ENTRY_STORE = "store";
 export const ENTRY_FORWARD = "forward";
@@ -420,7 +420,7 @@ export function hasEntryPorts(definition: NodeDefinition): boolean {
  * putting up a drop target for a wire that is refused the moment it lands. This
  * project already decided how that goes: read-only is *the absence of a drop
  * target* rather than a sentence somebody has to read — which is exactly why a
- * `principles` base renders no `write` handle (`BEHAVIOUR/knowledge.md`).
+ * `principles` base renders no `write` handle (`behaviour/knowledge.md`).
  *
  * A human node therefore draws `forward` and `loop`, in the same two slots an
  * agent puts them, so the rows still line up across a canvas.
@@ -494,7 +494,7 @@ export function closesLoop(
 /**
  * Whether a belt leaving this node by this handle is one that may close a loop.
  *
- * `DECISIONS/0009`: the one belt that may is a reviewer's `fail` belt. Mirrors
+ * `decisions/0009`: the one belt that may is a reviewer's `fail` belt. Mirrors
  * the predicate `runcheck.back_edges` skips on, and the identical one
  * `validation.ts` uses to find the loops it reports about.
  */
@@ -525,7 +525,7 @@ export function isLoopBelt(
  *
  * - `store` takes a wire, and only a wire — its source is a memory or a base.
  * - `loop` takes a belt that would genuinely come back round, which by
- *   `DECISIONS/0009` means a reviewer's `fail` belt.
+ *   `decisions/0009` means a reviewer's `fail` belt.
  * - `forward` takes everything else off the line.
  *
  * What `forward` deliberately does **not** refuse is a belt that would close a
@@ -611,8 +611,8 @@ export function nodeMaxLaps(definition: NodeDefinition): number {
 export const DEFAULT_LABELS: Record<string, string> = {
   request: "Request",
   prd: "PRD",
-  agent: "Agent",
-  worker: "Agent",
+  agent: "Worker",
+  worker: "Worker",
   reviewer: "Reviewer",
   approval: "Sign-off",
   memory: "Memory",
@@ -627,7 +627,7 @@ export const DEFAULT_LABELS: Record<string, string> = {
  *
  * Only memories are numbered, because a memory is the only node whose label is
  * load-bearing — it is the filename, and two that agree are refused before a
- * run starts. Two agents both called "Agent" are fine and common, and
+ * run starts. Two workers both called "Worker" are fine and common, and
  * numbering them would be noise on every drop.
  */
 function unusedLabel(label: string, taken: FlowNode[]): string {

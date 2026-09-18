@@ -83,7 +83,7 @@ const TYPE_NAME = {
 const KIND_NAME: Record<string, string> = {
   request: "request",
   prd: "PRD",
-  worker: "agent",
+  worker: "worker",
   reviewer: "reviewer",
   approval: "sign-off",
   scope: "scope",
@@ -240,7 +240,7 @@ export function NodeShell({
            reads them** — every routing decision is taken off `source_handle`
            (`runcheck`, `orchestrator._carries`). That is what makes this a
            change to the drawing and not to the run, and it is the property to
-           keep: see `DECISIONS/0012-three-entry-handles.md`.
+           keep: see `decisions/0012-three-entry-handles.md`.
 
            A human node draws two of the three. Only an agent may read a memory
            or a base, and this canvas says read-only by leaving out the drop

@@ -38,4 +38,4 @@ loop body to reset, so the two cannot drift.
 
 **A missing verdict ends the run rather than sending the work back.** A reviewer
 that cannot follow the format surfaces as itself, instead of as three wasted
-laps. See [`../BEHAVIOUR/review-loops.md`](../BEHAVIOUR/review-loops.md).
+laps. See [`../behaviour/review-loops.md`](../behaviour/review-loops.md).

@@ -27,6 +27,56 @@ from pydantic import BaseModel, ConfigDict, Field
 from .events import AgentEvent
 
 
+#: The mode a run uses when a node names none. Not any CLI's own default,
+#: which asks — and an unattended run that asks has nobody there
+#: (`agent/claude.py` carries the full reasoning).
+DEFAULT_PERMISSION_MODE = "acceptEdits"
+
+#: Modes a node may select without an opt-in.
+SAFE_PERMISSION_MODES: frozenset[str] = frozenset({"default", "acceptEdits", "plan"})
+
+#: Modes that need `FACTOR_IA_DANGEROUS_PERMISSIONS=1` on the container.
+DANGEROUS_PERMISSION_MODES: frozenset[str] = frozenset(
+    {"bypassPermissions", "dontAsk", "auto", "manual"}
+)
+
+
+class PermissionDenied(ValueError):
+    """A node asked for a permission mode the server does not hand out."""
+
+
+def resolve_permission_mode(requested: str | None, *, dangerous_allowed: bool) -> tuple[str, bool]:
+    """The mode this run will actually use, and whether it is a dangerous one.
+
+    **On the seam rather than in an adapter**, because it is the seam's
+    vocabulary: `RunConfig.permission_mode` is one word every provider is handed
+    and each maps to its own CLI — `claude` to `--permission-mode`, `cursor` to
+    `--force` or `--mode plan`. The *gate* must not differ between them, and a
+    copy per adapter is how two gates drift into one hole. `runcheck` and the
+    orchestrator have always called it provider-neutrally; this is where it was
+    already being used from.
+
+    Raises `PermissionDenied` for a gated mode without the opt-in, and for a
+    mode nobody has heard of — an unknown string would otherwise reach a CLI and
+    be rejected there, which is a failed run instead of a refused one.
+    """
+    mode = (requested or DEFAULT_PERMISSION_MODE).strip() or DEFAULT_PERMISSION_MODE
+    if mode in SAFE_PERMISSION_MODES:
+        return mode, False
+    if mode in DANGEROUS_PERMISSION_MODES:
+        if not dangerous_allowed:
+            raise PermissionDenied(
+                f"permission mode {mode!r} bypasses the agent's own checks and is "
+                "refused unless the container is started with "
+                "FACTOR_IA_DANGEROUS_PERMISSIONS=1."
+            )
+        return mode, True
+    raise PermissionDenied(
+        f"unknown permission mode {mode!r} — one of "
+        f"{', '.join(sorted(SAFE_PERMISSION_MODES))}."
+    )
+
+
 class RunConfig(BaseModel):
     """Per-node knobs. Every field optional, and every default the CLI's own.
 

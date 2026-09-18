@@ -1601,7 +1601,11 @@ class Orchestrator:
         its own `AskUserQuestion` tool, which reaches this server as a permission
         request because it is deliberately **not** pre-approved. Each question is
         an SSE event down and a POST up, which is the shape a gate already had.
-        Nothing here needs a socket (`docs/SCOPE.md`).
+        **No socket between here and the browser**, which is what that claim was
+        always about; the Cursor adapter does hold one between itself and its own
+        MCP child, because that CLI has no permission channel to carry a question
+        on (`agent/ask_mcp.py`, `decisions/0014`). Nothing on this side of the
+        seam can tell the two apart, which is the test that it belongs there.
 
         **Three things make this not an agent node**, and each is the reason for
         the one after it:
@@ -1634,17 +1638,6 @@ class Orchestrator:
         # at the moment it parks. `_run_node` leaves the transition to us for
         # exactly this reason.
         await self._set_node(state, node.id, "running")
-
-        # Cursor print-mode has no permission round-trip; a scope node would
-        # hang or silently deny every AskUserQuestion. Refuse rather than degrade.
-        if adapter_name_for(node, state.settings) == "cursor":
-            await self._set_node(
-                state,
-                node.id,
-                "failed",
-                "Cursor provider does not support scope nodes yet — use Claude or Fake",
-            )
-            return
 
         # Required, unlike an agent's, and failed on rather than defaulted for
         # the reason `_run_agent` gives about dropping standing instructions: a
@@ -2162,30 +2155,23 @@ class Orchestrator:
         # told which files exist goes straight to one rather than guessing
         # whether a base is worth a call (`knowledge/index.py`).
         attached_bases = self._knowledge_neighbours(state, node)
-        provider = adapter_name_for(node, state.settings)
-        # Cursor v1: no inline MCP inject and no `--add-dir`. Skills still reach
-        # the agent via append_system_prompt (prepended onto the prompt). Memory
-        # pointers stay in the prompt text; knowledge MCP tools do not.
-        if provider == "cursor":
-            mcp_servers: dict = {}
-            allowed_tools: list[str] = []
-            disallowed_tools: list[str] = []
-            knowledge_block = None
-            knowledge_journal = None
-            add_dirs: list[str] = []
-        else:
-            (
-                mcp_servers,
-                allowed_tools,
-                disallowed_tools,
-                knowledge_block,
-                knowledge_journal,
-            ) = self._knowledge_spawn(state, node, attached_bases, lap=node_run.lap)
-            assert state.workspaces is not None
-            add_dirs = [
-                str(state.workspaces.ensure_memory_dir(memory.memory_slug(other)))
-                for other in reads
-            ]
+        # **Provider-neutral since parity.** Both adapters take the same MCP
+        # server dict, the same `--add-dir` list and the same tool lists; each
+        # delivers them its own way (`agent/cursor_config.py` for the CLI with
+        # no flags for any of it). A branch here was how Cursor nodes silently
+        # lost their knowledge bases and their memories.
+        (
+            mcp_servers,
+            allowed_tools,
+            disallowed_tools,
+            knowledge_block,
+            knowledge_journal,
+        ) = self._knowledge_spawn(state, node, attached_bases, lap=node_run.lap)
+        assert state.workspaces is not None
+        add_dirs = [
+            str(state.workspaces.ensure_memory_dir(memory.memory_slug(other)))
+            for other in reads
+        ]
         appended = verdict.compose_system_prompt(
             appended,
             reviewer=reviewer,
@@ -2197,7 +2183,6 @@ class Orchestrator:
         # worktree. Created here as well as by the memory node itself: the walk
         # guarantees the writer already ran, and `--add-dir` on a missing
         # directory is a CLI error, so one `mkdir` removes the whole class.
-        # (Skipped for Cursor — see above.)
         # **The pointer goes in the prompt, because a wire is not a belt.** The
         # belts already brought this node its task and its predecessor's answer;
         # a memory adds a reference to that and changes nothing else, which is
@@ -2601,7 +2586,19 @@ class Orchestrator:
                 # installed under and not whatever is first on the child's PATH.
                 "command": sys.executable,
                 "args": ["-m", "factoria.knowledge.mcp"],
-                "env": {knowledge_mcp.GRANT_ENV: str(grant_path)},
+                # **`PYTHONPATH`, because `-m` needs the package findable and
+                # this one is not installed** — it imports because the server
+                # runs with its root as the cwd, and an MCP child inherits the
+                # *CLI's* cwd, which is a worktree or a throwaway config
+                # directory depending on the provider. Without it the server
+                # dies on `No module named 'factoria'`, and a server that never
+                # loads is indistinguishable from a model choosing not to call
+                # its tools. Found on the Cursor side (`agent/cursor_config.py`)
+                # and set here so no provider's cwd convention can decide it.
+                "env": {
+                    knowledge_mcp.GRANT_ENV: str(grant_path),
+                    "PYTHONPATH": config.package_root(),
+                },
             }
         }
         allowed = knowledge_mcp.allowed_tool_names(writable=writable_anywhere)

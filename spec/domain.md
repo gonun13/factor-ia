@@ -196,7 +196,7 @@ awkward is not a rule — `main.json` is a file people edit in a pull request.
    as a notice. Deliberately not a server rule: nothing in `runcheck` or the
    orchestrator reads `Edge.target_handle`, which is what keeps this a fact about
    the drawing rather than about the run. See
-   [`DECISIONS/0012`](DECISIONS/0012-three-entry-handles.md).
+   [`decisions/0012`](decisions/0012-three-entry-handles.md).
 6. **Whether a node has two ports is a question about the node, not its type.**
    A worker and a reviewer are both `type: "agent"` and answer it differently
    (`models.has_outcome_ports`). A human node always has two; an input has

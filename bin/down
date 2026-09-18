@@ -1,0 +1,51 @@
+#!/usr/bin/env sh
+# Stop the stack. Volumes survive by default: `agent-home` holds the provider
+# credential the container was signed in with, and `factoria-data` holds the
+# projects registry, run history and event logs — discarding either is a
+# decision, never a side effect of stopping.
+#
+#   bin/down               stop and remove the containers
+#   bin/down --volumes     also delete agent-home and factoria-data
+#
+# Any other arguments are passed through to `docker compose down`.
+set -eu
+
+REPO_ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+cd "$REPO_ROOT"
+
+VOLUMES=""
+ARGS=""
+for arg in "$@"; do
+  case "$arg" in
+    -v|--volumes)
+      VOLUMES=--volumes
+      ;;
+    *) ARGS="$ARGS $arg" ;;
+  esac
+done
+
+if [ -n "$VOLUMES" ]; then
+  echo "factor-ia: this deletes the provider credential (agent-home) and all"
+  echo "           projects, runs and logs (factoria-data)."
+  # Only when a human is there to answer; a non-interactive caller that asked
+  # for --volumes has already said what it wants.
+  if [ -t 0 ]; then
+    printf 'Type "delete" to confirm: '
+    read -r reply
+    if [ "$reply" != "delete" ]; then
+      echo "factor-ia: cancelled" >&2
+      exit 1
+    fi
+  fi
+fi
+
+# --remove-orphans: the uitest profile's container is not part of a plain `up`,
+# so a run left behind by `--profile uitest` would otherwise stay put.
+# shellcheck disable=SC2086 # deliberate word-splitting: both are option lists.
+docker compose down --remove-orphans $VOLUMES $ARGS
+
+if [ -n "$VOLUMES" ]; then
+  echo "factor-ia: down; volumes deleted — the next start signs in again"
+else
+  echo "factor-ia: down; volumes kept"
+fi

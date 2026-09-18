@@ -66,7 +66,7 @@ Deliberately out of scope, at least at first:
 - ~~**No vendor lock-in to Claude** — but also no multi-provider abstraction
   built speculatively. One adapter interface, one implementation, more later.~~
   **Superseded** by
-  [`DECISIONS/0011-a-second-provider-adapter.md`](DECISIONS/0011-a-second-provider-adapter.md):
+  [`decisions/0011-a-second-provider-adapter.md`](decisions/0011-a-second-provider-adapter.md):
   there are now two real adapters plus the fake. The word that mattered was
   *speculatively*, and it still holds — the seam was not widened in advance; a
   second implementation arrived and used the seam already there.
@@ -138,7 +138,7 @@ direction when asked to build it.
   `knowledge` — plus `factory-ref`, which is in the type union with no UI and no
   execution so that nesting is a later UI change rather than a file-format
   change. Four of the six vary by a **kind** carried in the node's freeform
-  `config` rather than by a type of its own: see [`DOMAIN.md`](DOMAIN.md).
+  `config` rather than by a type of its own: see [`domain.md`](domain.md).
 - **A factory starts with an input and ends with an output**, and needs at least
   one of each. Stated as two rules about the ends of the line — every node with
   no incoming belt is an input, every node with no outgoing belt is an output —
@@ -152,23 +152,23 @@ direction when asked to build it.
   `store`, `forward` and `loop` — storage, the line, and a loop coming back round
   — on the belt's `target_handle`. Purely so a path can be read at a glance:
   nothing on the server consults it, and the rule is the canvas's alone. See
-  [`DECISIONS/0012`](DECISIONS/0012-three-entry-handles.md).
+  [`decisions/0012`](decisions/0012-three-entry-handles.md).
 - **Loops**, bounded. A reviewer's `fail` belt is the only belt allowed to close
   a cycle, and the iteration cap lives on the reviewer. See
-  [`BEHAVIOUR/review-loops.md`](BEHAVIOUR/review-loops.md).
+  [`behaviour/review-loops.md`](behaviour/review-loops.md).
 - **Human-in-the-middle**, in two kinds: `approval` (a gate, one question written
   into the graph) and `scope` (a negotiation — an agent interviews the operator
   over several turns and the answers become a document on the belt). See
-  [`BEHAVIOUR/human-nodes.md`](BEHAVIOUR/human-nodes.md).
+  [`behaviour/human-nodes.md`](behaviour/human-nodes.md).
 - **Storage nodes on wires, not belts.** `memory` is per-run scratch that empties
   with the run; `knowledge` is durable, cross-project reference reached over MCP.
   Direction is the permission — an arrow into storage is a write, an arrow out is
-  a read. See [`BEHAVIOUR/memory.md`](BEHAVIOUR/memory.md) and
-  [`BEHAVIOUR/knowledge.md`](BEHAVIOUR/knowledge.md).
+  a read. See [`behaviour/memory.md`](behaviour/memory.md) and
+  [`behaviour/knowledge.md`](behaviour/knowledge.md).
 - **Skills** — standing instructions as files under `/workspace/_skills`, owned by
   the workspace rather than by any project, appended to an agent's prompt.
-- **Two real provider adapters** plus a token-free fake. `claude` is the default;
-  `cursor` drives worker and reviewer nodes only. The fake's scripted edits are
+- **Two real provider adapters** plus a token-free fake, at parity across every
+  node kind. `claude` is the default. The fake's scripted edits are
   real file writes, which is how the suite proves the execution path without
   spending anything.
 - **Provider and model chosen on a ladder** — node, then project, then whatever
@@ -179,11 +179,11 @@ direction when asked to build it.
 - **Output: a commit on the run's own branch**, in the operator's own repository,
   with two further reaches the operator draws rather than configures —
   `commit-push` and `commit-merge`. See
-  [`BEHAVIOUR/git-output.md`](BEHAVIOUR/git-output.md).
+  [`behaviour/git-output.md`](behaviour/git-output.md).
 - **Sign-in and a git key from the UI**, both headless, both kept in a
   container-owned volume the host never mounts.
 - **Everything persisted as JSON and Markdown files.** No database process. See
-  [`DATA.md`](DATA.md).
+  [`data.md`](data.md).
 
 ### Committed, not built
 
@@ -198,7 +198,7 @@ notes under them record how the thing was actually settled.
 - ~~**Human-in-the-middle nodes**~~ — *done (stage 8, extended in stage 10).* A
   `human` node stops the line and routes on approve/reject. Its second kind,
   `scope`, negotiates: an agent interviews the operator over several turns and
-  the answers become a document on the success belt ([`BEHAVIOUR/human-nodes.md`](BEHAVIOUR/human-nodes.md)). Editing
+  the answers become a document on the success belt ([`behaviour/human-nodes.md`](behaviour/human-nodes.md)). Editing
   what is on the belt, and redirecting the run to a node of your choosing, are
   still later — a scope node adds to the brief rather than rewriting it.
 - ~~**Loops**~~ — *done (stage 9).* An `agent` node now has a **kind**: a
@@ -215,14 +215,14 @@ notes under them record how the thing was actually settled.
 - **Parallel fan-out** across agent nodes.
 - **Resume / replay** from a failed node.
 - **Long-term memory** surfaces as first-class Markdown the user can edit — the
-  slot knowledge nodes are designed into ([`BEHAVIOUR/knowledge.md`](BEHAVIOUR/knowledge.md)).
-- ~~**Additional provider adapters**~~ — *partly done.* `cursor` is built and
-  drives worker and reviewer nodes; `codex` and friends, following `askill`'s
-  list, are not. This is the item that superseded the "one implementation"
-  non-goal above — see
-  [`DECISIONS/0011-a-second-provider-adapter.md`](DECISIONS/0011-a-second-provider-adapter.md).
+  slot knowledge nodes are designed into ([`behaviour/knowledge.md`](behaviour/knowledge.md)).
+- ~~**Additional provider adapters**~~ — *partly done.* `cursor` is built and at
+  parity with `claude`; `codex` and friends, following `askill`'s list, are not.
+  This is the item that superseded the "one implementation" non-goal above — see
+  [`decisions/0011-a-second-provider-adapter.md`](decisions/0011-a-second-provider-adapter.md)
+  and [`decisions/0014-cursor-parity-without-flags.md`](decisions/0014-cursor-parity-without-flags.md).
 - **Agent config management** — skills, MCP servers, settings. The first concrete
-  MCP case is the knowledge server ([`BEHAVIOUR/knowledge.md`](BEHAVIOUR/knowledge.md)), which this server
+  MCP case is the knowledge server ([`behaviour/knowledge.md`](behaviour/knowledge.md)), which this server
   spawns and configures per run rather than leaving in agent config.
   `agent-home` is a named volume that is never bound, so anything in it is
   unreachable from the host; reaching it needs either Overseer's staging channel
@@ -238,10 +238,10 @@ This file states **what Factor-ia is for**. Three things that used to live here
 have moved, because they are read by different people and change at different
 rates:
 
-- **Entities, kind vocabularies and invariants** — [`DOMAIN.md`](DOMAIN.md).
+- **Entities, kind vocabularies and invariants** — [`domain.md`](domain.md).
 - **Structure, components, boundaries, the API, the adapter seam, the stack and
-  the security requirements** — [`ARCHITECTURE.md`](ARCHITECTURE.md).
-- **File formats, persistence and on-disk contracts** — [`DATA.md`](DATA.md).
+  the security requirements** — [`architecture.md`](architecture.md).
+- **File formats, persistence and on-disk contracts** — [`data.md`](data.md).
 
 Nothing was dropped in the move; if this file and one of those disagree about a
 mechanism, the mechanism file is right and this one is stale.
@@ -432,7 +432,7 @@ argument. Deliberately left open.
    serve and this still does not have. **SSE stands, and the question is now
    closed rather than deferred.** What had to change was a layer below the
    transport: the adapter used to end every conversation by closing stdin. See
-   [`BEHAVIOUR/human-nodes.md`](BEHAVIOUR/human-nodes.md).
+   [`behaviour/human-nodes.md`](behaviour/human-nodes.md).
 
 3. **Does the codebase attachment belong on the node, or on the factory?**
    Per-node is more flexible and matches "the agent can't run without one".

@@ -47,4 +47,4 @@ other way outright.
 One layer below the transport: the adapter used to end every conversation by
 closing stdin. A scope session needs the pipe to answer on, so the close moved
 to the `turn.end` frame. See
-[`../BEHAVIOUR/human-nodes.md`](../BEHAVIOUR/human-nodes.md).
+[`../behaviour/human-nodes.md`](../behaviour/human-nodes.md).

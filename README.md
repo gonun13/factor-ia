@@ -148,13 +148,13 @@ This project is spec-driven: what it must do lives under [`spec/`](spec/), and
 [`AGENTS.md`](AGENTS.md) states the order those docs win in when they disagree.
 
 - [`spec/PROJECT.md`](spec/PROJECT.md) — the goal, the scope, the non-goals.
-- [`spec/DOMAIN.md`](spec/DOMAIN.md) — entities, kinds, and the invariants.
-- [`spec/ARCHITECTURE.md`](spec/ARCHITECTURE.md) — how it is put together: the
+- [`spec/domain.md`](spec/domain.md) — entities, kinds, and the invariants.
+- [`spec/architecture.md`](spec/architecture.md) — how it is put together: the
   layout, the API, storage, execution, the adapter seam, security boundaries.
-- [`spec/UIUX.md`](spec/UIUX.md) — the canvas, the run experience, settings.
-- [`spec/DATA.md`](spec/DATA.md) — file formats, persistence, what survives.
-- [`spec/BEHAVIOUR/`](spec/BEHAVIOUR/) — one file per system: run execution,
+- [`spec/ui-ux.md`](spec/ui-ux.md) — the canvas, the run experience, settings.
+- [`spec/data.md`](spec/data.md) — file formats, persistence, what survives.
+- [`spec/behaviour/`](spec/behaviour/) — one file per system: run execution,
   review loops, git output, human nodes, knowledge, memory.
-- [`spec/DECISIONS/`](spec/DECISIONS/) — why the contested choices went the way
+- [`spec/decisions/`](spec/decisions/) — why the contested choices went the way
   they did.
-- [`spec/TESTS.md`](spec/TESTS.md) — how it is verified, and what done means.
+- [`spec/tests.md`](spec/tests.md) — how it is verified, and what done means.

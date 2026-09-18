@@ -156,7 +156,7 @@ alive — is what a *session host* wants, because its session must take the next
 message. A factory node is one-shot, so there is nothing to preserve, and a
 control request the CLI may be too busy to read is a cancel button that
 sometimes does nothing. See
-[`../DECISIONS/0005-interrupt-kills-the-process-group.md`](../DECISIONS/0005-interrupt-kills-the-process-group.md).
+[`../decisions/0005-interrupt-kills-the-process-group.md`](../decisions/0005-interrupt-kills-the-process-group.md).
 
 **Stdin is closed after the prompt**, which is what lets the CLI exit on its own
 instead of sitting at a prompt until something kills it. A scope session is the

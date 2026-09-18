@@ -51,8 +51,14 @@ def test_adapter_name_ladder_resolves_cursor(monkeypatch) -> None:
     assert adapter_name_for(pinned, ProjectSettings(default_provider="cursor")) == "fake"
 
 
-def test_scope_node_name_resolves_but_adapter_is_cursor(monkeypatch) -> None:
-    """Scope refusal is at run time; selection still resolves to Cursor."""
+def test_a_scope_node_resolves_to_cursor_and_runs_there(monkeypatch) -> None:
+    """A scope node is an ordinary Cursor node since parity (`decisions/0014`).
+
+    It used to resolve here and then refuse at run time, because the CLI has no
+    permission round-trip. It still has none — the question goes over a blocking
+    MCP tool instead (`agent/ask_mcp.py`), and `test_cursor_ask.py` drives both
+    ends of that against each other.
+    """
     monkeypatch.delenv("FACTOR_IA_ADAPTER", raising=False)
     node = Node(
         id="s",

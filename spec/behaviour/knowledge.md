@@ -242,7 +242,7 @@ handle that has gone. An invisible wire is worse than a refused one.
 The machine's end of the wire is named too, and by the same trap. An agent draws
 three entries — `store`, `forward`, `loop` — and a read wire arrives at `store`,
 so a base's `read` handle and the reader's `store` entry are the two ends of one
-line ([`../DECISIONS/0012`](../DECISIONS/0012-three-entry-handles.md)).
+line ([`../decisions/0012`](../decisions/0012-three-entry-handles.md)).
 
 The entry is what makes "only an agent may read a base" a shape rather than a
 sentence: **a human node draws no `store`**, so a read wire onto one cannot be

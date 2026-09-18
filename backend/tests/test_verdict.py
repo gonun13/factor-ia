@@ -56,6 +56,50 @@ def test_a_block_left_unclosed_is_still_read():
     assert found.verdict == "pass"
 
 
+def test_a_close_the_reviewer_ran_into_its_next_sentence_is_still_a_close():
+    """Seen in the wild, and it cost a whole green run.
+
+    The reviewer wrote its verdict, closed the fence, and kept typing on the
+    same line with no newline. Commonmark reads that as an opening fence with
+    an info string, so the block never closed, swallowed the rest of the reply,
+    and a `"pass"` was reported as "not JSON".
+    """
+    text = (
+        "## Not checked\n\n- nothing\n\n"
+        '```json\n{"verdict": "pass", "reason": "targeted tests green"}\n'
+        "```Full backend suite finished with exit code 1: **673 passed**, "
+        "**1 failed** — `tests/test_knowledge_api.py::test_a_bad_id` was "
+        "already flagged as pre-existing."
+    )
+    found = verdict.parse_verdict(text)
+    assert found.verdict == "pass"
+    assert found.reason == "targeted tests green"
+
+
+def test_a_run_on_close_is_read_even_with_prose_on_further_lines():
+    text = (
+        '```json\n{"verdict": "fail", "reason": "no bounds check"}\n'
+        "```One more thing.\n\nAnd a paragraph after that.\n"
+    )
+    found = verdict.parse_verdict(text)
+    assert found.verdict == "fail"
+    assert found.reason == "no bounds check"
+
+
+def test_a_shorter_run_on_fence_does_not_cut_a_longer_block():
+    """The close must still be at least as long as the open, run-on or not."""
+    text = '````json\n{"verdict": "pass", "reason": "ok"}\n```not a close\n````'
+    with pytest.raises(verdict.VerdictError) as raised:
+        verdict.parse_verdict(text)
+    assert "is not JSON" in str(raised.value)
+
+
+def test_a_truncated_block_with_no_run_on_fence_is_read_as_before():
+    """The cut only applies where there is something to cut at."""
+    found = verdict.parse_verdict('```json\n{"verdict": "pass", "reason": "ok"}')
+    assert found.verdict == "pass"
+
+
 def test_a_reason_longer_than_the_cap_is_truncated_not_refused():
     long = "x" * (verdict.REASON_MAX + 500)
     found = verdict.parse_verdict(block('{"verdict": "fail", "reason": "%s"}' % long))

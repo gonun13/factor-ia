@@ -1,0 +1,66 @@
+#!/usr/bin/env sh
+# Build the image and bring the stack up, detached, then wait until the app is
+# actually answering — not merely started. Idempotent: `bin/bootstrap` runs
+# first every time (it is itself idempotent), so a fresh clone and a
+# post-`git pull` tree take the same one command.
+#
+#   bin/up                 build + start + wait for health
+#   bin/up --no-build      skip the rebuild when only .env or a bind changed
+#
+# Any other arguments are passed through to `docker compose up`.
+set -eu
+
+REPO_ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+cd "$REPO_ROOT"
+
+BUILD=--build
+ARGS=""
+for arg in "$@"; do
+  case "$arg" in
+    --no-build) BUILD="" ;;
+    *) ARGS="$ARGS $arg" ;;
+  esac
+done
+
+# The workspace sibling and the uid/gid in .env are prerequisites of the compose
+# file, not of the image — so they are settled on the host before compose reads
+# them, never inside the build.
+"$REPO_ROOT/bin/bootstrap"
+
+echo
+# shellcheck disable=SC2086 # deliberate word-splitting: both are option lists.
+docker compose up $BUILD -d $ARGS
+
+# `up -d` returns once the container is running, which is earlier than the app
+# being able to serve a request. The compose healthcheck already knows the
+# difference; this just waits for its verdict so a caller (a human or a script
+# chaining bin/walkthrough) can rely on the next request succeeding.
+printf '\nfactor-ia: waiting for health'
+i=0
+while [ "$i" -lt 60 ]; do
+  state=$(docker compose ps --format '{{.Health}}' factoria 2>/dev/null | head -n 1)
+  case "$state" in
+    healthy)
+      printf '\nfactor-ia: up at http://127.0.0.1:8000\n'
+      exit 0
+      ;;
+    unhealthy)
+      printf '\nfactor-ia: container reports unhealthy\n' >&2
+      echo "  docker compose logs factoria" >&2
+      exit 1
+      ;;
+  esac
+  # A container that exited has no health to report and never will.
+  if [ -z "$(docker compose ps -q factoria)" ]; then
+    printf '\nfactor-ia: the container is not running\n' >&2
+    echo "  docker compose logs factoria" >&2
+    exit 1
+  fi
+  printf '.'
+  sleep 2
+  i=$((i + 1))
+done
+
+printf '\nfactor-ia: still not healthy after 2 minutes\n' >&2
+echo "  docker compose logs factoria" >&2
+exit 1

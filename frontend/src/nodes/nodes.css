@@ -503,13 +503,6 @@
   box-shadow: var(--shadow);
 }
 
-/* Both corners at the bottom-left would sit on top of each other — React Flow
-   pins every panel to its corner and nothing else. So the minimap is pushed
-   clear of the controls column: 26px of button, then a gap. */
-.react-flow__minimap.react-flow__panel.bottom.left {
-  left: 34px;
-}
-
 .react-flow__minimap-svg {
   border-radius: 8px;
 }

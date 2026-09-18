@@ -90,23 +90,21 @@ from .. import config, paths
 from ..scrub import scrub_text
 from . import events as ev
 from . import proc
+from . import adapter as adapter_mod
 from .adapter import RunConfig
 from .events import AgentEvent
 from .normalize import StreamNormalizer
 
-#: The mode used when a node names none. Not the CLI's own default, which asks
-#: — see the module docstring for why an unattended run cannot.
-DEFAULT_PERMISSION_MODE = "acceptEdits"
-
-#: Modes a node may select without an opt-in. `default` is the CLI's own
-#: (everything asks, and every ask is denied): legible, useless, and allowed
-#: because "run it the way the CLI would" is a reasonable thing to want.
-SAFE_PERMISSION_MODES: frozenset[str] = frozenset({"default", "acceptEdits", "plan"})
-
-#: Modes that need `FACTOR_IA_DANGEROUS_PERMISSIONS=1` on the container.
-DANGEROUS_PERMISSION_MODES: frozenset[str] = frozenset(
-    {"bypassPermissions", "dontAsk", "auto", "manual"}
-)
+# The permission-mode vocabulary lives on the seam (`agent/adapter.py`), not
+# here: it is one word every provider is handed, and a gate copied per adapter
+# is how two gates drift into one hole. Re-exported under the names this module
+# has always published them under, because `runcheck` and the orchestrator both
+# import them from here.
+DEFAULT_PERMISSION_MODE = adapter_mod.DEFAULT_PERMISSION_MODE
+SAFE_PERMISSION_MODES = adapter_mod.SAFE_PERMISSION_MODES
+DANGEROUS_PERMISSION_MODES = adapter_mod.DANGEROUS_PERMISSION_MODES
+PermissionDenied = adapter_mod.PermissionDenied
+resolve_permission_mode = adapter_mod.resolve_permission_mode
 
 #: Denied on every spawn, server-side, regardless of node config. Prefix rules
 #: in the CLI's own syntax.
@@ -121,34 +119,6 @@ DENIED_TOOLS: tuple[str, ...] = (
     "Bash(git worktree:*)",
     "Bash(sudo:*)",
 )
-
-
-class PermissionDenied(ValueError):
-    """A node asked for a permission mode the server does not hand out."""
-
-
-def resolve_permission_mode(requested: str | None, *, dangerous_allowed: bool) -> tuple[str, bool]:
-    """The mode this run will actually use, and whether it is a dangerous one.
-
-    Raises `PermissionDenied` for a gated mode without the opt-in, and for a
-    mode nobody has heard of — an unknown string would otherwise reach the CLI
-    and be rejected there, which is a failed run instead of a refused one.
-    """
-    mode = (requested or DEFAULT_PERMISSION_MODE).strip() or DEFAULT_PERMISSION_MODE
-    if mode in SAFE_PERMISSION_MODES:
-        return mode, False
-    if mode in DANGEROUS_PERMISSION_MODES:
-        if not dangerous_allowed:
-            raise PermissionDenied(
-                f"permission mode {mode!r} bypasses the agent's own checks and is "
-                "refused unless the container is started with "
-                "FACTOR_IA_DANGEROUS_PERMISSIONS=1."
-            )
-        return mode, True
-    raise PermissionDenied(
-        f"unknown permission mode {mode!r} — one of "
-        f"{', '.join(sorted(SAFE_PERMISSION_MODES))}."
-    )
 
 
 #: Stderr kept for the exit event's `detail`. Enough for a stack trace's
@@ -412,8 +382,15 @@ class ClaudeRun:
         await self._write_prompt(process)
         readers = asyncio.gather(self._read_stdout(process), self._read_stderr(process))
         try:
-            await readers
-            code = await process.wait()
+            # **Reaped, then drained** — `proc.reap_and_drain` for the reason it
+            # gives. This CLI has not been caught leaving a descendant on its
+            # stderr the way Cursor's does, and that is not a reason to wait on
+            # one differently: it spawns `git`, `rg` and whatever a tool asks
+            # for, any of which may fork something that outlives it, and the
+            # failure mode is a node that never hands over. The two adapters
+            # answer the seam with the same shape, so the seam gets the same
+            # guarantee from both.
+            code, _drained = await proc.reap_and_drain(process, readers)
         except asyncio.CancelledError:
             await proc.terminate_group(process)
             raise

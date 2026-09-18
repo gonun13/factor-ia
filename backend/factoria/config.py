@@ -27,6 +27,23 @@ STATIC_DIR = _path("FACTOR_IA_STATIC", "/app/static")
 AGENT_HOME = _path("HOME", "/home/factoria")
 
 
+def package_root() -> str:
+    """The directory `factoria` is importable from.
+
+    **Load-bearing for every MCP server this app spawns.** The package is not
+    installed into the venv; it imports because the server process runs with its
+    root as the cwd. A server the provider CLI spawns inherits *that CLI's* cwd
+    — a worktree, or a throwaway config directory — so `python -m
+    factoria.<server>` from there fails with `No module named 'factoria'`, and a
+    server that never loads is indistinguishable from a model choosing not to
+    call its tools. Every server entry therefore carries this on `PYTHONPATH`.
+
+    Derived from this module's own location rather than from `os.getcwd()`, so
+    it stays right whoever started the process and from where.
+    """
+    return str(Path(__file__).resolve().parent.parent)
+
+
 def claude_bin() -> str:
     """The `claude` executable.
 
@@ -45,6 +62,47 @@ def cursor_bin() -> str:
     it.
     """
     return os.environ.get("FACTOR_IA_CURSOR_BIN") or "agent"
+
+
+def cursor_sandbox() -> str:
+    """`--sandbox` mode for the Cursor Agent CLI: `disabled` unless overridden.
+
+    Cursor's own sandbox needs unprivileged user namespaces, which the default
+    Docker seccomp/AppArmor profile denies — inside the image it does not fail
+    soft, it refuses to start the agent at all ("Sandbox mode is enabled but
+    not available on this system"). The container *is* the boundary here, the
+    same one the Claude adapter relies on, so the honest default is to say so
+    rather than ask for a second one that cannot be built. Set
+    `FACTOR_IA_CURSOR_SANDBOX=enabled` on a host that can host it.
+    """
+    value = (os.environ.get("FACTOR_IA_CURSOR_SANDBOX") or "").strip().lower()
+    return value if value in ("enabled", "disabled") else "disabled"
+
+
+def cursor_config_home() -> str:
+    """`XDG_CONFIG_HOME` for a Cursor spawn — where the credential is read from.
+
+    The CLI resolves three directories *independently*, which is what makes a
+    per-node MCP config possible at all (`cursor_config.py`):
+
+    - the **credential** from `$XDG_CONFIG_HOME/cursor/auth.json`, defaulting to
+      `~/.config` — this function;
+    - the **data** dir (`cli-config.json`, chats, projects) from
+      `$CURSOR_DATA_DIR`, defaulting to `~/.cursor` — `cursor_data_dir`;
+    - **`mcp.json`** from `homedir()/.cursor`, honouring neither variable.
+
+    So a spawn that wants its own `mcp.json` has to move `HOME`, and moving
+    `HOME` is what would take the credential with it — hence these two, which
+    pin the shared halves back to the agent-home volume. Verified against
+    `agent 2026.09.15-d2fe57e`; a CLI that changed any of the three would fail
+    loudly at the spawn (`Authentication required`) rather than quietly.
+    """
+    return os.environ.get("XDG_CONFIG_HOME") or str(AGENT_HOME / ".config")
+
+
+def cursor_data_dir() -> str:
+    """`CURSOR_DATA_DIR` for a Cursor spawn. See `cursor_config_home`."""
+    return os.environ.get("CURSOR_DATA_DIR") or str(AGENT_HOME / ".cursor")
 
 
 def _flag(env: str) -> bool:

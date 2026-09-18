@@ -46,7 +46,7 @@ A reviewer must end its reply with a fenced JSON block:
 ```
 ````
 
-Four rules, each of which exists because of a way models actually behave:
+Five rules, each of which exists because of a way models actually behave:
 
 - **The last candidate block wins.** Models restate — they quote the shape they
   were asked for, work through the evidence, and then write the real answer. So
@@ -57,6 +57,13 @@ Four rules, each of which exists because of a way models actually behave:
 - **A tilde fence is named, not read.** A reviewer that fenced its verdict with
   `~~~` is told exactly that, rather than told it produced nothing — the two
   have completely different fixes.
+- **A close the reviewer ran into its next sentence still closes.** A reviewer
+  that writes ` ``` ` and keeps typing on the same line has, by Commonmark,
+  opened a block rather than closed one — so the verdict block runs to the end
+  of the reply and a real verdict reads as "not JSON". A block that reaches the
+  end of the text unclosed is therefore cut at the first run of ticks inside it
+  long enough to have closed it. Only there: a block that closed properly is
+  read exactly as written.
 - **`reason` is capped** at 4000 characters and ellipsised, because it is
   carried into the next lap's prompt.
 
@@ -98,9 +105,9 @@ possibility of disagreement.
   shape of the graph, and writes the answer onto `Edge.target_handle` so a return
   conveyor can be told from a forward belt without tracing it. Nothing on the
   server reads that field, and
-  [`../DECISIONS/0012`](../DECISIONS/0012-three-entry-handles.md) says why it
+  [`../decisions/0012`](../decisions/0012-three-entry-handles.md) says why it
   must stay that way — a second answer to "is this a loop" is exactly what
-  [`0009`](../DECISIONS/0009-only-a-reviewers-fail-belt-closes-a-loop.md) exists
+  [`0009`](../decisions/0009-only-a-reviewers-fail-belt-closes-a-loop.md) exists
   to prevent.
 - **The back edge stays `taken` across the reset.** That is how the reviewer's
   reason reaches the next lap: `_incoming_text` then hands the worker both the
