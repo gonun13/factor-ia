@@ -30,6 +30,8 @@ from factoria import worktree
 from factoria.agent.adapter import RunConfig
 from factoria.agent.claude import DENIED_TOOLS, build_argv
 from factoria.agent.fake import FakeAdapter
+from factoria import skills
+from factoria.knowledge import filing as knowledge_filing
 from factoria.knowledge import mcp as knowledge_mcp
 from factoria.models import Codebase, Edge, Factory, Node, NodeDefinition
 from factoria import runcheck
@@ -565,7 +567,7 @@ def test_a_successful_write_leaves_the_node_green(
     line(test_store, writes("n-do", "n-base"),
          extra_nodes=[base("n-base", "acme-api")])
     run = drive(orch)
-    assert statuses(run)["n-do"] == "succeeded"
+    assert statuses(run)["n-do"] == "succeeded", run.node_run("n-do").detail
 
 
 def test_an_unreadable_journal_is_no_failures(
@@ -621,15 +623,28 @@ def test_a_reviewer_may_write_to_a_base_from_its_success_port(
 # ---- the base's own log ----------------------------------------------------
 
 
-def _journalled(monkeypatch, entries: list[dict]) -> None:
+def _journalled(monkeypatch, entries: list[dict], filing: list[dict] = ()) -> None:
     """Stand in for the MCP server, which runs in a child the fake never spawns.
 
     Patched at `_knowledge_entries` rather than by writing a file, because that
-    is the one place both readers of the journal go through — so a test that
+    is the one place every reader of the journal goes through — so a test that
     fixes the entries fixes exactly what production would have parsed, and the
     artifacts and the failures cannot be given different stories.
+
+    **Only the working spawn's journal.** A knowledge node's filing pass has a
+    journal of its own (`_filing_spawn`), and in production the two are
+    separate files; a stub that answered for both would hand the filing pass a
+    write it never made and report every row twice. `filing` covers that one,
+    and defaults to empty — which is the pass that writes nothing, and so the
+    verbatim fallback these tests were written against.
     """
-    monkeypatch.setattr(Orchestrator, "_knowledge_entries", lambda self, journal: entries)
+
+    def entries_for(self, journal) -> list[dict]:
+        if journal is not None and ".filing" in str(journal):
+            return list(filing)
+        return entries
+
+    monkeypatch.setattr(Orchestrator, "_knowledge_entries", entries_for)
 
 
 def _storage(run_id: str, node_id: str) -> list[dict]:
@@ -780,3 +795,194 @@ def test_the_run_takes_its_grants_and_leaves_the_bases_alone(
     run = drive(orch)
     assert not worktree.knowledge_dir(run.id, workspace).exists()
     assert (workspace / "_knowledge" / "acme-api" / "timeline.md").exists()
+
+
+# ---- the filing pass -------------------------------------------------------
+#
+# A knowledge node files through a skill chosen by its scope
+# (`skills.SYSTEM_SKILLS`), so a base becomes a datastore rather than a
+# transcript. Decision 0015's lesson survives as a *mechanism*: a pass that
+# writes nothing does not leave an empty base, it falls back to the verbatim
+# append that used to be the whole thing.
+
+
+def _filing(node_id: str, base_id: str, script: str) -> Node:
+    """A knowledge node whose filing pass runs a chosen fake script.
+
+    The pass is the *shelf's* work, so it takes the shelf's config — which is
+    what lets a test pick its script without touching the machine that
+    produced the answer.
+    """
+    shelf = base(node_id, base_id)
+    shelf.definition.config["fake_script"] = script
+    return shelf
+
+
+def test_the_filing_pass_writes_through_the_base_own_skill(
+    library: Path, test_store: Store, orch: Orchestrator, repo: Path
+) -> None:
+    """The happy path, end to end and with no journal stub: the pass holds a
+    writable grant, calls the write tool, and the bytes land in the base."""
+    line(
+        test_store,
+        writes("n-do", "n-base"),
+        extra_nodes=[_filing("n-base", "acme-api", "knowledge-file")],
+    )
+    run = drive(orch)
+
+    assert statuses(run)["n-do"] == "succeeded", run.node_run("n-do").detail
+    filed = (library / "_knowledge" / "acme-api" / "filed.md").read_text(encoding="utf-8")
+    # The machine's answer reached the shelf, through the writer rather than
+    # through `filing.render_entry` — so there is no dated `##` heading on it.
+    assert filed.strip()
+    assert "· run run-" not in filed
+
+    # And the shelf's log says the write happened, with the tool that made it.
+    rows = _from_journal(run.id, "n-base")
+    assert [row["op"] for row in rows] == ["write"]
+    assert rows[0]["tool"] == "knowledge_append"
+
+
+def test_a_pass_that_writes_nothing_falls_back_to_a_verbatim_entry(
+    library: Path, test_store: Store, orch: Orchestrator, repo: Path
+) -> None:
+    """**The guarantee.** `silent` is a writer that does nothing at all, which
+    is exactly the shape decision 0015 was written about. The answer must still
+    reach the base — by the old mechanism — and the row must say why."""
+    line(
+        test_store,
+        writes("n-do", "n-base"),
+        extra_nodes=[_filing("n-base", "acme-api", "silent")],
+    )
+    run = drive(orch)
+
+    assert statuses(run)["n-do"] == "succeeded", run.node_run("n-do").detail
+    entry = knowledge_filing.entry_path(run.project_id, "n-do")
+    assert (library / "_knowledge" / "acme-api" / entry).exists()
+
+    wire = [row for row in _storage(run.id, "n-base") if not row.get("tool")]
+    assert len(wire) == 1
+    assert "verbatim" in wire[0]["detail"]
+    assert "wrote nothing" in wire[0]["detail"]
+
+
+def test_a_pass_that_crashes_still_files_the_answer(
+    library: Path, test_store: Store, orch: Orchestrator, repo: Path
+) -> None:
+    """A filing pass is an improvement on the mechanism underneath it, and an
+    improvement that can take the entry down with it is not one."""
+    line(
+        test_store,
+        writes("n-do", "n-base"),
+        extra_nodes=[_filing("n-base", "acme-api", "failure")],
+    )
+    run = drive(orch)
+
+    assert statuses(run)["n-do"] == "succeeded", run.node_run("n-do").detail
+    entry = knowledge_filing.entry_path(run.project_id, "n-do")
+    assert (library / "_knowledge" / "acme-api" / entry).exists()
+
+
+def test_the_pass_gets_the_skill_its_scope_names_and_a_writable_grant(
+    library: Path, test_store: Store, orch: Orchestrator, repo: Path, monkeypatch
+) -> None:
+    """Two claims the canvas makes that only the spawn can make true: the
+    shelf's scope picks the skill, and this is the one spawn in the system
+    holding a write tool."""
+    seen: list[tuple[str | None, list[str], dict]] = []
+    original = FakeAdapter.create_run
+
+    def record(self, prompt, cwd, run_config):
+        if run_config.mcp_servers and "knowledge_append" in " ".join(
+            run_config.allowed_tools
+        ):
+            # Read now: the grant lives under `_runs/<id>/` and goes with the
+            # run, so a path captured here is gone by the time the test looks.
+            grant = json.loads(
+                Path(
+                    run_config.mcp_servers["knowledge"]["env"][
+                        "FACTOR_IA_KNOWLEDGE_GRANT"
+                    ]
+                ).read_text()
+            )
+            seen.append(
+                (run_config.append_system_prompt, run_config.allowed_tools, grant)
+            )
+        return original(self, prompt, cwd, run_config)
+
+    monkeypatch.setattr(FakeAdapter, "create_run", record)
+    line(
+        test_store,
+        writes("n-do", "n-base"),
+        extra_nodes=[_filing("n-base", "acme-api", "knowledge-file")],
+    )
+    drive(orch)
+
+    assert len(seen) == 1, "exactly one spawn may hold a knowledge write tool"
+    appended, allowed, grant = seen[0]
+    # `acme-api` is a `codebase` base, so it is the codebase skill that runs.
+    assert appended is not None
+    assert appended.strip() == skills.body("knowledge-codebase").strip()
+    assert "mcp__knowledge__knowledge_append" in allowed
+    assert "mcp__knowledge__knowledge_get" in allowed
+
+    # One base in the grant, and the write it grants is on that base alone.
+    assert [one["id"] for one in grant["bases"]] == ["acme-api"]
+    assert grant["bases"][0]["writable"] is True
+
+
+def test_the_working_spawn_still_holds_no_write_tool(
+    library: Path, test_store: Store, orch: Orchestrator, repo: Path, monkeypatch
+) -> None:
+    """Decision 0015's rule, unchanged for every machine doing the work. The
+    filing pass is the exception the rule is drawn around, not a relaxation
+    of it."""
+    grants: list[dict] = []
+    original = FakeAdapter.create_run
+
+    def record(self, prompt, cwd, run_config):
+        server = (run_config.mcp_servers or {}).get("knowledge")
+        if server and "knowledge_append" not in " ".join(run_config.allowed_tools):
+            grants.append(
+                json.loads(
+                    Path(server["env"]["FACTOR_IA_KNOWLEDGE_GRANT"]).read_text()
+                )
+            )  # read now: the grant goes with the run
+        return original(self, prompt, cwd, run_config)
+
+    monkeypatch.setattr(FakeAdapter, "create_run", record)
+    line(
+        test_store,
+        writes("n-do", "n-base"),
+        extra_nodes=[_filing("n-base", "acme-api", "knowledge-file")],
+    )
+    drive(orch)
+
+    assert grants, "the working machine still gets a knowledge server"
+    assert all(
+        base_grant["writable"] is False
+        for grant in grants
+        for base_grant in grant["bases"]
+    )
+
+
+def test_a_principles_base_never_reaches_a_filing_pass(
+    library: Path, test_store: Store, orch: Orchestrator, repo: Path
+) -> None:
+    """Read-only is read-only on this path too — and it is settled earlier
+    than the pass, at run-check, so a `principles` base cannot reach one at
+    all. That is why there are three filing skills and not four: the fourth
+    scope has nothing to write."""
+    line(
+        test_store,
+        writes("n-do", "n-base"),
+        extra_nodes=[_filing("n-base", "principles", "knowledge-file")],
+    )
+    with pytest.raises(runcheck.NotRunnable) as refused:
+        drive(orch)
+    assert "principles base" in str(refused.value)
+
+    # And the registry holds exactly the writable scopes.
+    assert skills.SYSTEM_SKILLS == {
+        f"knowledge-{scope}" for scope in ("general", "codebase", "project")
+    }

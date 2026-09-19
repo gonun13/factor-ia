@@ -13,6 +13,19 @@ agent — `/workspace/_skills/<name>.md`, a top-level directory sibling to
 `_`-prefixed entries (`discovery.py`), so the directory cannot be mistaken for
 a codebase.
 
+**Except for the ones a node type is hardwired to.** `SYSTEM_SKILLS` names
+documents the product ships in `system_skills/`, one per writable knowledge
+scope, which a knowledge node applies to the answer it receives rather than an
+agent wearing by choice. They are skills in every other respect — same format,
+same parser, same ceiling, listed and edited in the same library — and they
+differ in exactly three places, each marked below: the library lists one
+whether or not the workspace has a copy, `delete_skill` reverts rather than
+removes, and a node's picker does not offer one. Editing one writes an
+ordinary workspace file that shadows the shipped text, so an operator's
+changes are git-tracked and shared with a team exactly as every other skill
+is, and losing that file restores the product's own instructions instead of
+leaving a node type with none.
+
 **The file is the record and git is the history**, which is the whole reason
 this module is not part of `store.py`. `store.py`'s contract is JSON written
 through pydantic so the key order is identical on every machine; a skill is
@@ -39,6 +52,30 @@ from .paths import PathEscape, workspace_join
 from .store import atomic_write
 
 SKILLS_DIRNAME = "_skills"
+
+#: The directory of documents the product ships, beside this module.
+SYSTEM_SKILLS_DIRNAME = "system_skills"
+
+#: **Skills a node type is hardwired to**, rather than ones an operator
+#: imported and an agent node wears by choice. Three today, one per writable
+#: knowledge scope: they are the contract a knowledge node applies to the
+#: answer it receives, so the base it fills is a datastore and not a
+#: transcript (`knowledge/filing.py`, `spec/behaviour/knowledge.md`).
+#:
+#: **An explicit registry and not a name prefix.** A `knowledge-` rule would
+#: quietly capture an operator's own `knowledge-notes.md` and make it
+#: undeletable, and a skill becoming un-removable is not a thing that should
+#: be possible to do by accident with a filename.
+#:
+#: Three rules follow from membership, and nothing else does:
+#:   - the library always lists it, whether or not the workspace has a copy —
+#:     so a node type can never find itself without instructions;
+#:   - `delete_skill` reverts an override and otherwise refuses;
+#:   - a node's picker does not offer it, and `runcheck` refuses a node that
+#:     names one anyway.
+SYSTEM_SKILLS: frozenset[str] = frozenset(
+    {"knowledge-general", "knowledge-codebase", "knowledge-project"}
+)
 
 #: The largest document we will hand to the CLI. Not a taste limit: the body
 #: becomes a single `argv` element, and Linux caps one argument at
@@ -84,6 +121,15 @@ class SkillInvalid(SkillError):
     """The document is not a skill. Carries a sentence a human can act on —
     every refusal below says which rule was broken, because the alternative is
     an import button that fails with "invalid"."""
+
+
+class SkillProtected(SkillError):
+    """A system skill cannot be deleted, only reverted to the shipped text.
+
+    Its own class rather than a `SkillError` with a message, because the API
+    answers it with a different status and the UI offers a different button:
+    this is not "that went wrong", it is "that is not a thing this skill
+    can do"."""
 
 
 # ---- reading ---------------------------------------------------------------
@@ -239,6 +285,34 @@ def skill_path(name: str, root: Path | None = None) -> Path:
     return workspace_join(SKILLS_DIRNAME, f"{name}.md", root=root)
 
 
+def system_skills_dir() -> Path:
+    """The shipped documents, beside this module.
+
+    Resolved off `__file__` and **not** through `workspace_join`: these are
+    part of the product, not of the workspace, and running them through the
+    containment check would be asserting something about the wrong tree.
+    """
+    return Path(__file__).resolve().parent / SYSTEM_SKILLS_DIRNAME
+
+
+def system_skill_path(name: str) -> Path:
+    """The shipped file a registry name addresses.
+
+    Guarded by the registry rather than by the name regex: the only names that
+    reach the packaged directory are three literals this module declares, so a
+    request string can never select a path here.
+    """
+    if name not in SYSTEM_SKILLS:
+        raise SkillNotFound(f"no system skill named {name!r}")
+    return system_skills_dir() / f"{name}.md"
+
+
+def is_system(name: str) -> bool:
+    """Whether a node type is hardwired to this skill. The one predicate the
+    picker, the API and `runcheck` all ask, so they cannot drift."""
+    return name in SYSTEM_SKILLS
+
+
 # ---- the library -----------------------------------------------------------
 
 
@@ -264,49 +338,138 @@ def _load(path: Path) -> Skill:
     return skill.model_copy(update={"updated_at": mtime, "name": path.stem})
 
 
-def list_skills(root: Path | None = None) -> list[SkillSummary]:
-    """Every usable skill in the workspace, by name. Never raises.
+def _load_system(name: str) -> Skill:
+    """A shipped skill, read through the same `validate` every other one is.
 
-    A missing `_skills/` is an empty list rather than an error, exactly as
-    `Store.list_factories` treats a project with no factories yet — the
-    directory appears on first import.
+    No special case in the parser: a document the product ships is a skill on
+    exactly the terms an imported one is, and running it through `_load` is
+    what makes a malformed shipped file fail in the test suite rather than in
+    the middle of somebody's run.
+    """
+    return _load(system_skill_path(name))
+
+
+def _resolve(name: str, root: Path | None = None) -> tuple[Skill, bool]:
+    """One skill and whether a workspace file provided it.
+
+    **The override wins, and the default is always there.** This is the only
+    ordering rule in the module, and it is stated once, here, because every
+    caller below needs the same answer:
+
+      - a workspace `_skills/<name>.md` is used if it exists, for any name;
+      - failing that, a registry name falls back to the shipped document;
+      - failing both, the name is `SkillNotFound` as it always was.
+
+    So editing a system skill is an ordinary import that happens to shadow a
+    shipped file, and deleting that file quietly restores the product's own
+    text — which is what keeps a knowledge node from ever being left without
+    the instructions its filing pass runs on.
+    """
+    try:
+        return _load(skill_path(name, root)), True
+    except (SkillNotFound, PathEscape):
+        # A workspace file that exists but is *broken* is a different thing
+        # from one that is absent, and must not be silently papered over by
+        # the shipped text: the operator edited it and needs to be told.
+        if name in SYSTEM_SKILLS:
+            return _load_system(name), False
+        raise
+
+
+def list_skills(root: Path | None = None) -> list[SkillSummary]:
+    """Every usable skill — the workspace's, plus the ones the product ships.
+
+    Never raises. A missing `_skills/` is an empty list rather than an error,
+    exactly as `Store.list_factories` treats a project with no factories yet —
+    the directory appears on first import.
 
     **A file that does not parse is skipped rather than failing the listing.**
     The trade-off, stated because it is not free: a broken skill is invisible
     here, but `get_skill` still names it and `runcheck` refuses any node
     pointing at it — so it can be missing from a picker, never silently in
     force.
+
+    **Every registry name appears exactly once**, whichever half provided it.
+    A workspace copy shadows the shipped one and is marked `overridden`; a
+    registry name with no copy is listed from the package. That is what makes
+    a system skill impossible to lose — there is no state of the workspace in
+    which the library shows fewer than `SYSTEM_SKILLS`.
+
+    A shipped document that does not parse is the one case that *is* silently
+    dropped here, for the rule above: the listing never raises. The test suite
+    is where that failure is meant to surface, which is why every shipped file
+    is validated there.
     """
+    found: list[SkillSummary] = []
+    seen: set[str] = set()
+
+    def summarise(skill: Skill, *, overridden: bool) -> SkillSummary:
+        return SkillSummary(
+            # `system` and `overridden` are excluded and then supplied: they
+            # are derived here, and a `Skill` carrying stale ones must not be
+            # able to answer for itself.
+            **skill.model_dump(exclude={"body", "source", "system", "overridden"}),
+            system=skill.name in SYSTEM_SKILLS,
+            overridden=overridden,
+        )
+
     try:
         directory = skills_dir(root)
     except PathEscape:
-        return []
-    if not directory.is_dir():
-        return []
-    found: list[SkillSummary] = []
-    for path in sorted(directory.glob("*.md")):
-        # The sibling repo's convention: `_template.md` is a form to copy, not
-        # a skill to wear.
-        if path.name.startswith("_") or path.name.startswith("."):
-            continue
-        if not _SKILL_NAME.match(path.stem):
-            continue
+        directory = None
+    if directory is not None and directory.is_dir():
+        for path in sorted(directory.glob("*.md")):
+            # The sibling repo's convention: `_template.md` is a form to copy,
+            # not a skill to wear.
+            if path.name.startswith("_") or path.name.startswith("."):
+                continue
+            if not _SKILL_NAME.match(path.stem):
+                continue
+            try:
+                skill = _load(path)
+            except SkillError:
+                continue
+            seen.add(skill.name)
+            found.append(summarise(skill, overridden=skill.name in SYSTEM_SKILLS))
+
+    for name in sorted(SYSTEM_SKILLS - seen):
         try:
-            skill = _load(path)
+            found.append(summarise(_load_system(name), overridden=False))
         except SkillError:
             continue
-        found.append(SkillSummary(**skill.model_dump(exclude={"body", "source"})))
+
+    # **System first, then by name.** They are the shelf furniture of the
+    # library — always present, the same three every time — so putting them at
+    # the top gives the imported skills a stable place to start rather than
+    # having them interleave differently as the workspace grows. Sorted here
+    # rather than in the browser so every reader of this route, including a
+    # test, sees the one order.
+    found.sort(key=lambda summary: (not summary.system, summary.name))
     return found
 
 
 def get_skill(name: str, root: Path | None = None) -> Skill:
-    """One skill, whole. Raises rather than skipping — this is the call that
-    has to say *why* a name the canvas is showing cannot be used."""
-    return _load(skill_path(name, root))
+    """One skill, whole, the override winning over the shipped text.
+
+    Raises rather than skipping — this is the call that has to say *why* a
+    name the canvas is showing cannot be used.
+
+    Carries `system` and `overridden`, derived here exactly as `list_skills`
+    derives them. They are on `SkillSummary`, so a route that returned them
+    unset would be a route quietly claiming every skill is an ordinary one —
+    and the editor, which is the screen that most needs to know, opens through
+    this call rather than through the listing.
+    """
+    skill, from_workspace = _resolve(name, root)
+    system = skill.name in SYSTEM_SKILLS
+    return skill.model_copy(
+        update={"system": system, "overridden": system and from_workspace}
+    )
 
 
 def body(name: str, root: Path | None = None) -> str:
-    """The instructions alone. The one function the run path calls."""
+    """The instructions alone. The one function the run path calls — for an
+    agent node's chosen skill, and for the filing pass's hardwired one."""
     return get_skill(name, root).body
 
 
@@ -335,9 +498,27 @@ def create_skill(
 
 
 def delete_skill(name: str, root: Path | None = None) -> None:
-    """Remove `<name>.md` and nothing else. Never recursive."""
+    """Remove `<name>.md` and nothing else. Never recursive.
+
+    **For a system skill this is a revert, not a delete.** The file it removes
+    is the workspace override, and the skill goes on existing on the shipped
+    text — which is the whole of what "cannot be deleted" means here. Asked to
+    remove one that has no override, it refuses: there is nothing to undo, and
+    the thing being asked for is not available at any price.
+
+    One verb rather than two because the filesystem already agrees: reverting
+    an override *is* deleting a file in `_skills/`, and a second route saying
+    so would be a second name for one act (`skills_api.py` keeps no `PUT` for
+    the same reason).
+    """
     path = skill_path(name, root)
     with _lock:
+        if name in SYSTEM_SKILLS and not path.exists():
+            raise SkillProtected(
+                f"{name!r} is built into the knowledge node and cannot be "
+                "removed — edit it to change what it says, or revert it to "
+                "restore the shipped text"
+            )
         try:
             path.unlink()
         except FileNotFoundError:

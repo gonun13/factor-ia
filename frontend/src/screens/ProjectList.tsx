@@ -390,7 +390,11 @@ function SkillLibrary() {
     setDeleting(name);
     try {
       await api.deleteSkill(name);
-      setSkills((current) => (current ?? []).filter((one) => one.name !== name));
+      // **Re-read rather than drop the row.** For a system skill this call is
+      // a revert: the file goes, the skill stays, and it comes back carrying
+      // the shipped description with `overridden` cleared. Filtering it out
+      // locally would hide a skill that still exists until the next reload.
+      setSkills(await api.skills());
       setConfirming(null);
     } catch (cause) {
       setProblem(cause instanceof Error ? cause.message : String(cause));
@@ -506,26 +510,45 @@ function SkillLibrary() {
 
       {skills === null ? (
         <p className="lede">Loading…</p>
-      ) : skills.length === 0 ? (
+      ) : skills.every((one) => one.system) ? (
+        // Never empty now — the shipped skills are always here — so the
+        // invitation is about importing one, shown while nothing has been.
         <p className="lede">
-          None yet. A skill is a markdown file with <code>name</code> and{" "}
-          <code>description</code> in its frontmatter, and instructions under it.
+          Nothing imported yet. A skill is a markdown file with <code>name</code>{" "}
+          and <code>description</code> in its frontmatter, and instructions under
+          it. The ones below are built in.
         </p>
-      ) : (
+      ) : null}
+
+      {skills !== null && (
         <div className="skill-grid">
           {skills.map((skill) => (
             <div key={skill.name} className="skill-slot">
               {confirming === skill.name ? (
                 <div
-                  className="skill-card is-confirming"
+                  className={`skill-card is-confirming${
+                    skill.system ? " is-system" : ""
+                  }`}
                   onKeyDown={(event) => {
                     if (event.key === "Escape" && !deleting) setConfirming(null);
                   }}
                 >
-                  <span className="name">Delete {skill.name}?</span>
+                  <span className="name">
+                    {skill.system ? "Revert" : "Delete"} {skill.name}?
+                  </span>
                   <span className="desc">
-                    Removes <code>_skills/{skill.name}.md</code>. Any agent still
-                    wearing it will refuse to run until it is replaced.
+                    {skill.system ? (
+                      <>
+                        Removes your <code>_skills/{skill.name}.md</code> and
+                        restores the shipped instructions. The skill stays — a
+                        knowledge node is built on it.
+                      </>
+                    ) : (
+                      <>
+                        Removes <code>_skills/{skill.name}.md</code>. Any agent
+                        still wearing it will refuse to run until it is replaced.
+                      </>
+                    )}
                   </span>
                   <span className="card-actions">
                     <button
@@ -534,7 +557,13 @@ function SkillLibrary() {
                       onClick={() => void remove(skill.name)}
                       disabled={deleting !== null}
                     >
-                      {deleting === skill.name ? "Deleting…" : "Delete"}
+                      {deleting === skill.name
+                        ? skill.system
+                          ? "Reverting…"
+                          : "Deleting…"
+                        : skill.system
+                          ? "Revert"
+                          : "Delete"}
                     </button>
                     <button
                       ref={cancelDeleteButton}
@@ -553,22 +582,39 @@ function SkillLibrary() {
                       apart at a glance. The document itself is a window away. */}
                   <button
                     type="button"
-                    className="skill-card"
+                    className={`skill-card${skill.system ? " is-system" : ""}`}
                     title={`Open ${skill.name}`}
                     onClick={() => setEditing(skill.name)}
                   >
-                    <span className="name">{skill.name}</span>
+                    <span className="name">
+                      {skill.name}
+                      {/* Says why this card has no × — a badge that only
+                          decorated would be a badge nobody could act on. */}
+                      {skill.system && (
+                        <span
+                          className="skill-badge"
+                          title="Built into the knowledge node. Edit it freely; it cannot be removed."
+                        >
+                          system
+                        </span>
+                      )}
+                    </span>
                     <span className="desc">{skill.description}</span>
                   </button>
-                  <button
-                    type="button"
-                    className="card-delete"
-                    aria-label={`Delete ${skill.name}`}
-                    title="Delete skill"
-                    onClick={() => setConfirming(skill.name)}
-                  >
-                    ×
-                  </button>
+                  {/* A system skill offers Revert only once there is an edit to
+                      undo. Offering it against the shipped text would be a
+                      button whose only outcome is a refusal. */}
+                  {(!skill.system || skill.overridden) && (
+                    <button
+                      type="button"
+                      className="card-delete"
+                      aria-label={`${skill.system ? "Revert" : "Delete"} ${skill.name}`}
+                      title={skill.system ? "Revert to the shipped skill" : "Delete skill"}
+                      onClick={() => setConfirming(skill.name)}
+                    >
+                      {skill.system ? "⟲" : "×"}
+                    </button>
+                  )}
                 </>
               )}
             </div>
@@ -681,13 +727,14 @@ function SkillEditor({
   return (
     <div className="node-log-backdrop" onMouseDown={leave}>
       <section
-        className="skill-editor panel"
+        className={`skill-editor panel${loaded?.system ? " is-system" : ""}`}
         role="dialog"
         aria-label={`Skill ${name}`}
         onMouseDown={(event) => event.stopPropagation()}
       >
         <header className="node-log-head">
           <span className="who mono">{name}</span>
+          {loaded?.system && <span className="skill-badge">system</span>}
           {loaded && (
             <span className="eyebrow">
               {Math.max(1, Math.round(loaded.bytes / 1024))} kB · updated{" "}
@@ -703,6 +750,34 @@ function SkillEditor({
 
         <div className="skill-editor-body">
           {problem && <div className="error">{problem}</div>}
+          {/* **Named consequences, not a generic "be careful".** A warning that
+              only says "this is important" is one people learn to click past;
+              these are the three things that actually happen, and the third is
+              the trap — the footer's rename hint has a sharper meaning here
+              than it does for an ordinary skill. */}
+          {loaded?.system && (
+            <div className="skill-editor-warning" role="note">
+              <strong>This skill is built into the knowledge node.</strong> It is
+              not chosen by a machine — every knowledge base with the matching
+              scope files through it, in every factory and every project.
+              <ul>
+                <li>
+                  A change takes effect on the next run, everywhere. Instructions
+                  that stop being clear will fill your bases with entries nobody
+                  can use, and the entries already filed are not revisited.
+                </li>
+                <li>
+                  Saving writes <code>_skills/{name}.md</code>, which from then
+                  on wins over the shipped text. Revert on the card to go back.
+                </li>
+                <li>
+                  Changing <code>name:</code> does not rename this — it saves a
+                  separate ordinary skill and leaves this one on the shipped
+                  instructions.
+                </li>
+              </ul>
+            </div>
+          )}
           {loaded === null && !problem ? (
             <p className="dim">Opening…</p>
           ) : (

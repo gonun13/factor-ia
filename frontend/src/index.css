@@ -287,6 +287,45 @@ button.skill-card:hover {
   color: var(--ink);
 }
 
+/* **The knowledge tone, because that is whose skill this is.** A system skill
+   is the one a knowledge node applies, so it is tinted with the same colour
+   that node, its handles and its run chips already use — the library and the
+   canvas naming one thing the same way. Reusing the token rather than minting
+   a fourth colour is also what keeps it correct if the palette moves.
+
+   A tint and not a border: these are not a warning, they are the normal,
+   working furniture of the library, and they sit together at the top of the
+   grid where a block of one tone reads as a group rather than as five
+   separate flags. */
+.skill-card.is-system {
+  background: color-mix(in srgb, var(--knowledge) 9%, var(--panel));
+  border-color: color-mix(in srgb, var(--knowledge) 28%, transparent);
+}
+
+button.skill-card.is-system:hover {
+  border-color: color-mix(in srgb, var(--knowledge) 55%, transparent);
+  background: color-mix(in srgb, var(--knowledge) 14%, var(--panel));
+}
+
+/* The badge that says why this card has no delete. */
+.skill-badge {
+  margin-left: 0.4rem;
+  padding: 0.05rem 0.3rem;
+  border: 1px solid color-mix(in srgb, var(--knowledge) 35%, transparent);
+  border-radius: 3px;
+  font-size: 0.62rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--knowledge);
+  vertical-align: 0.08em;
+}
+
+/* The revert control carries the tone too, so the whole card is one object
+   rather than a tinted panel with a neutral button stuck on it. */
+.skill-slot:has(.skill-card.is-system) .card-delete {
+  color: color-mix(in srgb, var(--knowledge) 70%, var(--ink-dim));
+}
+
 /* Two lines, then an ellipsis. A card says which skill this is; the window
    says what it does. */
 .skill-card .desc {
@@ -321,6 +360,52 @@ button.skill-card:hover {
   gap: 0;
   padding: 0;
   overflow: hidden;
+}
+
+/* **The window carries the card's tone**, so opening one is visibly the same
+   object being looked at rather than a generic editor that happens to contain
+   it. The border does the work at this size — a panel-wide tint behind a
+   monospace document would fight the text. */
+.skill-editor.is-system {
+  border-color: color-mix(in srgb, var(--knowledge) 38%, transparent);
+}
+
+.skill-editor.is-system .node-log-head,
+.skill-editor.is-system .skill-editor-foot {
+  background: color-mix(in srgb, var(--knowledge) 9%, var(--panel));
+  border-color: color-mix(in srgb, var(--knowledge) 22%, transparent);
+}
+
+/* The consequences, above the document — not a toast and not a colour on the
+   Save button. Something you read before you type is the only kind of warning
+   that can change what you type. Bordered rather than filled loud: this is an
+   editable skill, and an alarm would say it is not. */
+.skill-editor-warning {
+  flex: 0 0 auto;
+  padding: 0.6rem 0.7rem;
+  border: 1px solid color-mix(in srgb, var(--knowledge) 34%, transparent);
+  border-left-width: 3px;
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--knowledge) 8%, var(--panel));
+  font-size: 0.74rem;
+  line-height: 1.5;
+  color: var(--ink-dim);
+}
+
+.skill-editor-warning strong {
+  color: var(--knowledge);
+  font-weight: 600;
+}
+
+.skill-editor-warning ul {
+  margin: 0.4rem 0 0;
+  padding-left: 1.1rem;
+  display: grid;
+  gap: 0.25rem;
+}
+
+.skill-editor-warning code {
+  font-size: 0.72rem;
 }
 
 .skill-editor-body {

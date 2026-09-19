@@ -83,11 +83,15 @@ purpose, and rediscovering what is in it costs the run twice."""
 #: least-negotiable-last rule.
 FILING_CONTRACT = """## What you say is filed
 
-Your final answer is filed, word for word, into the knowledge base wired to this
-node when you finish. That base is permanent, it is shared across projects, and
-somebody will read your entry months from now with none of this run in front of
-them. You do not write to it yourself and you cannot revise it afterwards — the
-answer is the entry.
+Your final answer is filed into the knowledge base wired to this node when you
+finish. That base is permanent, it is shared across projects, and somebody will
+read what you wrote months from now with none of this run in front of them. You
+do not write to it yourself and you cannot revise it afterwards.
+
+The base files it through its own standing instructions, which decide where the
+entry goes, whether it updates something already there, and what shape it takes.
+Your words may be re-placed and re-worded; nothing will be invented. Write the
+substance and let it do the filing.
 
 - Lead with what stays true: a decision and the reason for it, a constraint you
   hit, an interface somebody else has to match, a fact that cost you an hour to

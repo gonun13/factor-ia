@@ -30,6 +30,18 @@ One sentence: the concrete outcome this produces.
 """
 
 
+def imported(root: Path | None = None) -> list[str]:
+    """The names an operator put in `_skills/`, in listing order.
+
+    The library also carries the documents the product ships
+    (`skills.SYSTEM_SKILLS`), which are present in every workspace including
+    an empty one. Tests about *importing* are not about those, so they ask
+    this rather than restating the shipped set — a fourth system skill should
+    not break a test about a hidden file.
+    """
+    return [one.name for one in skills.list_skills(root) if not one.system]
+
+
 def write(workspace: Path, name: str, text: str) -> Path:
     directory = workspace / "_skills"
     directory.mkdir(exist_ok=True)
@@ -174,13 +186,13 @@ def test_skill_path_refuses_traversal(workspace: Path) -> None:
 
 
 def test_list_is_empty_without_the_directory(workspace: Path) -> None:
-    assert skills.list_skills() == []
+    assert imported() == []
 
 
 def test_create_makes_the_directory_and_lists(workspace: Path) -> None:
     skills.create_skill(TEMPLATE, filename="repo-recon.md")
     assert (workspace / "_skills" / "repo-recon.md").is_file()
-    assert [one.name for one in skills.list_skills()] == ["repo-recon"]
+    assert imported() == ["repo-recon"]
 
 
 def test_list_skips_hidden_and_non_markdown(workspace: Path) -> None:
@@ -190,7 +202,7 @@ def test_list_skips_hidden_and_non_markdown(workspace: Path) -> None:
     write(workspace, "_template.md", TEMPLATE.replace("repo-recon", "template"))
     write(workspace, ".hidden.md", TEMPLATE.replace("repo-recon", "hidden"))
     write(workspace, "notes.txt", TEMPLATE)
-    assert [one.name for one in skills.list_skills()] == ["repo-recon"]
+    assert imported() == ["repo-recon"]
 
 
 def test_broken_skill_is_skipped_by_list_but_named_by_get(workspace: Path) -> None:
@@ -198,7 +210,7 @@ def test_broken_skill_is_skipped_by_list_but_named_by_get(workspace: Path) -> No
     silently in force."""
     write(workspace, "good.md", TEMPLATE)
     write(workspace, "broken.md", "no frontmatter at all\n")
-    assert [one.name for one in skills.list_skills()] == ["good"]
+    assert imported() == ["good"]
     with pytest.raises(SkillInvalid):
         skills.get_skill("broken")
 
@@ -206,7 +218,7 @@ def test_broken_skill_is_skipped_by_list_but_named_by_get(workspace: Path) -> No
 def test_the_filename_wins_over_a_drifted_frontmatter_name(workspace: Path) -> None:
     """Otherwise the picker would show a name `get_skill` cannot open."""
     write(workspace, "recon.md", TEMPLATE)
-    assert [one.name for one in skills.list_skills()] == ["recon"]
+    assert imported() == ["recon"]
     assert skills.get_skill("recon").name == "recon"
 
 
@@ -234,7 +246,7 @@ def test_create_conflicts_then_overwrites(workspace: Path) -> None:
 def test_delete_removes_then_not_found(workspace: Path) -> None:
     skills.create_skill(TEMPLATE)
     skills.delete_skill("repo-recon")
-    assert skills.list_skills() == []
+    assert imported() == []
     with pytest.raises(SkillNotFound):
         skills.delete_skill("repo-recon")
 
@@ -255,7 +267,8 @@ def test_updated_at_comes_from_the_file(workspace: Path) -> None:
     path = write(workspace, "repo-recon.md", TEMPLATE)
     earlier = time.time() - 86_400
     os.utime(path, (earlier, earlier))
-    assert skills.list_skills()[0].updated_at.timestamp() == pytest.approx(earlier, abs=2)
+    listed = {one.name: one for one in skills.list_skills()}
+    assert listed["repo-recon"].updated_at.timestamp() == pytest.approx(earlier, abs=2)
 
 
 def test_source_is_the_whole_document_and_round_trips(workspace: Path) -> None:
@@ -274,3 +287,116 @@ def test_source_is_the_whole_document_and_round_trips(workspace: Path) -> None:
     again = skills.get_skill("repo-recon")
     assert "allowed-tools: Read, Grep" in again.source
     assert "Two sentences" in again.body
+
+
+# ---- system skills ---------------------------------------------------------
+#
+# The three rules membership of `skills.SYSTEM_SKILLS` buys, and nothing else:
+# the library always lists one, the override wins, and a delete reverts rather
+# than removes.
+
+
+@pytest.mark.parametrize("name", sorted(skills.SYSTEM_SKILLS))
+def test_every_shipped_skill_is_a_valid_skill(name: str) -> None:
+    """The one check that must not be allowed to fail quietly.
+
+    `list_skills` never raises, so a malformed shipped document would simply
+    vanish from the library and take a knowledge node's filing instructions
+    with it. This is the test that says so out loud.
+    """
+    skill = skills._load_system(name)
+    assert skill.name == name
+    assert skill.description.strip()
+    assert skill.body.strip()
+    assert skill.bytes <= skills.SKILL_MAX_BYTES
+
+
+def test_system_skills_are_listed_in_an_empty_workspace(workspace: Path) -> None:
+    listed = {one.name: one for one in skills.list_skills()}
+    assert set(listed) == set(skills.SYSTEM_SKILLS)
+    assert all(one.system for one in listed.values())
+    assert not any(one.overridden for one in listed.values())
+
+
+def test_editing_a_system_skill_writes_an_override_that_wins(workspace: Path) -> None:
+    shipped = skills.body("knowledge-codebase")
+    skills.create_skill(
+        "---\nname: knowledge-codebase\ndescription: Ours.\n---\n\nFile it our way.\n",
+        overwrite=True,
+    )
+    assert (workspace / "_skills" / "knowledge-codebase.md").is_file()
+    assert skills.body("knowledge-codebase").strip() == "File it our way."
+    assert skills.body("knowledge-codebase") != shipped
+
+    listed = {one.name: one for one in skills.list_skills()}
+    assert listed["knowledge-codebase"].system
+    assert listed["knowledge-codebase"].overridden
+    # Still exactly one row: the override shadows the shipped file rather than
+    # appearing beside it.
+    assert len(listed) == len(skills.SYSTEM_SKILLS)
+
+
+def test_deleting_a_system_skill_reverts_it_and_keeps_it(workspace: Path) -> None:
+    shipped = skills.body("knowledge-project")
+    skills.create_skill(
+        "---\nname: knowledge-project\ndescription: Ours.\n---\n\nMine.\n",
+        overwrite=True,
+    )
+    skills.delete_skill("knowledge-project")
+
+    assert not (workspace / "_skills" / "knowledge-project.md").exists()
+    assert skills.body("knowledge-project") == shipped
+    assert "knowledge-project" in {one.name for one in skills.list_skills()}
+
+
+def test_deleting_an_unoverridden_system_skill_is_refused(workspace: Path) -> None:
+    with pytest.raises(skills.SkillProtected) as refused:
+        skills.delete_skill("knowledge-general")
+    assert "cannot be removed" in str(refused.value)
+    assert "knowledge-general" in {one.name for one in skills.list_skills()}
+
+
+def test_a_broken_override_is_not_papered_over_by_the_shipped_text(
+    workspace: Path,
+) -> None:
+    """An operator who breaks their edit must be told, not quietly served the
+    product's copy — that is the difference between a file that is *absent*
+    and one that is *wrong*, and only the first has a safe fallback."""
+    write(workspace, "knowledge-general.md", "no frontmatter here\n")
+    with pytest.raises(SkillInvalid):
+        skills.get_skill("knowledge-general")
+
+
+def test_an_ordinary_skill_is_not_protected_by_a_similar_name(workspace: Path) -> None:
+    """`SYSTEM_SKILLS` is a registry, not a `knowledge-` prefix: an operator's
+    own skill must stay deletable however it is named."""
+    write(workspace, "knowledge-notes.md", TEMPLATE.replace("repo-recon", "knowledge-notes"))
+    assert not skills.get_skill("knowledge-notes").system
+    skills.delete_skill("knowledge-notes")
+    with pytest.raises(SkillNotFound):
+        skills.get_skill("knowledge-notes")
+
+
+def test_system_skills_sort_first_then_everything_by_name(workspace: Path) -> None:
+    """The library's order, fixed here rather than in the browser so every
+    reader of the route sees the same one.
+
+    System first because they are the library's furniture — always present,
+    always the same set — so an imported skill has a stable place to start
+    instead of interleaving differently as the workspace grows.
+    """
+    for name in ("zeta", "alpha", "knowledge-notes"):
+        write(workspace, f"{name}.md", TEMPLATE.replace("repo-recon", name))
+    listed = skills.list_skills()
+
+    assert [one.name for one in listed] == [
+        "knowledge-codebase",
+        "knowledge-general",
+        "knowledge-project",
+        "alpha",
+        "knowledge-notes",
+        "zeta",
+    ]
+    # And the block at the top is exactly the system ones — an operator's
+    # `knowledge-notes` sorts with the imports, where it belongs.
+    assert [one.system for one in listed] == [True, True, True, False, False, False]

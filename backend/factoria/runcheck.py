@@ -161,6 +161,13 @@ def run_problems(
         # why this is not routed through a callable the way `tree_state` is.
         wanted = str(node.definition.config.get("skill") or "").strip()
         if wanted:
+            if skills.is_system(wanted):
+                problems.append(
+                    f"Agent “{label(node)}”: {wanted!r} is a system skill, "
+                    "built into the knowledge node — it cannot be worn by a node. "
+                    "Choose another, or clear the plate."
+                )
+                continue
             try:
                 skills.get_skill(wanted)
             except skills.SkillNotFound:
@@ -189,6 +196,13 @@ def run_problems(
             problems.append(
                 f"Scope “{label(node)}” has no skill attached — "
                 "a scope node needs one to know what to ask about."
+            )
+            continue
+        if skills.is_system(wanted):
+            problems.append(
+                f"Scope “{label(node)}”: {wanted!r} is a system skill, "
+                "built into the knowledge node — it cannot be worn by a node. "
+                "Choose another, or clear the plate."
             )
             continue
         try:

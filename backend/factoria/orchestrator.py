@@ -77,6 +77,7 @@ project exists to avoid.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
 import json
 import os
@@ -488,6 +489,17 @@ class ActiveRun:
     #: folded in by `_set_node` because a memory failure is not a status, and
     #: every path out of `_run_agent` passes through that one function.
     memory_notes: dict[str, str] = field(default_factory=dict)
+
+
+#: How long a knowledge node's filing pass may take before it is interrupted
+#: and its answer filed verbatim instead.
+#:
+#: Bounded because the pass holds nothing else up but can still hang: it is a
+#: model call, it runs after the machine's work is done, and a run that stalls
+#: here stalls on bookkeeping. Generous enough for a writer to list a base,
+#: read an entry and rewrite it — the shipped skills ask for exactly that
+#: sequence — and short enough that a loop is caught rather than waited out.
+FILING_TIMEOUT_S = 180.0
 
 
 def _spawn_stem(node_id: str, lap: int) -> str:
@@ -1595,6 +1607,22 @@ class Orchestrator:
                 )
                 continue
 
+            # **The shelf files it, by its own rules, before the wire does.**
+            # A base is a datastore and not a transcript: where an entry
+            # belongs, whether it is new or an update to something already
+            # there, and what shape it takes are questions about *this* shelf,
+            # answered by the skill its scope names. The contributing machine
+            # cannot answer them — it does not know what else is on the shelf.
+            #
+            # A pass that writes nothing falls through to the verbatim append
+            # below, which is the mechanism this replaced and is therefore the
+            # worst case rather than a new failure (`_filing_pass`).
+            filed, why = await self._filing_pass(
+                state, node, other, base, body, lap=lap, label=label
+            )
+            if filed:
+                continue
+
             relative = knowledge_filing.entry_path(state.run.project_id, label)
             root = knowledge_store.base_path(base.id)
             existed = (root / relative).exists()
@@ -1643,10 +1671,22 @@ class Orchestrator:
                     base_id=base.id,
                     path=written.path,
                     bytes=written.bytes,
+                    # Named as a fallback, because the difference matters to
+                    # whoever is reading the shelf's log: an entry the writer
+                    # shaped and an entry that landed verbatim because the
+                    # writer did nothing are the same bytes arriving for very
+                    # different reasons, and only the second is worth looking
+                    # into.
+                    # Named as a fallback **with the reason**, because the
+                    # difference matters to whoever reads the shelf's log: an
+                    # entry the writer shaped and an entry that landed
+                    # verbatim are the same bytes arriving for very different
+                    # reasons, and "it wrote nothing" and "it failed" are two
+                    # more.
                     detail=(
-                        f"filed {written.path} into {base.id}"
-                        if written.created
-                        else f"appended to {written.path} in {base.id}"
+                        f"{'filed' if written.created else 'appended to'} "
+                        f"{written.path} in {base.id} verbatim, because the "
+                        f"filing pass {why}"
                     ),
                 )
             )
@@ -2795,6 +2835,213 @@ class Orchestrator:
                 (other, base, writable[node_id] and knowledge_store.is_writable(base.scope))
             )
         return found
+
+    def _filing_spawn(
+        self,
+        state: ActiveRun,
+        base: "KnowledgeBase",
+        stem: str,
+    ) -> tuple[dict[str, object], list[str], list[str], Path]:
+        """The one spawn in this system that may write to a base.
+
+        `_knowledge_spawn` is the rule — every machine doing the *work* is
+        read-only on every shelf, because a capability is not an act and
+        decision `0015` is what happened when writing was left to a model with
+        a task in front of it. This is the exception the rule is drawn around:
+        a pass whose entire job is the write, spawned by the wire after the
+        answer is final, holding one base and nothing else.
+
+        What keeps the exception from becoming the old failure is not this
+        method but `_file_knowledge`'s verification: a pass that writes nothing
+        does not leave an empty base, it falls back to the verbatim append that
+        used to be the whole mechanism. So the worst case here is exactly the
+        behaviour this replaced.
+
+        **One base per grant.** The pass is filing one answer into one shelf,
+        so every other base in the run is `not_wired` to it — including bases
+        the contributing machine could read. A writer that could reach them
+        would be a writer that could move an entry between shelves on its own
+        judgement.
+        """
+        assert state.workspaces is not None
+        directory = state.workspaces.ensure_knowledge_dir()
+        grant_path = directory / f"{stem}.grant.json"
+        journal_path = directory / f"{stem}.journal.jsonl"
+        grant = {
+            "run_id": state.run.id,
+            "node_id": stem,
+            "journal": str(journal_path),
+            "bases": [
+                {
+                    "id": base.id,
+                    "root": str(knowledge_store.base_path(base.id)),
+                    "scope": base.scope,
+                    "format": base.format,
+                    "title": base.title,
+                    # The one `true` in the system, and the server re-derives
+                    # it from the scope anyway: a `principles` base reaching
+                    # here would still be refused, by the half that has the
+                    # last word.
+                    "writable": True,
+                }
+            ],
+        }
+        grant_path.write_text(json.dumps(grant, indent=2), encoding="utf-8")
+        servers = {
+            knowledge_mcp.SERVER_NAME: {
+                "command": sys.executable,
+                "args": ["-m", "factoria.knowledge.mcp"],
+                "env": {
+                    knowledge_mcp.GRANT_ENV: str(grant_path),
+                    "PYTHONPATH": config.package_root(),
+                },
+            }
+        }
+        return servers, knowledge_mcp.allowed_tool_names(writable=True), [], journal_path
+
+    async def _filing_pass(
+        self,
+        state: ActiveRun,
+        node: Node,
+        shelf: Node,
+        base: "KnowledgeBase",
+        body: str,
+        *,
+        lap: int,
+        label: str,
+    ) -> tuple[bool, str]:
+        """Let the base's own skill file this answer.
+
+        Returns whether it filed, and — when it did not — a short reason the
+        fallback row can carry. **The reason is not decoration.** Everything
+        here is caught so a filing pass can never take a run down with it, and
+        a bare rescue that recorded nothing would turn a crash in this method
+        into "the writer chose not to write", which is a different fault with
+        a different fix and no way to tell them apart from the outside.
+
+        **This is the knowledge node's work, not the machine's.** The machine
+        said what it found; what a `codebase` shelf does with that is different
+        from what a `general` one does, and neither is the contributing
+        machine's to decide — it does not know what else is on the shelf. So
+        the pass runs against the *shelf's* configuration and wears the skill
+        its scope names (`skills.SYSTEM_SKILLS`), which an operator can open
+        and change in the library like any other.
+
+        It reaches the base through the MCP server and nothing else: no
+        worktree, no codebase, no `--add-dir`. That keeps filing independent of
+        whether the contributing machine had a repository, and it means the
+        only thing this pass can touch in the whole workspace is one shelf.
+
+        **It runs on the project's default model and provider**, deliberately.
+        The shelf's config is read for the ladder's sake, but a knowledge node
+        carries only `base` — it has no model plate and no adapter plate — so
+        the first rung is always empty and the project's answer is the one that
+        applies. One model per project is the thing an operator already tunes,
+        and a second knob here would be a second place to look when filing gets
+        expensive. If that ever needs to differ per shelf, the plate is the
+        change and this method needs none: `from_node_config` already reads
+        `model` off the node it is handed.
+
+        Never raises. Every failure — no skill, no adapter, a crash, a timeout
+        — returns `False`, and the caller files the answer verbatim instead.
+        A filing pass is an improvement on the mechanism underneath it, and an
+        improvement that can take the entry down with it is not one.
+        """
+        try:
+            instructions = skills.body(f"knowledge-{base.scope}")
+        except (SkillError, PathEscape) as exc:
+            # The shipped document is unreadable *and* the override is broken.
+            # Falling back is right: an operator who broke their edit gets the
+            # verbatim entry, not a lost one.
+            return False, f"its skill could not be read — {exc}"
+
+        # Suffixed *after* the lap, not folded into the node id: a node
+        # genuinely called `x-filing` would otherwise share a journal with
+        # `x`'s filing pass, and the two have opposite meanings — one is a
+        # machine's own calls, the other is the record this method reads to
+        # decide whether to fall back.
+        stem = f"{_spawn_stem(shelf.id, lap)}.filing"
+        try:
+            servers, allowed, denied, journal = self._filing_spawn(state, base, stem)
+        except (OSError, knowledge_store.KnowledgeError, PathEscape) as exc:
+            return False, f"its grant could not be written — {exc}"
+
+        assert state.workspaces is not None
+        cwd = str(state.workspaces.ensure_knowledge_dir())
+        prompt = knowledge_filing.render_request(
+            body,
+            base_id=base.id,
+            label=label,
+            project=state.run.project_id,
+        )
+        why = "it wrote nothing"
+        adapter = adapter_for(shelf, state.settings, lap=lap)
+        agent_run = adapter.create_run(
+            prompt,
+            cwd,
+            RunConfig.from_node_config(
+                shelf.definition.config,
+                default_model=state.settings.default_model,
+                append_system_prompt=verdict.compose_system_prompt(
+                    instructions, reviewer=False
+                ),
+                mcp_servers=servers,
+                allowed_tools=allowed,
+                disallowed_tools=denied,
+            ),
+        )
+        try:
+            async with asyncio.timeout(FILING_TIMEOUT_S):
+                async for event in agent_run:
+                    # Addressed to the **shelf**, not to the machine: this is
+                    # the knowledge node's own work, and its log is where an
+                    # operator goes to find out why a badly-behaving writer
+                    # skill produced what it did. A base still has no runtime
+                    # and no card on the timeline — a stream is not a status.
+                    await state.channel.emit(
+                        AgentStreamEvent(
+                            run_id=state.run.id, node_id=shelf.id, event=event
+                        )
+                    )
+        except (TimeoutError, asyncio.CancelledError):
+            # A writer that loops must not hold the base lock or the run. It
+            # is interrupted and treated as a pass that wrote nothing, which
+            # is the same fallback every other silent outcome takes.
+            with contextlib.suppress(Exception):
+                await agent_run.interrupt()
+            why = f"it ran past {int(FILING_TIMEOUT_S)}s and was stopped"
+        except Exception as exc:
+            why = f"it failed — {type(exc).__name__}: {exc}"
+
+        filed = self._filed_anything(journal, base.id)
+        # Reported whichever way it went: a pass that only *read* the base
+        # still belongs in the shelf's log, and a refusal it hit is the first
+        # thing an operator will want when an entry came out verbatim.
+        await self._storage_from_journal(state, node, [(shelf, base, True)], journal)
+        if filed:
+            # The next reader's index is built from the base's contents, so a
+            # spawn later in this same walk must see what this one filed.
+            knowledge_index.forget(base.id)
+        return filed, why
+
+    def _filed_anything(self, journal: Path | None, base_id: str) -> bool:
+        """Did a write actually land on this base?
+
+        **The journal, not the transcript**, for `_knowledge_failures`' reason
+        one step further on: the question is not whether the model said it
+        filed something, it is whether bytes reached the shelf. A pass that
+        reports success and wrote nothing is precisely the failure decision
+        `0015` was written about, and the only witness that cannot be talked
+        round is the server's own record.
+        """
+        for entry in self._knowledge_entries(journal):
+            if str(entry.get("base") or "") != base_id:
+                continue
+            if entry.get("kind") == "read":
+                continue
+            if entry.get("ok"):
+                return True
+        return False
 
     def _knowledge_spawn(
         self,

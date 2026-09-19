@@ -53,6 +53,11 @@ def _translate(exc: Exception) -> HTTPException:
         return HTTPException(status.HTTP_404_NOT_FOUND, str(exc))
     if isinstance(exc, skills.SkillConflict):
         return HTTPException(status.HTTP_409_CONFLICT, str(exc))
+    if isinstance(exc, skills.SkillProtected):
+        # 405 rather than 403: the caller is allowed to act on this skill —
+        # it may edit it, and it may revert it — but *this verb* is not one
+        # the resource has. Nothing about permissions would be true here.
+        return HTTPException(status.HTTP_405_METHOD_NOT_ALLOWED, str(exc))
     if isinstance(exc, skills.SkillInvalid):
         # 422 rather than 400: the request was well-formed and the *document*
         # is what is wrong, and the message says which rule it broke.
@@ -94,7 +99,12 @@ def import_skill(body: SkillImport) -> Skill:
 def delete_skill(name: str) -> Response:
     """Delete the file. Any node still naming it will refuse to run, by name —
     see `runcheck.run_problems`, which is a better place to learn it than a
-    dialog listing every factory in the workspace."""
+    dialog listing every factory in the workspace.
+
+    **For a system skill this reverts rather than removes**, and the skill is
+    still in the next listing — `skills.delete_skill` says why the two are one
+    verb. With no override to revert it is a 405, which is the one case where
+    a `DELETE` here leaves the library exactly as it found it."""
     try:
         skills.delete_skill(name)
     except Exception as exc:

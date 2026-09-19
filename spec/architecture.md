@@ -39,7 +39,8 @@ backend/     FastAPI app, uv-managed  (factoria.main:app)
              scrub.py  token-shaped-string scrubbing · sshkeys.py  the git key
              settings_api.py  account, sign-in, ssh key
              skills.py  the workspace's standing instructions, as files
-             skills_api.py  import, list, delete
+             skills_api.py  import, list, delete/revert
+             system_skills/  the ones a node type is hardwired to, shipped
              agent/    the CLI subprocess layer — the one runtime dependency
                adapter.py  the AgentAdapter seam, and the permission-mode gate
                events.py  the event union
@@ -77,6 +78,11 @@ Skills: `GET`/`POST /api/skills` · `GET`/`DELETE /api/skills/{name}`. An
 import carries the document as text the browser already read — there is no
 upload endpoint and nothing here fetches a URL. No `PUT`: the file in
 `_skills/` is the editor, so a change is an import with `overwrite`.
+**A system skill** (`skills.SYSTEM_SKILLS`) is listed whether or not the
+workspace holds a copy, is edited by the same `POST` writing an override, and
+answers `DELETE` two ways: **204** removing that override and restoring the
+shipped text, **405** when there is nothing to revert. It cannot be removed —
+a node type is hardwired to it.
 
 Settings: `GET /api/agent/status` (account + the CLI's handshake) ·
 `GET`/`POST /api/agent/login`, `POST /api/agent/login/code`,

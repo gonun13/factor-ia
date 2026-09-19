@@ -49,6 +49,7 @@ Three concepts, easy to confuse, and the differences are the design:
 | Authority | unconditional — it is instruction | reference — check it or ignore it | **source of truth** — level with the project's own docs |
 | Lifetime | reviewed in git, outlives every run | one run, then discarded | permanent, and shared across projects |
 | Written by | a person, in `_skills/` | a machine, during the run | a person *or* a machine, over months |
+| Maintained by | whoever edits the file | nobody — it is discarded | the base's own filing skill, per scope |
 | Delivered as | its body, in the system prompt | a path, in the prompt | **tools**, plus an index in the system prompt |
 | Belongs to | the workspace | one run | the workspace, and any team it is shared with |
 
@@ -298,10 +299,11 @@ knowledge_append (base, path, content)         → a new entry at the end
 knowledge_update (base, path, old, new)        → an exact-match replacement
 ```
 
-Five tools, whatever the base is made of. **Three of them are reachable by an
-agent**: `knowledge_append` and `knowledge_update` are refused on every spawn,
-because a run's writing is done by the wire and not by a model
-(*A write wire files the machine's answer*). They stay in the server because it
+Five tools, whatever the base is made of. **Three of them are reachable by a
+machine doing the work**: `knowledge_append` and `knowledge_update` are refused
+on every such spawn, because a run's writing is done by the wire and not by the
+model doing the task (*A write wire files the machine's answer*). The base's own
+filing pass holds all five, against one base. They stay in the server because it
 is the authoritative half of that refusal and because the orchestrator's filing
 goes through the same adapter call behind them — a server that could not write
 would be a server that could not refuse a write either.
@@ -392,6 +394,45 @@ finishes — `orchestrator._file_knowledge`, beside `_file_memories` and on the
 same terms: the answer is what gets stored, it is stored once the answer is
 final, and a machine that crashed still files what it managed to say.
 
+**And the base shapes it on the way in** — see
+[`../decisions/0016`](../decisions/0016-system-skills-and-the-filing-pass.md).
+A verbatim append guarantees something lands and guarantees nothing about its
+shape, so a base filled that way is an append-only transcript: nobody decides
+where an entry belongs, nothing notices the base already covers it, and nothing
+maintains what is there. Before the wire appends, the orchestrator runs a short
+**filing pass** (`orchestrator._filing_pass`) wearing the system skill this
+base's scope names — `knowledge-general`, `knowledge-codebase` or
+`knowledge-project`, in `skills.SYSTEM_SKILLS`. It consults the base through the
+MCP server and files the entry where that base keeps entries.
+
+The pass reaches the base through MCP and **nothing else**: no worktree, no
+codebase, no `--add-dir`, and a grant naming one base. So filing does not depend
+on whether the contributing machine had a repository, and the only thing in the
+workspace this pass can touch is one shelf.
+
+**It runs on the project's default model and provider.** A knowledge node
+carries only `base` — no model plate, no adapter plate — so the node rung of
+the usual *node → project → CLI* ladder is always empty and the project's
+answer applies. That is a choice and not an oversight: one model per project is
+what an operator already tunes, and a second knob would be a second place to
+look when filing turns out to cost more than expected. A per-shelf model would
+be a plate on the node and no change to `_filing_pass`.
+
+**It is the one spawn in the system that may write**, which is the single point
+where `0015` is relaxed, and it is relaxed on the ground `0015` named: filing
+now has to choose a path by subject, and the orchestrator cannot — it does not
+know what is on the shelf. Every machine doing the *work* is still read-only on
+every base.
+
+**The write is verified, and the fallback is the old mechanism.** After the
+pass, `_filed_anything` reads the server's journal. If a write landed, that is
+the entry. If nothing landed — the pass wrote nothing, crashed, or ran past
+`FILING_TIMEOUT_S` — the orchestrator files the answer verbatim exactly as it
+did before, and the base's row says so and says why. **The worst case of this
+design is the whole of the previous one**, which is what keeps `0015`'s lesson
+a mechanism rather than a request. A failed *write* still fails the node; the
+fallback covers a pass that did nothing, not a base that refused.
+
 This is the second design of this and the first one failed in the field. A write
 wire used to mean *you may call `knowledge_append`*, and a capability is not an
 act: run after run, a worker wired to write did its task, called nothing, and
@@ -401,11 +442,13 @@ a log built from tool calls can only show the calls that were made. Asking
 harder in the prompt is the fix that cannot be relied on, because the thing being
 asked is a model's discretion.
 
-So the discretion is gone: **no agent holds a knowledge write tool.**
-`knowledge_append` and `knowledge_update` are on `--disallowedTools` for every
-spawn, the grant document says `writable: false` about every base in it, and the
-server refuses a write it is somehow asked for, exactly as it always did for a
-read-only node. What an agent may still do to a base is consult it.
+So the discretion is gone: **no agent doing the work holds a knowledge write
+tool.** `knowledge_append` and `knowledge_update` are on `--disallowedTools` for
+every such spawn, its grant says `writable: false` about every base in it, and
+the server refuses a write it is somehow asked for, exactly as it always did for
+a read-only node. What an agent may still do to a base is consult it. The base's
+own filing pass is the exception, and it holds no task but the write — see *A
+write wire files the machine's answer*.
 
 **Where an entry lands** is `knowledge/filing.py`, because it is nobody else's
 to decide — the adapter is forbidden policy and the agent is no longer in the
@@ -442,13 +485,20 @@ below every block — ~300 tokens, paid only by machines that hold a write wire,
 and now the same *kind* of thing `memory.WRITER_CONTRACT` is: a description of
 where this machine's words are about to end up, not a request for a tool call.
 
-It says the answer is filed word for word into a permanent, shared base that
-somebody will read months from now with none of this run in front of them; that
-the machine cannot revise it afterwards, because the answer *is* the entry; and
-then what that reader needs — what stays true rather than an account of the run,
+It says the answer is filed into a permanent, shared base that somebody will
+read months from now with none of this run in front of them; that the machine
+does not write it and cannot revise it afterwards; that the base files it
+through its own standing instructions, which may re-place and re-word it but
+will not invent anything; and then what that reader needs — what stays true rather than an account of the run,
 exact paths and names and values, what was checked and what was not, no "as
 discussed" and no run ids, nothing secret, nothing that expires, and one honest
 line when there is nothing durable to say.
+
+**It no longer promises "word for word"**, which stopped being true when the
+base gained a filing pass: an unmarked claim the code does not meet is the one
+failure this tree exists to prevent, and a contract is the worst place to carry
+one. What it promises instead is that nothing is invented — which is true on
+both paths, the pass's and the fallback's.
 
 The base's own block changes with it. A base this node contributes to is
 described as *"Read-only to you — your final answer is filed into it when you
@@ -473,10 +523,16 @@ So:
   those — are named on **`--allowedTools`**, or every call fails as an
   unanswered permission prompt;
 - `knowledge_append` and `knowledge_update` are named on **`--disallowedTools`**
-  on **every** spawn, beside the existing `DENIED_TOOLS`, because writing is the
-  wire's job and happens in the orchestrator;
-- the grant document handed to the server says `writable: false` about every
+  on every spawn *doing the work*, beside the existing `DENIED_TOOLS`, because
+  writing is the wire's job and happens under the orchestrator;
+- the grant document handed to that server says `writable: false` about every
   base in it, so the child holds no document claiming otherwise;
+- **the one exception is the filing pass**, whose entire job is the write
+  (`orchestrator._filing_spawn`): it is handed a grant naming one base with
+  `writable: true` and the write tools on `--allowedTools`. It carries no
+  belt, no worktree and no other base, and the server still re-derives
+  writability from the scope — so a `principles` base reaching it would be
+  refused by the half that has the last word;
 - the server independently refuses a write with `read_only_scope`.
 
 Three mechanisms for one rule is not redundancy here: the deny list stops the
@@ -587,7 +643,12 @@ and gets no card on the timeline.
 | The adapter Protocol, and the markdown one | `knowledge/adapter.py`, `knowledge/markdown.py` |
 | The index block, the filing contract and the cache | `knowledge/index.py` |
 | Where a filed answer lands, and what it looks like | `knowledge/filing.py` |
+| What the filing pass is asked to do | `knowledge/filing.render_request` |
 | The wire that files it | `orchestrator._file_knowledge` |
+| The filing pass, and its writable grant | `orchestrator._filing_pass` / `_filing_spawn` |
+| Whether the pass actually wrote | `orchestrator._filed_anything` |
+| The three shipped skills | `backend/factoria/system_skills/*.md` |
+| The registry, the override, the revert | `skills.SYSTEM_SKILLS`, `skills._resolve`, `skills.delete_skill` |
 | The MCP server and its five tools | `knowledge/mcp.py` |
 | The library API — `POST`/`DELETE`, no `PUT` | `backend/factoria/knowledge_api.py`, a fifth router in `main.py` |
 | The node type, and "attached, not on the line" | `models.NodeType`, `models.ATTACHED_TYPES` |
@@ -627,8 +688,10 @@ so a reviewer sending a writer round again does not fail it for a write it
 already fixed.
 
 The mechanism stands, and decision **5** below moved the writing out from under
-it: the journal is now mostly a record of reads, and the failure that fails a
-node usually comes from the orchestrator's own filing instead. It stays because
+it. The filing pass then gave the journal a second job:
+`orchestrator._filed_anything` reads it to decide whether the pass wrote
+anything at all, which is what makes the verbatim fallback a verified
+transition rather than a guess. It stays because
 the server is still the authoritative refusal and a journal of reads is half of
 what a base has to be able to say about itself.
 
@@ -658,7 +721,9 @@ how an index goes stale.
 
 **5. The wire files, not the agent** — see
 [`../decisions/0015`](../decisions/0015-the-wire-files-not-the-agent.md), which
-supersedes the design's "an agent writes if someone drew the wire". The first
+supersedes the design's "an agent writes if someone drew the wire", and
+[`../decisions/0016`](../decisions/0016-system-skills-and-the-filing-pass.md),
+which reopens it for the base's own filing pass alone. The first
 build made a write wire mean *you may call `knowledge_append`*, and across real
 runs the agents did not call it: the base stayed empty, the knowledge node's log
 opened empty, and nothing anywhere was red, because a capability nobody used is

@@ -6,15 +6,31 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
+from factoria import skills
+
 from tests.test_skills import TEMPLATE, write
 
 
-def test_lists_nothing_before_anything_is_imported(client: TestClient, workspace: Path) -> None:
-    """A workspace with no `_skills/` is an empty library, not a 500 — the
-    directory appears on first import."""
+def names(client: TestClient) -> list[str]:
+    """The imported skills the library is showing.
+
+    The shipped ones (`skills.SYSTEM_SKILLS`) are in every listing, including
+    an empty workspace's, so a test about importing filters them out rather
+    than restating the set."""
+    return [one["name"] for one in client.get("/api/skills").json() if not one["system"]]
+
+
+def test_lists_nothing_imported_before_anything_is_imported(
+    client: TestClient, workspace: Path
+) -> None:
+    """A workspace with no `_skills/` is a library of just the shipped skills,
+    not a 500 — the directory appears on first import."""
     response = client.get("/api/skills")
     assert response.status_code == 200
-    assert response.json() == []
+    assert names(client) == []
+    # And the hardwired ones are there regardless, which is what makes a
+    # knowledge node's filing pass impossible to leave without instructions.
+    assert {one["name"] for one in response.json()} == set(skills.SYSTEM_SKILLS)
 
 
 def test_import_lists_reads_and_deletes(client: TestClient, workspace: Path) -> None:
@@ -23,7 +39,7 @@ def test_import_lists_reads_and_deletes(client: TestClient, workspace: Path) -> 
     assert created.json()["name"] == "repo-recon"
 
     listed = client.get("/api/skills").json()
-    assert [one["name"] for one in listed] == ["repo-recon"]
+    assert names(client) == ["repo-recon"]
     # The summary carries no body: a picker does not need one.
     assert "body" not in listed[0]
 
@@ -31,7 +47,7 @@ def test_import_lists_reads_and_deletes(client: TestClient, workspace: Path) -> 
     assert "# Repo recon" in whole["body"]
 
     assert client.delete("/api/skills/repo-recon").status_code == 204
-    assert client.get("/api/skills").json() == []
+    assert names(client) == []
 
 
 def test_duplicate_conflicts_then_overwrite_replaces(client: TestClient, workspace: Path) -> None:
@@ -101,3 +117,61 @@ def test_cross_origin_import_and_delete_are_refused(client: TestClient, workspac
     assert client.delete("/api/skills/repo-recon", headers=evil).status_code == 403
     # ...and the skill is still there.
     assert client.get("/api/skills/repo-recon").status_code == 200
+
+
+def test_deleting_a_system_skill_is_405_and_says_why(
+    client: TestClient, workspace: Path
+) -> None:
+    """Not 403: the caller may edit this skill and may revert it. What it may
+    not do is make it stop existing, because a knowledge node is hardwired to
+    it."""
+    refused = client.delete("/api/skills/knowledge-codebase")
+    assert refused.status_code == 405
+    assert "cannot be removed" in refused.json()["detail"]
+    assert "knowledge-codebase" in {one["name"] for one in client.get("/api/skills").json()}
+
+
+def test_a_system_skill_is_edited_by_import_and_reverted_by_delete(
+    client: TestClient, workspace: Path
+) -> None:
+    shipped = client.get("/api/skills/knowledge-general").json()["body"]
+
+    edited = client.post(
+        "/api/skills",
+        json={
+            "text": "---\nname: knowledge-general\ndescription: Ours.\n---\n\nOurs.\n",
+            "overwrite": True,
+        },
+    )
+    assert edited.status_code == 201
+    listed = {one["name"]: one for one in client.get("/api/skills").json()}
+    assert listed["knowledge-general"]["overridden"] is True
+    assert listed["knowledge-general"]["system"] is True
+
+    # The same verb that refuses above now reverts, and the skill survives it.
+    assert client.delete("/api/skills/knowledge-general").status_code == 204
+    assert client.get("/api/skills/knowledge-general").json()["body"] == shipped
+    listed = {one["name"]: one for one in client.get("/api/skills").json()}
+    assert listed["knowledge-general"]["overridden"] is False
+
+
+def test_the_single_skill_route_says_whether_it_is_a_system_one(
+    client: TestClient, workspace: Path
+) -> None:
+    """The editor opens through this route, not the listing, and it is the
+    screen that most needs to know — a warning it cannot show is no warning."""
+    shipped = client.get("/api/skills/knowledge-project").json()
+    assert shipped["system"] is True and shipped["overridden"] is False
+
+    client.post(
+        "/api/skills",
+        json={
+            "text": "---\nname: knowledge-project\ndescription: Ours.\n---\n\nOurs.\n",
+            "overwrite": True,
+        },
+    )
+    assert client.get("/api/skills/knowledge-project").json()["overridden"] is True
+
+    client.post("/api/skills", json={"text": TEMPLATE, "filename": "repo-recon.md"})
+    ordinary = client.get("/api/skills/repo-recon").json()
+    assert ordinary["system"] is False and ordinary["overridden"] is False

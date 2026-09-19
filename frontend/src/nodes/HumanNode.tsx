@@ -38,9 +38,17 @@ export function HumanNode({ id, data }: NodeProps<FlowNode>) {
 
   const nodeSkill = (config.skill as string | undefined) ?? "";
   const chosenSkill = skills.find((skill) => skill.name === nodeSkill);
+  // Not offered, and still shown if one is somehow named — `AgentNode`'s two
+  // rules, for its two reasons: a knowledge node applies a system skill and
+  // nothing wears one, and a `<select>` whose value matches no option renders
+  // as the first option instead.
+  const wearable = skills.filter((skill) => !skill.system);
   // Guarded on a non-empty list for `AgentNode`'s reason: an unreadable
   // `_skills/` must not make every node that wears a skill look broken.
-  const staleSkill = nodeSkill !== "" && skills.length > 0 && chosenSkill === undefined;
+  const staleSkill =
+    nodeSkill !== "" &&
+    skills.length > 0 &&
+    (chosenSkill === undefined || chosenSkill.system);
   const nodeModel = (config.model as string | undefined) ?? "";
   const provider = providerInForce(
     config.adapter as string | undefined,
@@ -139,8 +147,13 @@ export function HumanNode({ id, data }: NodeProps<FlowNode>) {
           }
         >
           <option value="">— none attached —</option>
-          {staleSkill && <option value={nodeSkill}>{nodeSkill} (not in _skills/)</option>}
-          {skills.map((skill) => (
+          {staleSkill && (
+            <option value={nodeSkill}>
+              {nodeSkill}
+              {chosenSkill?.system ? " (a system skill)" : " (not in _skills/)"}
+            </option>
+          )}
+          {wearable.map((skill) => (
             <option key={skill.name} value={skill.name} title={skill.description}>
               {skill.name}
             </option>
@@ -152,7 +165,13 @@ export function HumanNode({ id, data }: NodeProps<FlowNode>) {
             {chosenSkill.description}
           </span>
         )}
-        {staleSkill && <span className="warn">No longer in _skills/.</span>}
+        {staleSkill && (
+          <span className="warn">
+            {chosenSkill?.system
+              ? "Built into the knowledge node — a node cannot wear it."
+              : "No longer in _skills/."}
+          </span>
+        )}
         {!nodeSkill && (
           <span className="warn">A scope node needs one to know what to ask about.</span>
         )}

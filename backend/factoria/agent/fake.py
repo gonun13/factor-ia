@@ -39,6 +39,7 @@ still has to be exercised by something, and that something is the fake.
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import uuid
 from pathlib import Path
@@ -84,6 +85,15 @@ def _init(session_id: str, cwd: str) -> ev.SessionInit:
         agents=[],
         permission_mode="default",
     )
+
+
+#: The two knowledge tools this module names, in the CLI's spelling.
+#: Literals rather than an import of `knowledge.mcp`: the fake is on the far
+#: side of the adapter seam and must not learn what a knowledge base is. A
+#: drift between these and the server's own spelling is caught by
+#: `test_knowledge_run.py`, which asserts the write actually lands.
+_KNOWLEDGE_LIST = "mcp__knowledge__knowledge_list"
+_KNOWLEDGE_APPEND = "mcp__knowledge__knowledge_append"
 
 
 def success_script(session_id: str, cwd: str, prompt: str, cost: float) -> Iterable[AgentEvent]:
@@ -346,6 +356,45 @@ def scope_document(answers: dict[str, str]) -> str:
     return "\n".join(lines).strip() + "\n"
 
 
+def knowledge_file_script(
+    session_id: str, cwd: str, prompt: str, cost: float
+) -> Iterable[AgentEvent]:
+    """A knowledge filing pass that consults the base and then writes to it.
+
+    The one script whose tool calls the fake performs *for real* against a
+    knowledge base, the way `success_script`'s `Edit` is performed against the
+    worktree (`apply_tool`). Without it nothing under `FACTOR_IA_ADAPTER=fake`
+    could exercise a filing pass that actually files — the fake spawns no MCP
+    server, so the journal the orchestrator reads would always be empty and
+    every test would be testing the fallback.
+
+    It reads before it writes because that is what the shipped skills tell a
+    writer to do, and a fake that skipped it would let a regression through in
+    the one behaviour those skills exist to produce.
+    """
+    listing, writing = f"toolu_{uuid.uuid4().hex[:12]}", f"toolu_{uuid.uuid4().hex[:12]}"
+    yield _init(session_id, cwd)
+    yield ev.TextDelta(session_id=session_id, text="Filing this into the base.")
+    yield ev.ToolStart(
+        session_id=session_id,
+        tool_use_id=listing,
+        name=_KNOWLEDGE_LIST,
+        input={},
+    )
+    yield ev.ToolEnd(session_id=session_id, tool_use_id=listing, output="[]")
+    yield ev.ToolStart(
+        session_id=session_id,
+        tool_use_id=writing,
+        name=_KNOWLEDGE_APPEND,
+        # No `base` and no `path`: the fake fills both from the grant, so a
+        # script cannot address a base the orchestrator did not hand it.
+        input={"content": prompt},
+    )
+    yield ev.ToolEnd(session_id=session_id, tool_use_id=writing, output="written")
+    yield ev.Result(session_id=session_id, text="Filed.", cost_usd=cost)
+    yield ev.Exit(session_id=session_id, cause="completed", code=0)
+
+
 SCRIPTS: dict[str, Callable[[str, str, str, float], Iterable[AgentEvent]]] = {
     "success": success_script,
     #: Completes without producing any text. The empty belt, without a failure.
@@ -363,6 +412,10 @@ SCRIPTS: dict[str, Callable[[str, str, str, float], Iterable[AgentEvent]]] = {
     # `verdict-pass` releases it.
     "verdict-pass": _verdict_script("pass", "the fix is there and the tests cover it"),
     "verdict-fail": _verdict_script("fail", "the bounds check is still missing"),
+    # A knowledge node's filing pass, writing for real into the base its grant
+    # names. The default for that pass is `silent`, which files nothing and so
+    # exercises the orchestrator's verbatim fallback; this is the other half.
+    "knowledge-file": knowledge_file_script,
 }
 
 
@@ -440,6 +493,9 @@ class FakeRun:
         #: recorded here for a test to assert.
         self.append_system_prompt = run_config.append_system_prompt
         self.add_dirs = list(run_config.add_dirs)
+        self.mcp_servers = dict(run_config.mcp_servers)
+        self.allowed_tools = list(run_config.allowed_tools)
+        self.disallowed_tools = list(run_config.disallowed_tools)
         self.permission_prompt_tool = run_config.permission_prompt_tool
         #: Permission requests this run is parked on, by request id. Only the
         #: `scope` script raises any — see `_scope_events`.
@@ -598,7 +654,71 @@ class FakeRun:
                 touched = apply_tool(self._cwd, event.name, event.input)
                 if touched:
                     self.written.append(touched)
+            if (
+                self._write_files
+                and event.type == "tool.start"
+                and event.name == _KNOWLEDGE_APPEND
+                and isinstance(event.input, dict)
+            ):
+                touched = self._apply_knowledge_append(event.input)
+                if touched:
+                    self.written.append(touched)
             yield event
+
+    def _apply_knowledge_append(self, tool_input: dict[str, Any]) -> str | None:
+        """Do what the real MCP server would have done for this call.
+
+        The fake spawns no server, so the *effect* a filing pass is judged by —
+        bytes in the base and a line in the journal the orchestrator reads —
+        has to be produced here or not at all. Kept deliberately thin: it reads
+        the grant this run was handed, appends to the first base in it, and
+        journals the write in the server's own shape.
+
+        **The grant is the boundary here exactly as it is in the real server.**
+        The script names no base; this reads one out of the document the
+        orchestrator wrote, so a fake run can no more reach an ungranted base
+        than a real one can.
+        """
+        server = self.mcp_servers.get("knowledge")
+        if not isinstance(server, dict):
+            return None
+        grant_path = (server.get("env") or {}).get("FACTOR_IA_KNOWLEDGE_GRANT")
+        if not grant_path:
+            return None
+        try:
+            grant = json.loads(Path(grant_path).read_text(encoding="utf-8"))
+            base = (grant.get("bases") or [])[0]
+            root = Path(base["root"])
+        except (OSError, ValueError, KeyError, IndexError):
+            return None
+        if not base.get("writable"):
+            return None
+        relative = str(tool_input.get("path") or "filed.md")
+        content = str(tool_input.get("content") or "")
+        target = root / relative
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            with target.open("a", encoding="utf-8") as handle:
+                handle.write(content.rstrip("\n") + "\n")
+        except OSError:
+            return None
+        journal = grant.get("journal")
+        if journal:
+            line = json.dumps(
+                {
+                    "base": base.get("id"),
+                    "kind": "write",
+                    "tool": "knowledge_append",
+                    "path": relative,
+                    "ok": True,
+                }
+            )
+            try:
+                with Path(journal).open("a", encoding="utf-8") as handle:
+                    handle.write(line + "\n")
+            except OSError:
+                pass
+        return str(target)
 
 
 class FakeAdapter:

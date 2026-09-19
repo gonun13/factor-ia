@@ -464,12 +464,18 @@ def test_an_empty_read_only_base_says_the_search_will_miss(workspace: Path) -> N
 def test_a_contributing_spawn_is_told_its_answer_is_the_entry(workspace: Path) -> None:
     """**A capability was not an act.** The first build asked the agent to call
     a write tool and it did not; the wire files now, so what is left to say is
-    what the answer has to contain."""
+    what the answer has to contain.
+
+    And it must not promise *verbatim*, which stopped being true when the base
+    gained a filing pass of its own: an unmarked false claim in a contract is
+    the one thing a contract cannot carry."""
     section = index.compose(["## Knowledge: A"], contributes=True)
     assert section is not None
     assert "## What you say is filed" in section
-    assert "filed, word for word," in section
-    assert "You do not write to it yourself" in section
+    assert "do not write to it yourself" in section
+    assert "word for word" not in section
+    # What replaced it: re-shaped, never invented.
+    assert "nothing will be invented" in section
 
 
 def test_a_consulting_spawn_gets_no_contract(workspace: Path) -> None:

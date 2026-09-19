@@ -109,9 +109,85 @@ try {
   check("a duplicate name offers Replace and nothing else", await page.locator(".skill-import .destructive").innerText(), "Replace it");
   await page.getByRole("button", { name: "Cancel" }).click();
 
+  // ---- system skills: in the library, never in a picker -------------------
+  // A knowledge node applies one to what it is handed; nothing wears one. So
+  // the library must show all three and offer no delete, and the node's plate
+  // must not list them at all.
+  const SYSTEM = "knowledge-codebase";
+  check("a system skill is in the library",
+    await page.locator(".skill-card", { hasText: SYSTEM }).count(), 1);
+  check("it says so on the card",
+    await page.locator(".skill-card", { hasText: SYSTEM }).locator(".skill-badge").innerText(), "system");
+  check("and carries the knowledge tone, not the ordinary one",
+    await page.locator(".skill-card", { hasText: SYSTEM }).evaluate(
+      (el) => el.classList.contains("is-system")), true);
+  check("the imported skill does not",
+    await page.locator(".skill-card", { hasText: SKILL }).first().evaluate(
+      (el) => el.classList.contains("is-system")), false);
+
+  // System first, then everything by name — so the shipped three are a block
+  // at the top and an import has a stable place to start.
+  const order = await page.locator(".skill-grid .skill-card .name").allInnerTexts();
+  const systemRows = order.filter((name) => name.startsWith("knowledge-")).length;
+  check("the system skills sort to the top",
+    order.slice(0, 3).every((name) => name.startsWith("knowledge-")) && systemRows >= 3, true);
+  check("and the imported one is below them",
+    order.indexOf(SKILL) >= 3, true);
+  check("and it offers no delete, because a node type is built on it",
+    await page.locator(`.skill-slot:has(.skill-card:text-matches("${SYSTEM}")) .card-delete`).count(), 0);
+
+  // Reverting is offered only once there is an edit to undo.
+  const edited = await api("/api/skills", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      text: `---\nname: ${SYSTEM}\ndescription: Ours for this test.\n---\n\nOurs.\n`,
+      overwrite: true,
+    }),
+  });
+  check("a system skill is edited by the ordinary import", edited.status, 201);
+  const refused = await api(`/api/skills/${SYSTEM}`, { method: "DELETE" });
+  check("but it cannot be deleted", refused.status, 405);
+  await page.reload({ waitUntil: "networkidle" });
+  check("an overridden one offers Revert",
+    await page.locator(`.skill-slot:has(.skill-card:text-matches("${SYSTEM}")) .card-delete`).count(), 1);
+  const reverted = await api(`/api/skills/${SYSTEM}`, { method: "DELETE" });
+  check("reverting succeeds", reverted.status, 204);
+  await page.reload({ waitUntil: "networkidle" });
+  check("and the skill is still there afterwards",
+    await page.locator(".skill-card", { hasText: SYSTEM }).count(), 1);
+
+  // Opening one warns before the document, in the card's tone — a warning
+  // under the textarea is one nobody reads before typing.
+  await page.locator(".skill-card", { hasText: SYSTEM }).click();
+  await page.waitForSelector(".skill-editor");
+  check("the editor carries the card's tone",
+    await page.locator(".skill-editor").evaluate((el) => el.classList.contains("is-system")), true);
+  check("it warns what editing this means",
+    (await page.locator(".skill-editor-warning strong").innerText()),
+    "This skill is built into the knowledge node.");
+  check("the warning names three consequences",
+    await page.locator(".skill-editor-warning li").count(), 3);
+  check("and sits above the document",
+    await page.locator(".skill-editor").evaluate((el) => {
+      const warn = el.querySelector(".skill-editor-warning");
+      return !!(warn.compareDocumentPosition(el.querySelector("textarea")) &
+        Node.DOCUMENT_POSITION_FOLLOWING);
+    }), true);
+  await page.locator(".skill-editor .node-log-close").click();
+
+  await page.locator(".skill-card", { hasText: SKILL }).first().click();
+  await page.waitForSelector(".skill-editor");
+  check("an ordinary skill gets no warning",
+    await page.locator(".skill-editor-warning").count(), 0);
+  await page.locator(".skill-editor .node-log-close").click();
+
   // ---- the plate, on the node ---------------------------------------------
   await page.goto(`${BASE}/#/p/${PROJECT}`, { waitUntil: "networkidle" });
   await page.waitForSelector(".node.type-agent .slot.skill");
+  check("no system skill is offered on a node",
+    await page.locator('.node.type-agent select[aria-label="skill"] option')
+      .filter({ hasText: "knowledge-" }).count(), 0);
   const plate = page.locator('.node.type-agent select[aria-label="skill"]');
   check("the plate starts empty, which is its normal state", await plate.inputValue(), "");
   await plate.selectOption(SKILL);

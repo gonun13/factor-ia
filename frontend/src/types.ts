@@ -226,6 +226,20 @@ export type SkillSummary = {
   description: string;
   bytes: number;
   updated_at: string;
+  /**
+   * A document the product ships and a node type is hardwired to, rather than
+   * one somebody imported. Not offered in a node's picker — a knowledge node
+   * applies it, nothing wears it — and refused by `DELETE`.
+   *
+   * Derived server-side on every listing, like `KnowledgeBaseSummary.writable`.
+   */
+  system: boolean;
+  /**
+   * A workspace file is shadowing the shipped text. Only ever true of a system
+   * skill, and it is what "Revert to default" acts on — the revert removes
+   * this file, and the skill goes on existing.
+   */
+  overridden: boolean;
 };
 
 /**

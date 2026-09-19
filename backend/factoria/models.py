@@ -304,6 +304,19 @@ class SkillSummary(Base):
     #: The file's mtime, not a field we wrote: a skill edited by hand in the
     #: workspace and committed is the normal way one changes.
     updated_at: datetime
+    #: In `skills.SYSTEM_SKILLS` — a document the product ships and a node type
+    #: is hardwired to, rather than one an operator imported. Not offered in a
+    #: node's picker, and refused by `delete_skill`.
+    #:
+    #: Derived from the registry, never stored, and recomputed server-side on
+    #: every listing, in the style of `KnowledgeBaseSummary.writable`: a stale
+    #: browser cannot make a skill system, and a workspace file cannot stop
+    #: being one by claiming otherwise in its frontmatter.
+    system: bool = False
+    #: A workspace file is shadowing the shipped text. Only ever true of a
+    #: system skill, and it is what makes "revert to default" meaningful — the
+    #: thing a revert removes is this file, not the skill.
+    overridden: bool = False
 
 
 class Skill(SkillSummary):

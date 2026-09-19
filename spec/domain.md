@@ -81,6 +81,15 @@ one. An agent node names one and its body is appended to that node's prompt on
 every spawn. **Not a node and not an edge** — a property of the machine, like
 its model.
 
+**System skill** — a skill the product ships and a node type is *hardwired* to,
+rather than one a machine wears by choice (`skills.SYSTEM_SKILLS`). Three
+today, one per writable knowledge scope: a knowledge node applies one to the
+answer it receives, so its base is a datastore and not a transcript. Listed and
+edited in the library like any other skill — an edit is an ordinary `_skills/`
+file shadowing the shipped one — but **never offered in a node's picker** and
+**never deletable**, only revertible to the shipped text. A node naming one is
+refused by `runcheck`.
+
 **Knowledge base** — durable reference, filled before any run exists, outliving
 every run, shared across every project. Discovered like a codebase and a skill:
 the directory is the record and git is the history.

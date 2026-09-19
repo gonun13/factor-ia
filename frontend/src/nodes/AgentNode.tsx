@@ -85,10 +85,19 @@ export function AgentNode({ id, data }: NodeProps<FlowNode>) {
   // offers one, and verbatim where it does not.
   const nodeSkill = (data.definition.config.skill as string | undefined) ?? "";
   const chosenSkill = skills.find((skill) => skill.name === nodeSkill);
-  // A skill the workspace no longer has. Guarded on a non-empty list for
-  // `staleModel`'s reason: an unreadable `_skills/` must not make every node
-  // that wears a skill look broken.
-  const staleSkill = nodeSkill !== "" && skills.length > 0 && chosenSkill === undefined;
+  // **System skills are not offered.** A knowledge node applies one to what it
+  // is handed; nothing wears one. Filtered out of the list rather than left in
+  // and refused, because the picker is where the rule is cheapest to learn.
+  const wearable = skills.filter((skill) => !skill.system);
+  // A skill this node cannot wear — gone from `_skills/`, or a system skill a
+  // hand-edited file still names. Both are refused by `runcheck` in the same
+  // words, and both have to stay *visible* here: React renders a `<select>`
+  // whose value matches no option as the first option instead, which would
+  // show a node wearing something it is not.
+  const staleSkill =
+    nodeSkill !== "" &&
+    skills.length > 0 &&
+    (chosenSkill === undefined || chosenSkill.system);
   // The two plates that have something to say about themselves. Both answer
   // the pointer where the pointer is, like every other description on a node
   // (`NodeNote`) — the skill's own sentence, and, on a provider that reports
@@ -279,8 +288,13 @@ export function AgentNode({ id, data }: NodeProps<FlowNode>) {
           }
         >
           <option value="">— none —</option>
-          {staleSkill && <option value={nodeSkill}>{nodeSkill} (not in _skills/)</option>}
-          {skills.map((skill) => (
+          {staleSkill && (
+            <option value={nodeSkill}>
+              {nodeSkill}
+              {chosenSkill?.system ? " (a system skill)" : " (not in _skills/)"}
+            </option>
+          )}
+          {wearable.map((skill) => (
             <option key={skill.name} value={skill.name} title={skill.description}>
               {skill.name}
             </option>
@@ -293,7 +307,13 @@ export function AgentNode({ id, data }: NodeProps<FlowNode>) {
             {chosenSkill.description}
           </span>
         )}
-        {staleSkill && <span className="warn">No longer in _skills/.</span>}
+        {staleSkill && (
+          <span className="warn">
+            {chosenSkill?.system
+              ? "Built into the knowledge node — a node cannot wear it."
+              : "No longer in _skills/."}
+          </span>
+        )}
       </div>
     </NodeShell>
   );
