@@ -2110,6 +2110,15 @@ ul.plain {
   flex: 1;
 }
 
+/* Why Reject is greyed out, said under the buttons rather than in the
+   placeholder — the placeholder is gone the moment anybody types, and this has
+   to survive a half-written note. Only ever shown on a gate whose rejection
+   loops back up the line. */
+.decision-hint {
+  font-size: 0.72rem;
+  color: var(--ink-faint);
+}
+
 /* ---- the scope node's questionnaire -------------------------------------
    A gate's form is two buttons; this is a list of things somebody is being
    asked. It sits in the same place, under the canvas, and is deliberately

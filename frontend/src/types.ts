@@ -720,6 +720,11 @@ export type RunEvent = { seq: number; run_id: string; timestamp: string } & (
        * log alone, without refetching the run. */
       incoming: string;
       kind: string;
+      /** Whether rejecting sends the work back up the line. When true the note
+       * is not optional: the belt carries it instead of the thing being
+       * rejected, so it is all the next lap has to act on. Absent on run logs
+       * written before a sign-off could close a loop. */
+      loops?: boolean;
     }
   | { type: "run.decision"; node_id: string; approved: boolean; note: string }
   | {

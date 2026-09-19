@@ -199,14 +199,20 @@ notes under them record how the thing was actually settled.
 - ~~**Human-in-the-middle nodes**~~ — *done (stage 8, extended in stage 10).* A
   `human` node stops the line and routes on approve/reject. Its second kind,
   `scope`, negotiates: an agent interviews the operator over several turns and
-  the answers become a document on the success belt ([`behaviour/human-nodes.md`](behaviour/human-nodes.md)). Editing
-  what is on the belt, and redirecting the run to a node of your choosing, are
-  still later — a scope node adds to the brief rather than rewriting it.
+  the answers become a document on the success belt ([`behaviour/human-nodes.md`](behaviour/human-nodes.md)).
+  A rejection may now be **sent back**: draw the reject belt to an earlier
+  machine and the note goes round with it
+  ([`decisions/0019`](decisions/0019-a-person-may-close-a-loop.md)). Editing what
+  is on the belt, and picking *at decision time* which node the run resumes at,
+  are still later — where a rejection goes is drawn on the canvas, and a scope
+  node adds to the brief rather than rewriting it.
 - ~~**Loops**~~ — *done (stage 9).* An `agent` node now has a **kind**: a
   `worker` does the job and has one way out, a `reviewer` judges what it is
-  given and must end its reply with a fenced JSON verdict. A reviewer's `fail`
-  belt is the one belt the cycle check accepts as closing a loop, and the
-  iteration cap lives on the reviewer (`config["max_laps"]`, default 3). A
+  given and must end its reply with a fenced JSON verdict. A **judge's** `fail`
+  belt is what the cycle check accepts as closing a loop — a reviewer's, capped
+  by `config["max_laps"]` (default 3), or an approval sign-off's, capped by the
+  person, who has to click Reject to turn it and must say what to change
+  ([`decisions/0019`](decisions/0019-a-person-may-close-a-loop.md)). A
   missing verdict is a broken contract rather than a rejection: it ends the run
   instead of sending the work back, so a reviewer that cannot follow the format
   surfaces as itself rather than as three wasted laps. Iterating against *tests*

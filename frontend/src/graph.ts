@@ -494,19 +494,22 @@ export function closesLoop(
 /**
  * Whether a belt leaving this node by this handle is one that may close a loop.
  *
- * `decisions/0009`: the one belt that may is a reviewer's `fail` belt. Mirrors
- * the predicate `runcheck.back_edges` skips on, and the identical one
- * `validation.ts` uses to find the loops it reports about.
+ * `decisions/0009`: the belts that may are a **judge's** `fail` belt — a
+ * reviewer's, or an approval sign-off's. A `scope` node is not a judge; its
+ * `fail` means the interview produced no document, which is a crash, and
+ * looping on it would retry a broken session forever.
+ *
+ * Mirrors the predicate `runcheck.back_edges` skips on, and is the one the
+ * validator asks as well, so the canvas and the server cannot disagree about
+ * which belt is a return conveyor.
  */
 export function isLoopBelt(
   definition: NodeDefinition,
   sourceHandle: string | null | undefined,
 ): boolean {
-  return (
-    sourceHandle === "fail" &&
-    definition.type === "agent" &&
-    hasOutcomePorts(definition)
-  );
+  if (sourceHandle !== "fail" || !hasOutcomePorts(definition)) return false;
+  if (definition.type === "agent") return true;
+  return definition.type === "human" && nodeKind(definition) === "approval";
 }
 
 /**
@@ -525,7 +528,7 @@ export function isLoopBelt(
  *
  * - `store` takes a wire, and only a wire — its source is a memory or a base.
  * - `loop` takes a belt that would genuinely come back round, which by
- *   `decisions/0009` means a reviewer's `fail` belt.
+ *   `decisions/0009` means a judge's `fail` belt — a reviewer's or a sign-off's.
  * - `forward` takes everything else off the line.
  *
  * What `forward` deliberately does **not** refuse is a belt that would close a

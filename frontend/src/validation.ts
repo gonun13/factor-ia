@@ -18,6 +18,7 @@ import {
   entryAccepts,
   hasEntryPorts,
   hasOutcomePorts,
+  isLoopBelt,
   isWire,
   knowledgeBase,
   knowledgeWritable,
@@ -639,9 +640,10 @@ export function runProblems(
   // press Run rather than after.
   for (const edge of edges) {
     const source = byId.get(edge.source);
-    if (!source || edge.sourceHandle !== "fail") continue;
-    if (!hasOutcomePorts(source.data.definition)) continue;
-    if (source.data.definition.type !== "agent") continue;
+    // **Asked, not re-derived.** This block open-coded the predicate until a
+    // sign-off's reject belt was allowed to close a loop too, at which point a
+    // third copy of the rule was a third thing to forget.
+    if (!source || !isLoopBelt(source.data.definition, edge.sourceHandle)) continue;
     const body = loopBody(nodes, edges, edge.source, edge.target);
     if (!body.has(edge.source)) continue; // runs forward; closes nothing
 
@@ -657,7 +659,7 @@ export function runProblems(
             ? "would end the line on every lap"
             : "would commit on every lap";
         problems.push({
-          message: `“${label(node)}” is inside the loop that “${label(source)}” closes, so it ${twice}. Move it onto the reviewer’s success belt, below the loop.`,
+          message: `“${label(node)}” is inside the loop that “${label(source)}” closes, so it ${twice}. Move it onto that node’s success belt, below the loop.`,
           nodeIds: [node.id],
         });
       }

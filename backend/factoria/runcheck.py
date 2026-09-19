@@ -273,23 +273,23 @@ def run_problems(
     # client never has to walk the graph. The orchestrator does, and a cycle is
     # how a walk becomes an infinite one.
     #
-    # **One belt may close a loop, and exactly one: a reviewer's fail belt.**
-    # That is the typed back-edge `DESIGN.md` promised, and `back_edges` is the
-    # only thing that decides which belts qualify — shared with
-    # `orchestrator._walk`, so what this refuses and what the walk resets can
-    # never drift. Dropping those belts and requiring the rest to be acyclic is
-    # the whole rule: removing edges cannot create a cycle, so a graph whose
-    # only cycles run through a reviewer's fail port is accepted and every
-    # other cycle is refused exactly as strictly as before.
+    # **Only a judge's fail belt may close a loop** — a reviewer's, or an
+    # approval gate's. That is the typed back-edge `DESIGN.md` promised, and
+    # `back_edges` is the only thing that decides which belts qualify — shared
+    # with `orchestrator._walk`, so what this refuses and what the walk resets
+    # can never drift. Dropping those belts and requiring the rest to be acyclic
+    # is the whole rule: removing edges cannot create a cycle, so a graph whose
+    # only cycles run through a judge's fail port is accepted and every other
+    # cycle is refused exactly as strictly as before.
     back = back_edges(nodes, edges)
     forward = [edge for edge in edges if edge.id not in back]
     if topological_order(nodes, forward) is None:
         problems.append(
             "The belts form a loop — a run walks the graph once, top to bottom. "
-            "The one belt that may close a loop is a reviewer’s fail belt, which "
-            "sends the work back for another lap."
+            "A belt may only close a loop when it is a reviewer’s or a sign-off’s "
+            "fail belt, which sends the work back for another lap."
         )
-    problems += _loop_problems(nodes, back, label)
+    problems += _loop_problems(nodes, edges, back, label)
 
     problems += _git_problems(by_type.get("agent", []), known_codebases, tree_state)
     problems += _remote_problems(
@@ -940,10 +940,18 @@ def _permission_problems(agents: list[Node], label: Callable[[Node], str]) -> li
 def back_edges(nodes: list[Node], edges: list[Edge]) -> dict[str, list[str]]:
     """Every belt that closes a loop, mapped to the loop it closes.
 
-    A belt qualifies when it is a **reviewer's `fail` belt** and its target can
-    reach its source — i.e. it points back up the line it came down. A
-    reviewer's fail belt that runs *forward*, to a human node that escalates
-    say, closes nothing and is not one of these; it is an ordinary belt.
+    A belt qualifies when it is a **judge's `fail` belt** — a reviewer's, or an
+    approval gate's — and its target can reach its source, i.e. it points back
+    up the line it came down. A fail belt that runs *forward*, to a human node
+    that escalates say, closes nothing and is not one of these; it is an
+    ordinary belt.
+
+    **A judge, and a cap** (`decisions/0009`). A reviewer's cap is a number,
+    `config["max_laps"]`. An approval gate's cap is the person: every lap costs
+    an explicit click on Reject, so a gate loop cannot run away while nobody is
+    watching, which is the failure a reviewer's cap exists to bound. A `scope`
+    node is **not** a judge — its `fail` means the session produced no document,
+    which is a crash, and looping on it would retry a broken interview forever.
 
     The value is the **loop body**: every node on some path from the belt's
     target back to its source, inclusive — `descendants(target) ∩
@@ -981,8 +989,10 @@ def back_edges(nodes: list[Node], edges: list[Edge]) -> dict[str, list[str]]:
             continue
         if edge_outcome(edge) != "fail" or not has_outcome_ports(source):
             continue
-        if source.definition.type != "agent":
-            continue  # a human node's fail belt is a decision, not a lap
+        if source.definition.type not in ("agent", "human"):
+            continue
+        if source.definition.type == "human" and node_kind(source) != "approval":
+            continue  # a scope node's fail is a crash, not a judgement
         body = reach(edge.target, successors) & reach(edge.source, predecessors)
         if edge.source not in body:
             continue  # points forward; closes nothing
@@ -992,7 +1002,10 @@ def back_edges(nodes: list[Node], edges: list[Edge]) -> dict[str, list[str]]:
 
 
 def _loop_problems(
-    nodes: list[Node], back: dict[str, list[str]], label: Callable[[Node], str]
+    nodes: list[Node],
+    edges: list[Edge],
+    back: dict[str, list[str]],
+    label: Callable[[Node], str],
 ) -> list[str]:
     """A machine inside a loop that must not run twice.
 
@@ -1004,30 +1017,29 @@ def _loop_problems(
 
     A **human** node inside a loop is deliberately *not* refused: it is asked
     again on every lap, which is the entire point of putting a person in a loop.
-    The canvas raises a notice about it so nobody is surprised.
+    The canvas raises a notice about it so nobody is surprised. A sign-off that
+    *closes* the loop is on its own body for the same reason and is equally
+    fine — being asked again is what sending the work back means.
     """
     if not back:
         return []
     by_id = {node.id: node for node in nodes}
+    # The node each back-edge leaves, so the sentence below names the machine
+    # that actually closes the loop rather than guessing at one. "Inside a loop"
+    # is not actionable on a canvas with two of them, and searching the body for
+    # something judge-shaped would pick the wrong one as soon as a gate and a
+    # reviewer share a body.
+    closers = {edge.id: edge.source for edge in edges if edge.id in back}
     problems: list[str] = []
     reported: set[str] = set()
-    for body in back.values():
+    for edge_id, body in back.items():
         for node_id in body:
             node = by_id.get(node_id)
             if node is None or node.definition.type != "output" or node_id in reported:
                 continue
             reported.add(node_id)
-            # Name the reviewer that closes the loop: "inside a loop" is not
-            # actionable on a canvas with two of them.
-            closer = next(
-                (
-                    by_id[other].definition.label or other
-                    for other in body
-                    if by_id.get(other) is not None
-                    and node_kind(by_id[other]) == "reviewer"
-                ),
-                "a reviewer",
-            )
+            source = by_id.get(closers.get(edge_id, ""))
+            closer = label(source) if source is not None else "the node that closes it"
             # A `discard` output commits nothing, so the sentence changes but
             # the refusal does not: an output is the end of the line, and a
             # line that ends on every lap is a graph mistake whatever the end
@@ -1039,7 +1051,7 @@ def _loop_problems(
             )
             problems.append(
                 f"“{label(node)}” is inside the loop that “{closer}” closes, so it "
-                f"{twice}. Move it onto the reviewer’s success belt, below the loop."
+                f"{twice}. Move it onto that node’s success belt, below the loop."
             )
     return problems
 

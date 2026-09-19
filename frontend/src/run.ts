@@ -97,7 +97,7 @@ export type RunState = {
    * snapshot from before the walk started and never sees a node that parks
    * mid-graph. The event carries what the belts delivered, so a tab that joined
    * late renders the same form from the log alone. */
-  decisions: Record<string, { prompt: string; incoming: string }>;
+  decisions: Record<string, { prompt: string; incoming: string; loops: boolean }>;
   /** The open questionnaires a `scope` node is waiting on, by **request** id.
    *
    * Keyed by request rather than by node, which is the difference between
@@ -230,7 +230,13 @@ export function reduceRunEvent(state: RunState, event: RunEvent): RunState {
         ],
         decisions: {
           ...state.decisions,
-          [event.node_id]: { prompt: event.prompt, incoming: event.incoming },
+          [event.node_id]: {
+            prompt: event.prompt,
+            incoming: event.incoming,
+            // Absent on a run log written before a sign-off could close a loop,
+            // and false is what those runs meant.
+            loops: event.loops === true,
+          },
         },
       };
     case "run.decision":

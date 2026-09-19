@@ -42,7 +42,7 @@ export function RunChat({
 }: {
   exchanges: Exchange[];
   awaiting: NodeRun[];
-  parked: { nodeRun: NodeRun; prompt: string; incoming: string }[];
+  parked: { nodeRun: NodeRun; prompt: string; incoming: string; loops: boolean }[];
   asking: { nodeRun: NodeRun; requestId: string; questions: ScopeQuestion[] }[];
   busy: boolean;
   /** Node id to the name on the canvas, for the history above the forms. The
@@ -124,6 +124,7 @@ export function RunChat({
                 nodeRun={gate.nodeRun}
                 prompt={gate.prompt}
                 incoming={gate.incoming}
+                loops={gate.loops}
                 busy={busy}
                 onDecide={(approved, note) => onDecide(gate.nodeRun.node_id, approved, note)}
               />
@@ -527,21 +528,36 @@ function QuestionForm({
   );
 }
 
+/**
+ * Approve or reject, and the note that travels with it.
+ *
+ * **The note is optional on a gate whose rejection runs forward, and required
+ * on one whose rejection loops.** On a forward belt the note is a comment and
+ * what travels is the work being escalated; on a back-edge the note *replaces*
+ * what the node passes on, so it is the entire brief for the next lap. Sending
+ * a worker round again with nothing to act on is the human version of the
+ * missing verdict that already ends a run, so Reject stays disabled until the
+ * box has something in it. `submit_decision` refuses the same thing server-side
+ * — this is the courtesy half, and the server is the control.
+ */
 function DecisionForm({
   nodeRun,
   prompt,
   incoming,
+  loops,
   busy,
   onDecide,
 }: {
   nodeRun: NodeRun;
   prompt: string;
   incoming: string;
+  loops: boolean;
   busy: boolean;
   onDecide: (approved: boolean, note: string) => void;
 }) {
   const [note, setNote] = useState("");
   const name = nodeRun.label || nodeRun.node_id;
+  const needsNote = loops && note.trim() === "";
 
   return (
     <form className="request decision" onSubmit={(event) => event.preventDefault()}>
@@ -558,7 +574,11 @@ function DecisionForm({
         className="nodrag nowheel"
         rows={2}
         value={note}
-        placeholder="Optional on approve. On reject, this is what goes back down the line."
+        placeholder={
+          loops
+            ? "What needs to change? Rejecting sends the work back up the line, and this is all the next lap gets."
+            : "Optional on approve. On reject, this is what goes back down the line."
+        }
         onChange={(event) => setNote(event.target.value)}
       />
 
@@ -574,12 +594,17 @@ function DecisionForm({
         <button
           className="destructive"
           type="button"
-          disabled={busy}
+          disabled={busy || needsNote}
           onClick={() => onDecide(false, note)}
         >
           Reject
         </button>
       </div>
+      {needsNote && (
+        <span className="decision-hint">
+          Rejecting sends this back up the line — say what to change.
+        </span>
+      )}
     </form>
   );
 }

@@ -462,7 +462,8 @@ class ActiveRun:
     #: a reviewer that produced no verdict, a reviewer that has spent its laps.
     #: Distinct from a `failed` status, which is an *outcome* a belt can carry —
     #: this is the absence of one, and it is what keeps the back-edge reserved
-    #: for a reviewer that explicitly said "fail" with laps left.
+    #: for a judge that explicitly sent the work back — a reviewer saying "fail"
+    #: with laps left, or a person clicking Reject.
     halt: set[str] = field(default_factory=set)
     #: The back-edges of this factory, by edge id, as `runcheck.back_edges`
     #: computed them at the start of the walk. Held here because `_run_agent`
@@ -489,6 +490,25 @@ class ActiveRun:
     #: folded in by `_set_node` because a memory failure is not a status, and
     #: every path out of `_run_agent` passes through that one function.
     memory_notes: dict[str, str] = field(default_factory=dict)
+
+    def loops_back(self, node_id: str) -> bool:
+        """Whether this node's `fail` belt sends the work back up the line.
+
+        Asked of a sign-off in two places — when its form is announced, and when
+        a verdict for it arrives — and answered off `back_edges`, which is the
+        one function that decides what closes a loop. A gate whose rejection
+        loops is a gate whose note is the *only* thing the next lap has to act
+        on, which is why the note stops being optional there.
+
+        `back_edges` is populated by `_walk` before any node settles, so this is
+        answerable from the moment the walk starts and `False` before it — which
+        is the truth, since nothing can be parked on a gate yet either.
+        """
+        return any(
+            edge.id in self.back_edges
+            for edge in self.factory.edges
+            if edge.source == node_id
+        )
 
 
 #: How long a knowledge node's filing pass may take before it is interrupted
@@ -772,6 +792,17 @@ class Orchestrator:
         is where every other transition arrives from. Returning a run this call
         had to wait for would mean blocking the endpoint on the rest of the
         graph.
+
+        **A rejection that loops must carry a note.** When the gate's fail belt
+        runs back up the line, the note is not a comment on the decision — it is
+        the entire content of the next lap, because it replaces what the node
+        passes on. Sending a worker round again with nothing to act on is the
+        human version of the missing verdict that already ends a run, and the
+        cheap place to catch it is here, before the future resolves: the form
+        stays open and the operator types the reason, rather than a lap being
+        spent on silence. A gate whose fail belt runs *forward* is unchanged —
+        there the note really is optional, and what the belt carries is the work
+        being escalated.
         """
         state = self._active.get(run_id)
         if state is None:
@@ -780,6 +811,15 @@ class Orchestrator:
         if future is None or future.done():
             raise RunConflict(
                 f"node {decision.node_id} of run {run_id} is not waiting for a decision"
+            )
+        if (
+            not decision.approved
+            and not decision.note.strip()
+            and state.loops_back(decision.node_id)
+        ):
+            raise RunConflict(
+                "Rejecting sends the work back up the line, so it needs a note "
+                "saying what to change — that note is all the next lap gets."
             )
         future.set_result(decision)
         return state.run
@@ -1088,12 +1128,22 @@ class Orchestrator:
 
         It used to terminate because the graph was acyclic. It now terminates
         because: between two back-edge takings this is a traversal of a finite
-        acyclic graph, and so finite; a back-edge is taken only by a reviewer
-        returning an explicit `fail` verdict with laps left; and `NodeRun.lap`
-        is incremented on every run and **never reset**, including by an outer
-        loop. So each reviewer takes its own back-edge at most `max_laps - 1`
-        times in the whole run, `runcheck` bounds `max_laps` above, and the
-        number of takings is therefore a number rather than a hope.
+        acyclic graph, and so finite; and a back-edge is taken only by a judge
+        deciding to send the work back. There are two judges and each is bounded
+        differently, which is the whole of `decisions/0009`:
+
+        - A **reviewer** takes its back-edge only on an explicit `fail` verdict
+          with laps left, and `NodeRun.lap` is incremented on every run and
+          **never reset**, including by an outer loop. So each reviewer takes its
+          own back-edge at most `max_laps - 1` times in the whole run, `runcheck`
+          bounds `max_laps` above, and the number of takings is a number rather
+          than a hope.
+        - A **sign-off** takes its back-edge only when a person clicks Reject,
+          which carries no number and needs none: every lap costs a deliberate
+          human act, and between two of them the run is parked on
+          `waiting_input` spending nothing. A gate loop cannot run away while
+          nobody is watching, which is the failure a reviewer's cap exists to
+          bound; a run nobody answers is cancelled rather than spun.
 
         The consequence of never resetting `lap`, stated because it is a design
         decision and not an oversight: **with nested loops a cap is a budget for
@@ -1717,6 +1767,15 @@ class Orchestrator:
         making it the *same* outcome an agent's crash produces is what lets one
         belt handle both. `detail` says which it was.
 
+        **The fail belt may now run back up the line** (`decisions/0009`), which
+        is how a person sends work back with a message rather than only forward
+        or nowhere. Nothing here changes for it: the note already replaces what
+        the node passes on, so the back-edge carries the operator's words into
+        the next lap exactly the way it carries a reviewer's `reason`. What does
+        change is that the note stops being optional — `submit_decision` refuses
+        a rejection without one when the belt loops, because on that belt the
+        note is the whole of the next lap's brief.
+
         **`scope` is the other kind, and it branches here** (`models.HumanKind`).
         It is the same node — two ports, parked on `waiting_input`, answered
         over a POST — asking more than once, with an agent deciding what to ask.
@@ -1758,6 +1817,7 @@ class Orchestrator:
                 prompt=prompt,
                 incoming=incoming,
                 kind=node_kind(node),
+                loops=state.loops_back(node.id),
             )
         )
 

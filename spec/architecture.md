@@ -179,6 +179,15 @@ The cap is `config["max_laps"]` on the reviewer, bounded by `verdict.py`, and
 rather than a hope. A crash, a cancel, a spent cap or a missing verdict is a
 `halt`: no belt carries it, so none of them can retry their way round the loop.
 
+**An approval sign-off's reject belt closes a loop on the same terms**
+([`decisions/0019`](decisions/0019-a-person-may-close-a-loop.md)), and carries
+no number, because the cap is the person: every lap is a click on Reject, and
+between two of them the run is parked spending nothing. What it does carry is a
+**required note** — on a back-edge the note replaces what the gate passes on, so
+an empty one would send a worker round again with nothing to act on, and
+`submit_decision` refuses it. A `scope` node is excluded: its `fail` means the
+interview produced no document, which is a crash rather than a judgement.
+
 **The two ends of the line carry a `kind`, and a kind is not a type.** It lives
 in the node's freeform `definition.config["kind"]`, read by `models.node_kind`
 and by `graph.ts`'s `nodeKind`. The reason is the structural rule below: stated
@@ -215,7 +224,8 @@ makes awkward is not a rule.
 `store`, `forward` and `loop`, drawn top to bottom on the left of the chassis
 (`NodeShell.tsx`) and landing in `Edge.target_handle`. A read wire from a memory
 or a knowledge base arrives at `store`, a belt running down the line at
-`forward`, and a reviewer's `fail` belt coming back round at `loop`. A human node
+`forward`, and a judge's `fail` belt coming back round at `loop` — a reviewer's
+or a sign-off's. A human node
 draws two of the three: only an agent may read a memory or a base, so there is no
 `store` entry for a wire that would be refused to land on.
 

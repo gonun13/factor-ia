@@ -3,15 +3,30 @@
 Written for: someone putting a reviewer on the line, and whoever changes the
 cycle rules next.
 
-A **reviewer** judges what it is given and routes on its verdict. Its `fail`
-belt is the one belt in the whole graph allowed to close a loop, which is how a
-factory iterates against a judgement.
+A **reviewer** judges what it is given and routes on its verdict, and its `fail`
+belt may close a loop — which is how a factory iterates against a judgement.
 
 ```
 Request ──► Worker ──► Reviewer ──pass──► Commit
               ▲            │
-              ╰────fail────╯      (the one belt that may close a cycle)
+              ╰────fail────╯      (a belt that may close a cycle)
 ```
+
+**A person is the other judge.** An approval sign-off's reject belt may close a
+loop on exactly the same terms, which is how somebody who disagrees sends the
+work back with a message instead of only forward or nowhere
+([`../decisions/0019`](../decisions/0019-a-person-may-close-a-loop.md)):
+
+```
+Request ──► Worker ──► Sign-off ──approve──► Commit
+              ▲            │
+              ╰──reject────╯      (every lap is a person clicking it)
+```
+
+Everything on this page about what a lap *is* — the body that resets, the shared
+worktree, the entry the belt arrives at, the back-edge staying `taken` — is the
+same for both, because it is one function and one walk. What differs is the cap,
+and that is [its own section](#the-cap).
 
 ---
 
@@ -80,9 +95,14 @@ of the forgiving choice.
 
 ## What may close a cycle
 
-`runcheck.back_edges` decides: **a reviewer's `fail` belt whose target can reach
-its source.** The cycle check drops exactly those belts and then demands the
-rest be acyclic.
+`runcheck.back_edges` decides: **a judge's `fail` belt whose target can reach its
+source** — a reviewer's, or an approval sign-off's. The cycle check drops exactly
+those belts and then demands the rest be acyclic.
+
+A **`scope` node's `fail` belt is not one of them.** It means the interview
+produced no document, which is a crash rather than a judgement, and looping on a
+crash is what `state.halt` exists to prevent. The predicate is about the node's
+*kind*, not its type.
 
 The same function hands the walk the **loop body** it resets, so *what is
 refused* and *what is re-run* cannot drift. One function, two callers, no
@@ -108,14 +128,20 @@ possibility of disagreement.
   [`../decisions/0012`](../decisions/0012-three-entry-handles.md) says why it
   must stay that way — a second answer to "is this a loop" is exactly what
   [`0009`](../decisions/0009-only-a-reviewers-fail-belt-closes-a-loop.md) exists
-  to prevent.
-- **The back edge stays `taken` across the reset.** That is how the reviewer's
-  reason reaches the next lap: `_incoming_text` then hands the worker both the
-  original request and the critique.
+  to prevent. A sign-off's reject belt reaches that same entry, worked out the
+  same way.
+- **The back edge stays `taken` across the reset.** That is how the judge's words
+  reach the next lap — a reviewer's `reason`, or an operator's note:
+  `_incoming_text` then hands the worker both the original request and the
+  critique.
 
 ---
 
 ## The cap
+
+**A reviewer's cap is a number. A person's cap is the person.**
+
+### A reviewer's
 
 `config["max_laps"]` on the **reviewer**, bounded by `verdict.py`:
 
@@ -133,6 +159,27 @@ number rather than a hope.
 
 A spent cap is a **halt**: no belt carries it, so it cannot retry its way round
 the loop. Same for a crash, a cancel and a missing verdict.
+
+### A person's
+
+**There is no `max_laps` on a human node, and none is planned.** A gate loop
+cannot turn without a deliberate click on Reject, and between two laps the run
+is parked on `waiting_input` spending nothing — so the thing a reviewer's cap
+exists to bound, a loop running away while nobody is watching, cannot happen
+here. A number would bound something already bounded, and would first be felt as
+a run dying on the lap somebody wanted a fourth look.
+
+`NodeRun.lap` still counts and is still never reset, so a gate loop reads in a
+run log exactly like a reviewer's.
+
+**What a rejection that loops must carry is a note.** On a forward belt the note
+is a comment and what travels is the work being escalated; on a back-edge it
+*replaces* what the gate passes on, so it is the entire brief for the next lap.
+An empty one would send a worker round again holding its own output and no
+instruction — the human form of the missing verdict above — so
+`submit_decision` refuses it and the form disables Reject until the box has
+text. The run stays parked and the person writes the reason, rather than a lap
+being spent on silence.
 
 ---
 

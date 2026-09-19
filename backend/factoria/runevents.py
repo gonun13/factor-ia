@@ -113,6 +113,13 @@ class RunDecisionRequestEvent(RunEventBase):
     incoming: str = ""
     #: `approval` today — see `models.HumanKind`.
     kind: str = "approval"
+    #: Whether rejecting sends the work back up the line rather than onward.
+    #: When true the note is **not** optional: the belt carries it instead of
+    #: the thing being rejected, so it is all the next lap has to act on, and
+    #: `submit_decision` refuses a rejection without one. Carried on the event
+    #: rather than looked up, so a tab that joined late renders the form the way
+    #: the node would have — the standard this class is already held to.
+    loops: bool = False
 
 
 class RunDecisionEvent(RunEventBase):

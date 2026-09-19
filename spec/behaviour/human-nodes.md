@@ -25,6 +25,30 @@ The two share everything else — both stop the run, both have a success port an
 a fail port, both are answered in the run panel under the canvas — and in the
 code they are one function with a branch in it (`orchestrator._run_human`).
 
+### Where a sign-off's rejection goes
+
+Three places, and the third arrived after the other two:
+
+- **Onward**, to a rescue machine on the fail belt. The note is a comment; what
+  travels is the work being escalated.
+- **Nowhere.** A fail belt nobody drew ends the run — which is how a graph says
+  *"if they say no, stop"*.
+- **Back up the line.** Draw the reject belt to an earlier machine and the
+  rejection closes a loop: the work is sent round again, and the note goes with
+  it as the whole of the next lap's brief
+  ([`../decisions/0019`](../decisions/0019-a-person-may-close-a-loop.md)).
+
+On that third belt **the note is required**. It replaces what the gate passes
+on, so an empty one would hand a worker back its own output with no instruction
+— so Reject stays disabled until the box has text, and the server refuses the
+rejection if it arrives anyway. There is no lap cap on a gate: every turn is a
+person clicking Reject, and between two of them the run is parked spending
+nothing. [`review-loops.md`](review-loops.md) has the rest.
+
+**A scope node's fail belt may not do this.** It means the interview produced no
+document, which is a crash rather than a judgement, and a loop closed on a crash
+would retry a broken session forever.
+
 ## What it is for
 
 The front of a line, before anything has been built.

@@ -202,16 +202,20 @@ awkward is not a rule — `main.json` is a file people edit in a pull request.
    nothing.** (Same three places, with no source handle on an output.)
 3. **A factory needs at least one input and at least one output.**
 4. **Only a reviewer's `fail` belt may close a cycle.** `runcheck.back_edges`
-   decides which belts qualify — a reviewer's `fail` belt whose target can reach
-   its source — and the cycle check drops exactly those before demanding the
-   rest be acyclic. The same function gives the walk the loop body it resets, so
-   what is refused and what is re-run cannot drift.
+   decides which belts qualify — a **judge's** `fail` belt whose target can reach
+   its source, meaning a reviewer's or an approval sign-off's — and the cycle
+   check drops exactly those before demanding the rest be acyclic. A `scope`
+   node's `fail` is a crash rather than a judgement and does not qualify. The
+   same function gives the walk the loop body it resets, so what is refused and
+   what is re-run cannot drift. Each judge is bounded differently: a reviewer by
+   `config["max_laps"]`, a sign-off by the person, who has to click Reject to
+   turn it ([`decisions/0019`](decisions/0019-a-person-may-close-a-loop.md)).
 5. **No output node may sit on a loop body.** Otherwise it would commit on every
    lap — or, for a `discard` output, end the line on every lap. The rule is
    type-wide; only the sentence the operator reads changes.
 6. **An edge into an agent or a human node arrives at one of three entries.**
    `store` takes a wire from a memory or a base, `forward` a belt running down
-   the line, `loop` a reviewer's `fail` belt closing one; a human node draws no
+   the line, `loop` a judge's `fail` belt closing one; a human node draws no
    `store`, because only an agent may read storage. Enforced **client-side only**
    — `graph.entryAccepts`, as the edge is drawn, and `validation.ts` afterwards
    as a notice. Deliberately not a server rule: nothing in `runcheck` or the

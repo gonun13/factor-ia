@@ -14,16 +14,18 @@ quietly wrong rather than loudly broken.
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 import pytest
 
 from factoria import runcheck, verdict
-from factoria.models import Edge, Factory, Node
-from factoria.orchestrator import Orchestrator
+from factoria.models import Edge, Factory, Node, RunDecision
+from factoria.orchestrator import Orchestrator, RunConflict
 from factoria.runlog import RunLog
 from factoria.store import Store
 
+from .test_human import _parked
 from .test_routing import agent, belt, drive, node, project, repo, orch, save, statuses  # noqa: F401
 
 
@@ -669,3 +671,268 @@ def test_an_inner_loop_turning_does_not_strand_the_outer_loop_s_back_edge(
         "n-outer": 1,
         "n-out": 1,
     }
+
+
+# ---- a person as the judge -------------------------------------------------
+#
+# `decisions/0009` restricted the back-edge to a reviewer's fail belt so that
+# every loop would have **a judge and a cap**. An approval sign-off is the
+# second judge, and its cap is the person: every lap costs a deliberate click on
+# Reject, and between two of them the run is parked spending nothing. The tests
+# below are the reviewer tests above asked again of a human — the loop turns,
+# the output runs once, and the note is what reaches the next lap.
+
+
+def gate_factory(test_store: Store, *, loops: bool = True) -> Factory:
+    """The canonical shape with a person at the bottom instead of a reviewer.
+
+        n-in ──► n-work ──► n-gate ──success──► n-out
+                    ▲           │
+                    └────fail───┘   (drawn only when `loops`)
+
+    Without `loops` the reject belt is not drawn at all, which is the graph that
+    says "if they say no, stop" — and the graph on which a note is still
+    optional.
+    """
+    edges = [
+        belt("n-in", "n-work"),
+        belt("n-work", "n-gate"),
+        belt("n-gate", "n-out", "success"),
+    ]
+    if loops:
+        edges.append(belt("n-gate", "n-work", "fail"))
+    return save(
+        test_store,
+        [
+            node("n-in", "input"),
+            agent("n-work"),
+            node("n-gate", "human", prompt="Does this look right?"),
+            node("n-out", "output"),
+        ],
+        edges,
+    )
+
+
+def drive_gate(orch: Orchestrator, *decisions: RunDecision, text: str = "do the thing"):
+    """Start a run and answer the gate once per decision, in order.
+
+    **Keyed on the lap, not on the status.** A rejection resets the loop and the
+    fake worker finishes in microseconds, so the gate is parked again — back on
+    `waiting_input` — long before a poll could catch it leaving. Waiting for the
+    *n*-th park is the only thing that actually distinguishes one lap's open
+    form from the next one's.
+    """
+
+    async def go():
+        run = await orch.start("demo", "main")
+        await orch.submit_input(run.id, text)
+        # Held now rather than after the answers: the last answer is the one the
+        # walk runs to completion on, and a finished run is gone from `_active`.
+        task = orch._active[run.id].task
+        assert task is not None, "no walk was started"
+        for lap, decision in enumerate(decisions, start=1):
+            await _parked_at(orch, run.id, "n-gate", lap)
+            await orch.submit_decision(run.id, decision)
+        await asyncio.wait_for(task, 15)
+        return orch.get(run.id)
+
+    return asyncio.run(go())
+
+
+async def _parked_at(
+    orch: Orchestrator, run_id: str, node_id: str, lap: int, timeout: float = 10.0
+) -> None:
+    """Wait for a node to be parked on a person for the `lap`-th time."""
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    while True:
+        state = orch._active.get(run_id)
+        node_run = state.run.node_run(node_id) if state is not None else None
+        if (
+            node_run is not None
+            and node_run.status == "waiting_input"
+            and node_run.lap == lap
+        ):
+            return
+        assert loop.time() < deadline, f"{node_id} never parked on lap {lap}"
+        await asyncio.sleep(0.005)
+
+
+def test_a_rejection_sends_the_work_back_and_the_second_lap_reaches_the_output(
+    test_store: Store, orch: Orchestrator, repo: Path
+) -> None:
+    """The silent-failure guard, with a person closing the loop.
+
+    The same assertion on the *output* node and for the same reason: a reset
+    that left the gate's success belt dead would pass on lap 2 into a line that
+    can no longer run, and the run would end `succeeded` having committed
+    nothing.
+    """
+    gate_factory(test_store)
+    run = drive_gate(
+        orch,
+        RunDecision(node_id="n-gate", approved=False, note="the bounds check is missing"),
+        RunDecision(node_id="n-gate", approved=True),
+    )
+
+    assert run.status == "succeeded", run.detail
+    assert statuses(run)["n-out"] == "succeeded", "the loop passed into a dead line"
+    assert laps(run) == {"n-in": 0, "n-work": 2, "n-gate": 2, "n-out": 1}
+
+
+def test_the_note_is_what_the_next_lap_is_handed(
+    test_store: Store, orch: Orchestrator, repo: Path
+) -> None:
+    """The whole point of the feature: *"I don't agree, here is why."*
+
+    The note replaces what the gate passes on, so the back-edge carries the
+    operator's words exactly the way it carries a reviewer's `reason`. The belt
+    from the input node is still `taken` — its source is outside the reset set —
+    so the original request arrives alongside it.
+    """
+    gate_factory(test_store)
+    run = drive_gate(
+        orch,
+        RunDecision(node_id="n-gate", approved=False, note="use the other endpoint"),
+        RunDecision(node_id="n-gate", approved=True),
+        text="rebuild the widget",
+    )
+
+    work = run.node_run("n-work")
+    assert work is not None
+    assert "rebuild the widget" in work.output_text
+    assert "use the other endpoint" in work.output_text, "the note never arrived"
+
+
+def test_the_output_node_runs_once_however_many_times_the_person_says_no(
+    test_store: Store, orch: Orchestrator, repo: Path
+) -> None:
+    gate_factory(test_store)
+    run = drive_gate(
+        orch,
+        RunDecision(node_id="n-gate", approved=False, note="again"),
+        RunDecision(node_id="n-gate", approved=False, note="and again"),
+        RunDecision(node_id="n-gate", approved=True),
+    )
+
+    assert run.status == "succeeded", run.detail
+    started = [
+        event
+        for event in RunLog(run.id).read(0)
+        if event.get("type") == "node.status"
+        and event.get("node_id") == "n-out"
+        and event.get("status") == "running"
+    ]
+    assert len(started) == 1, "the output node ran on more than one lap"
+    assert laps(run)["n-work"] == 3
+
+
+def test_an_approval_gate_s_fail_belt_closes_a_loop_and_a_scope_node_s_does_not(
+    test_store: Store, orch: Orchestrator, repo: Path
+) -> None:
+    """A `scope` node's `fail` means the interview produced no document.
+
+    That is a crash, not a judgement, and looping on it would retry a broken
+    session forever — the same reason `_settle` turns an agent crash into a
+    halt. So the predicate is about the node's *kind*, not its type.
+    """
+    factory = gate_factory(test_store)
+    back = runcheck.back_edges(factory.nodes, factory.edges)
+    assert list(back) == ["n-gate-fail->n-work"]
+    assert back["n-gate-fail->n-work"] == ["n-work", "n-gate"]
+
+    for gate_node in factory.nodes:
+        if gate_node.id == "n-gate":
+            gate_node.definition.config["kind"] = "scope"
+    assert runcheck.back_edges(factory.nodes, factory.edges) == {}
+
+
+def test_a_gate_loop_is_runnable_and_an_output_inside_one_still_is_not(
+    test_store: Store, orch: Orchestrator, repo: Path
+) -> None:
+    """And the refusal names the gate, not "a reviewer" — there isn't one."""
+    factory = gate_factory(test_store)
+    assert runcheck.run_problems(factory) == []
+
+    # Move the commit node inside the loop: work → out → gate, gate → work.
+    factory.edges = [
+        belt("n-in", "n-work"),
+        belt("n-work", "n-out"),
+        belt("n-out", "n-gate"),
+        belt("n-gate", "n-work", "fail"),
+    ]
+    problems = runcheck.run_problems(factory)
+    assert any("would commit on every lap" in problem for problem in problems), problems
+    assert any("“n-gate” closes" in problem for problem in problems), problems
+    assert not any("reviewer’s success belt" in problem for problem in problems), problems
+
+
+def test_rejecting_a_looping_gate_needs_a_note_and_rejecting_a_forward_one_does_not(
+    test_store: Store, orch: Orchestrator, repo: Path
+) -> None:
+    """**A lap with nothing to act on is the human missing verdict.**
+
+    On a back-edge the note is not a comment on the decision, it is the entire
+    brief for the next lap — so an empty one is refused and the form stays open.
+    On a belt that runs forward the note really is optional, and what travels is
+    the work being escalated.
+    """
+    gate_factory(test_store)
+
+    async def go():
+        run = await orch.start("demo", "main")
+        await orch.submit_input(run.id, "do it")
+        await _parked(orch, run.id, "n-gate")
+        with pytest.raises(RunConflict, match="needs a note"):
+            await orch.submit_decision(
+                run.id, RunDecision(node_id="n-gate", approved=False)
+            )
+        # Still parked: the future was never resolved, so the form is still open
+        # and the person can type the reason.
+        assert orch._active[run.id].run.node_run("n-gate").status == "waiting_input"
+        # An approval needs nothing, on this gate or any other.
+        await orch.submit_decision(
+            run.id, RunDecision(node_id="n-gate", approved=True)
+        )
+        await asyncio.wait_for(orch._active[run.id].task, 15)
+        return orch.get(run.id)
+
+    assert asyncio.run(go()).status == "succeeded"
+
+
+def test_a_gate_whose_rejection_runs_forward_still_takes_an_empty_note(
+    test_store: Store, orch: Orchestrator, repo: Path
+) -> None:
+    gate_factory(test_store, loops=False)
+    run = drive_gate(orch, RunDecision(node_id="n-gate", approved=False))
+
+    assert run.status == "failed"
+    assert statuses(run)["n-gate"] == "failed"
+
+
+def test_the_form_is_told_whether_rejecting_sends_the_work_back(
+    test_store: Store, orch: Orchestrator, repo: Path
+) -> None:
+    """Carried on the event, so a tab that joined late renders the right form.
+
+    Without it the browser would have to re-derive "does this gate loop" from
+    the factory file — a second answer to the question `back_edges` already
+    answers, which is exactly what `decisions/0009` exists to prevent.
+    """
+    gate_factory(test_store)
+    run = drive_gate(orch, RunDecision(node_id="n-gate", approved=True))
+    asked = [
+        event
+        for event in RunLog(run.id).read(0)
+        if event.get("type") == "run.decision.request"
+    ]
+    assert [event["loops"] for event in asked] == [True]
+
+    gate_factory(test_store, loops=False)
+    run = drive_gate(orch, RunDecision(node_id="n-gate", approved=True))
+    asked = [
+        event
+        for event in RunLog(run.id).read(0)
+        if event.get("type") == "run.decision.request"
+    ]
+    assert [event["loops"] for event in asked] == [False]

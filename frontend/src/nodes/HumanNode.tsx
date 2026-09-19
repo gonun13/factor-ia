@@ -88,6 +88,9 @@ export function HumanNode({ id, data }: NodeProps<FlowNode>) {
           <p>
             The line stops here. Approving takes the upper belt, rejecting the
             lower one — and a rejection with no belt drawn for it ends the run.
+            Draw that lower belt back to an earlier machine and a rejection
+            sends the work round again, carrying what you wrote as the whole of
+            the next lap’s brief.
           </p>
         }
       >
