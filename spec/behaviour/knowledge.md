@@ -143,10 +143,13 @@ format: markdown
 updated: 2026-09-16T10:18:44Z
 ---
 
-What this base is, what belongs in it, what does not, and — if agents may
-write — what a good entry looks like. This prose is shown to the user in the
-library and given to the agent in its index block, so it is written once for
-both readers.
+What this base is for: which shelf this is, in a sentence somebody reading a
+library can act on. This prose is shown to the user — the library card, the
+editor's header, the node's hover note — and is **not** given to the agent.
+What *belongs* in a base is said once, in the filing skills
+(`knowledge-general` / `knowledge-codebase` / `knowledge-project`), and a
+per-base paragraph repeating it was prompt paid on every turn of every machine
+wired to the base.
 ```
 
 **Budgets, as numbers**: 64 KiB per file, 4 MiB per base, 2 000 files per base.
@@ -157,9 +160,41 @@ is a reasonable answer for a cache and a dishonest one for a source of truth.
 a section on the projects list (beside `frontend/src/screens/ProjectList.tsx`'s
 `skills-section`), served by a fifth router `/api/knowledge` modelled on
 `backend/factoria/skills_api.py` — `POST` to create or import, `DELETE` to
-remove, **no `PUT`**, and nothing fetches a URL. The file is the editor. A server
-that offered an edit endpoint over a document git owns would be a second
-authority, and the two would disagree the first time someone pulled.
+remove, and nothing fetches a URL.
+
+**No `PUT` on a base.** A base's *identity* — its id, its scope, the prose the
+library shows — is create-time, and is edited on disk and committed. A re-scope
+through a text box is the one change nothing downstream could detect.
+
+**A `PUT` and a `DELETE` on one entry.** `PUT /api/knowledge/{id}/entry?path=…`
+(`knowledge_api.save_entry`) saves text over a content file the base **already
+lists**; `DELETE` on the same address (`delete_entry`) removes one. Both share
+one precondition (`_content_entry`) and both refuse `manifest.md`. Neither
+creates anything, and **there is no rename**: a rename is a delete and a
+create, and the create is the half that stays in the workspace, where git sees
+a new file arrive as a new file. Both write through the same adapter the agents
+read with, under the same per-base lock the orchestrator's filing takes, inside
+the same budgets — one set of limits, not two that drift — and both invalidate
+that base's cached index on the way out.
+
+**Deleting is the operator's alone.** `remove` is not an MCP tool, so
+`mcp.TOOL_SCHEMAS` does not name it and there is nothing to put on
+`--disallowedTools`: the refusal is that the capability was never built on that
+side. A machine that could delete from a source of truth could delete the entry
+that contradicts it. The person maintaining a base is the only one who can know
+an entry does not belong in it, and their undo is git — `delete_base`'s bargain,
+one file smaller. There is no stale check on a delete, unlike a save: a save is
+a *replacement* and needs to know what it is replacing, while a delete names
+the whole file, and refusing it because a machine had just appended would
+refuse it in one of the cases somebody reaches for it.
+
+That narrows the old rule rather than dropping it. "The file is the editor" was
+right about *authority* and was being read as a rule about *access*: two
+authorities was never the risk, two **shapes** was
+([`../decisions/0017`](../decisions/0017-the-library-edits-a-bases-files.md)).
+The operator's save is **not** gated by scope — `writable` answers "may a
+machine inside a run write here", and a library that refused what `vim` allows
+would not be a boundary.
 
 ## Wiring one
 
@@ -341,8 +376,14 @@ returned half a base would be read as the whole of it.
 ### The adapter seam
 
 `KnowledgeAdapter` is a Protocol in the style of `backend/factoria/agent/adapter.py`:
-`list`, `search`, `get`, `append`, `update`, `index`. `MarkdownAdapter` is the
-only implementation in v1; sqlite is the proof the seam is real, and is not
+`list`, `search`, `get`, `append`, `update`, `index`, `remove`. The last two are
+**not tools**: `index` is what the system prompt's contents list is built from,
+and `remove` is the library's delete. `remove` is on the seam rather than an
+`unlink` in `knowledge_api.py` because deleting an entry is the one operation a
+caller outside the seam cannot express — a markdown base loses a file and a
+sqlite one loses a row — and a library that reached past the adapter to
+`Path.unlink` would work for exactly as long as there was one adapter.
+`MarkdownAdapter` is the only implementation in v1; sqlite is the proof the seam is real, and is not
 built. The seam's rule is that adapter's rule: **policy never crosses it.** The
 adapter is told a base's root directory and a path, never a scope, never which
 node is asking, and never whether writing is allowed. Deciding what a machine may
@@ -358,8 +399,6 @@ same least-negotiable-last order:
 ```
 ## Knowledge: Engineering principles  (base: engineering-principles)
 Scope: principles — source of truth, above this project's docs. Read-only.
-What it holds: how we build software here; naming, review standards, when to
-refuse a design.
 Contents:
   - review-standards.md (4.1 kB) — what a review must check, and in what order
   - naming.md (2.8 kB) — the naming rules, with the arguments for them
@@ -371,7 +410,9 @@ already in there beats one derived a second time.
 
 **An index, not a catalogue.** Tool descriptions alone would leave the agent
 guessing whether a base is worth a call; the contents list lets it go straight to
-a file it can see exists. The contents are generated from the base, capped at
+a file it can see exists. **The manifest's prose is not in the block** — it is
+the library's sentence to a person, and the filing skills already say what
+belongs in a base. The contents are generated from the base, capped at
 **40 lines or 800 tokens per base, whichever comes first** — past that the list
 degrades to top-level directories with counts. The whole knowledge section is
 capped at **2 500 tokens** and must stay that way: it is paid on every turn of
@@ -628,9 +669,32 @@ so its files can always be opened: the entry list comes from
 `GET /api/knowledge/{id}` and one click fetches the text from
 `GET /api/knowledge/{id}/entry?path=…`. That route reads through the **same
 adapter the agents read through**, so the containment check, the byte window and
-the 64 KiB ceiling are one set of limits rather than two that drift. There is
-still **no write twin and there will not be one** — editing a base is editing
-the files and committing them.
+the 64 KiB ceiling are one set of limits rather than two that drift.
+
+**This pane stays read-only**, and that is a choice rather than a gap: the node
+log is a view of one run, and a base is maintained in the library. The
+knowledge section's cards open `ProjectList.KnowledgeEditor`, a two-pane window
+over the same backdrop the skill editor uses — the directory down the left
+(`manifest.md` included, which the contents listing leaves out because it is
+not content), the file you picked on the right, and Save below it. **Delete is
+on the row, and so is its question**: a faint bin beside the file it removes —
+a card's control, in a list — and clicking it swaps that row for the confirm,
+`.skill-card.is-confirming` in a narrower column. A delete sitting beside Save
+is a verb you can hit while meaning the other one; a confirm anywhere but the
+row is a sentence about a file you then have to find again; and a bin rather
+than a `×` because a cross is the mark for dismissing the thing it sits on,
+not for removing it. Nothing has to be opened first. Editing a base is still editing its files: the
+same adapter, the same lock, the same directory git tracks.
+
+**The left column scrolls down and never across.** A base's paths are as long
+as the project and the machine that made them (`<project>/<machine>.md`), and a
+sideways scrollbar in a column that narrow hides the end of every filename at
+once — which is the half you are looking for. So the list is **grouped by
+folder**: the folder said once, above the files in it, the row carrying only
+the name, and everything that still does not fit cut with an ellipsis and
+repeated on `title=`, the same convention the node's handles use. The document
+pane wraps for the same reason, `overflow-wrap: anywhere`, so the one token
+longer than the pane cannot set its width.
 
 Like a memory, none of this is a status. A base has no `runtime`, gets no pip
 and gets no card on the timeline.
@@ -650,7 +714,9 @@ and gets no card on the timeline.
 | The three shipped skills | `backend/factoria/system_skills/*.md` |
 | The registry, the override, the revert | `skills.SYSTEM_SKILLS`, `skills._resolve`, `skills.delete_skill` |
 | The MCP server and its five tools | `knowledge/mcp.py` |
-| The library API — `POST`/`DELETE`, no `PUT` | `backend/factoria/knowledge_api.py`, a fifth router in `main.py` |
+| The library API — create and delete a base, save and delete one entry | `backend/factoria/knowledge_api.py`, a fifth router in `main.py` |
+| What both writing verbs may reach | `knowledge_api._content_entry` |
+| The library's editor | `ProjectList.KnowledgeEditor`, `api.saveKnowledgeEntry` / `api.deleteKnowledgeEntry` |
 | The node type, and "attached, not on the line" | `models.NodeType`, `models.ATTACHED_TYPES` |
 | The wiring rules | `runcheck._knowledge_problems`, mirrored in `frontend/src/validation.ts` |
 | The grant and the write journal | `orchestrator._knowledge_spawn` / `_knowledge_failures`, `worktree.knowledge_dir` |
@@ -664,7 +730,7 @@ and gets no card on the timeline.
 
 ## As built
 
-Five things the design left open, and what the build decided.
+Six things the design left open, and what the build decided.
 
 **1. How a failed write reaches the run.** The design says a failed knowledge
 write fails the node and does not say how the orchestrator learns of one — the
@@ -729,6 +795,19 @@ runs the agents did not call it: the base stayed empty, the knowledge node's log
 opened empty, and nothing anywhere was red, because a capability nobody used is
 indistinguishable from a capability nobody has. The orchestrator now files the
 node's answer itself and no spawn holds a write tool.
+
+**6. The library edits content, not shape.** The design said the file was the
+editor and there would be no write endpoint. The build kept the rule and
+narrowed it: `PUT` and `DELETE` on `/api/knowledge/{id}/entry` reach one file
+the base already lists, while creating, renaming and `manifest.md` all stay on
+disk. See
+[`../decisions/0017`](../decisions/0017-the-library-edits-a-bases-files.md) —
+including the sharp edge that made the save carry the text it opened with: a
+machine that appended while the editor was open leaves that text a *prefix* of
+the file, which `update`'s anchor still matches exactly once, so trusting the
+anchor would have silently dropped the machine's entry. The same record carries
+the other half of the change: the manifest's prose is the library's, and left
+the agents' prompt.
 
 Two smaller decisions, recorded because both are refusals somebody will meet:
 

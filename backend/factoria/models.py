@@ -364,9 +364,12 @@ class KnowledgeBaseSummary(Base):
     title: str
     scope: str
     format: str = "markdown"
-    #: The manifest's prose: what the base is, what belongs in it, what does
-    #: not. Shown to the user in the library **and** given to the agent in its
-    #: index block, so it is written once for both readers.
+    #: The manifest's prose: what this base is for. **Written for a person,**
+    #: and shown only to one — the library card, the editor's header, the
+    #: node's hover note. It is deliberately *not* in the agent's index block
+    #: (`knowledge/index.py`): what belongs in a base is said once, in the
+    #: filing skills, and a per-base paragraph repeating it was prompt paid on
+    #: every turn of every machine wired to the base.
     about: str = ""
     files: int = 0
     bytes: int = 0
@@ -382,6 +385,24 @@ class KnowledgeBase(KnowledgeBaseSummary):
     block is rendered from."""
 
     entries: list[KnowledgeEntry] = Field(default_factory=list)
+
+
+class KnowledgeEntryText(Base):
+    """One file out of a base, as text — the answer to both reading it and
+    saving it.
+
+    One model for both directions on purpose: the editor re-baselines on what
+    the save returns, and a save that answered in a different shape from the
+    read would be two things to keep in step for no gain. `bytes` is the whole
+    file, not the window, and `truncated` says whether what came back is all of
+    it — the honesty field, as everywhere else a base is read.
+    """
+
+    base_id: str
+    path: str
+    text: str
+    bytes: int = 0
+    truncated: bool = False
 
 
 class CodebaseGit(Base):

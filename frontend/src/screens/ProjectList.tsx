@@ -20,18 +20,27 @@
  */
 
 import { useEffect, useRef, useState } from "react";
-import { api } from "../api";
+import { ApiError, api } from "../api";
+import { TrashGlyph } from "../nodes/Glyphs";
 import {
+  KNOWLEDGE_FILE_MAX_BYTES,
   KNOWLEDGE_SCOPES,
   KNOWLEDGE_SCOPE_NOTE,
   type Codebase,
   type Health,
+  type KnowledgeBase,
   type KnowledgeBaseSummary,
+  type KnowledgeEntry,
+  type KnowledgeEntryText,
   type KnowledgeScope,
   type Project,
   type Skill,
   type SkillSummary,
 } from "../types";
+
+/** The manifest's name, which is also the one path the editor will not save.
+ *  Mirrored from `knowledge.store.MANIFEST_NAME`. */
+const MANIFEST = "manifest.md";
 
 export function ProjectList({ onOpen }: { onOpen: (projectId: string) => void }) {
   const [projects, setProjects] = useState<Project[] | null>(null);
@@ -832,15 +841,473 @@ function SkillEditor({
 }
 
 /**
+ * A base's files, in a window: the directory down the left, the file you
+ * picked on the right.
+ *
+ * `SkillEditor`'s window with a list added, because a skill is one document
+ * and a base is a folder somebody keeps. Everything else is deliberately the
+ * same — the node log's backdrop, Esc to leave, the discard pair in the
+ * footer — so that two things an operator maintains behave like two of one
+ * thing.
+ *
+ * **Delete is on the row, and so is its question.** A bin beside the file it
+ * removes, the way a card in the library carries its own — a verb sitting
+ * beside Save is a verb you can hit while meaning the other one, and a confirm
+ * anywhere but the row is a sentence about a file you then have to find again.
+ * The row swaps for the question and swaps back, which is `.skill-card`'s
+ * `is-confirming` in a narrower column.
+ *
+ * **It saves and deletes one existing content file.** Nothing here *creates*
+ * one, and nothing renames: a base gains a file in the workspace, where git
+ * sees a new file arrive as a new file rather than a row that appeared in a
+ * grid, and a rename is both halves. And `manifest.md` is read, never written
+ * and never deleted — it is what the base *is*, and re-scoping a store other
+ * projects read is the one change nothing downstream could detect. It is shown
+ * all the same, at the top of the list, because a person browsing a directory
+ * should see the whole directory.
+ *
+ * **Everything that will not fit is on `title=`.** A column narrow enough to
+ * leave the document room cannot hold `<project>/<machine>.md`, and a
+ * sideways scrollbar there hides the end of every filename at once — so the
+ * list is grouped by folder, the rows carry only the name, and the whole path
+ * and the file's opening heading are a hover away.
+ *
+ * **The window stays open after a save**, unlike `SkillEditor`'s, which closes:
+ * you are working through several files, and being thrown back to the grid
+ * after each one is the wrong shape.
+ *
+ * **The guard carries a continuation**, which is the one structural difference.
+ * There are two ways to lose an edit here — leaving, and switching file — so
+ * Esc, the backdrop and every row in the list all route through one `guard`,
+ * and the footer's Discard runs whichever one was asked for.
+ */
+function KnowledgeEditor({
+  baseId,
+  onClose,
+  onSaved,
+}: {
+  baseId: string;
+  onClose: () => void;
+  onSaved: (base: KnowledgeBase) => void;
+}) {
+  const [base, setBase] = useState<KnowledgeBase | null>(null);
+  const [selected, setSelected] = useState<string | null>(null);
+  const [loaded, setLoaded] = useState<KnowledgeEntryText | null>(null);
+  const [text, setText] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [problem, setProblem] = useState<string | null>(null);
+  const [conflicted, setConflicted] = useState(false);
+  /** The path whose row is currently asking whether to remove it. In the row
+   *  rather than in a browser dialog or a footer: the question names a file,
+   *  and the place that makes that unambiguous is where the file is. */
+  const [removing, setRemoving] = useState<string | null>(null);
+  /** What to do once the operator has answered "discard?" — closing and
+   *  opening another file are the same question with two answers. */
+  const [pending, setPending] = useState<
+    { kind: "close" } | { kind: "open"; path: string } | null
+  >(null);
+
+  /** **The file that is open, or nothing.** `loaded` outlives a click on
+   *  another row by one render — the fetch that clears it runs after paint —
+   *  and for that frame `selected` and `loaded` disagree. Rendering on
+   *  `loaded` alone put the previous file's text in an editable box under the
+   *  new file's name, which is the one mistake this window must not make. */
+  const current = loaded !== null && loaded.path === selected ? loaded : null;
+  const dirty = current !== null && text !== current.text;
+  /** The manifest is never writable; a file already past the per-file budget
+   *  cannot be saved whole from here, and the server says so too. */
+  const readOnly = selected === MANIFEST || current?.truncated === true;
+
+  useEffect(() => {
+    let live = true;
+    api
+      .knowledgeBase(baseId)
+      .then((one) => live && setBase(one))
+      .catch((cause) => {
+        if (live) setProblem(cause instanceof Error ? cause.message : String(cause));
+      });
+    return () => {
+      live = false;
+    };
+  }, [baseId]);
+
+  useEffect(() => {
+    if (selected === null) return;
+    let live = true;
+    setLoaded(null);
+    setProblem(null);
+    setConflicted(false);
+    api
+      .knowledgeEntry(baseId, selected, KNOWLEDGE_FILE_MAX_BYTES)
+      .then((entry) => {
+        if (!live) return;
+        setLoaded(entry);
+        setText(entry.text);
+      })
+      .catch((cause) => {
+        if (live) setProblem(cause instanceof Error ? cause.message : String(cause));
+      });
+    return () => {
+      live = false;
+    };
+  }, [baseId, selected]);
+
+  function guard(next: { kind: "close" } | { kind: "open"; path: string }) {
+    if (busy) return;
+    if (dirty) {
+      setPending(next);
+      return;
+    }
+    if (next.kind === "close") onClose();
+    else setSelected(next.path);
+  }
+
+  function resolve() {
+    const next = pending;
+    setPending(null);
+    if (!next) return;
+    if (next.kind === "close") onClose();
+    else if (next.path === selected) {
+      // Reopening the file you are on: the same fetch, against what is there
+      // now. This is the way out of a conflict.
+      setLoaded(null);
+      setText("");
+      setSelected(null);
+      window.setTimeout(() => setSelected(next.path), 0);
+    } else setSelected(next.path);
+  }
+
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || busy) return;
+      guard({ kind: "close" });
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  });
+
+  async function save() {
+    if (!selected || !current || readOnly || busy) return;
+    setBusy(true);
+    setProblem(null);
+    setConflicted(false);
+    try {
+      const saved = await api.saveKnowledgeEntry(baseId, selected, text, current.text);
+      // Re-baseline on the server's answer rather than on what was typed: a
+      // CRLF paste would otherwise leave the editor permanently dirty against
+      // a file that is already exactly what it should be.
+      setLoaded(saved);
+      setText(saved.text);
+      const fresh = await api.knowledgeBase(baseId);
+      setBase(fresh);
+      onSaved(fresh);
+    } catch (cause) {
+      setProblem(cause instanceof Error ? cause.message : String(cause));
+      setConflicted(cause instanceof ApiError && cause.status === 409);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function remove(path: string) {
+    if (busy || path === MANIFEST) return;
+    setBusy(true);
+    setProblem(null);
+    setConflicted(false);
+    try {
+      await api.deleteKnowledgeEntry(baseId, path);
+      const fresh = await api.knowledgeBase(baseId);
+      setBase(fresh);
+      onSaved(fresh);
+      setRemoving(null);
+      // Nothing is selected afterwards rather than the next file being
+      // opened for you: the pane showing a document you did not ask for,
+      // one keystroke after a delete, is how the wrong file gets edited.
+      setSelected(null);
+      setLoaded(null);
+      setText("");
+    } catch (cause) {
+      setProblem(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /** The list, **grouped by folder rather than truncated**.
+   *
+   *  The filing pass writes `<project>/<machine>.md`, so in a column this
+   *  narrow the full path is the thing that overflows — and the half that
+   *  would be cut is the filename, which is the half you are looking for.
+   *  Grouping says the folder once, above the files in it, which is both
+   *  shorter and the shape the directory actually has. Top-level files come
+   *  first, under no heading, because a base that never grew folders should
+   *  not be made to look as though it had one. */
+  const folders = new Map<string, KnowledgeEntry[]>();
+  for (const entry of base?.entries ?? []) {
+    const cut = entry.path.lastIndexOf("/");
+    const folder = cut === -1 ? "" : entry.path.slice(0, cut);
+    folders.set(folder, [...(folders.get(folder) ?? []), entry]);
+  }
+  const groups = [...folders.entries()].sort(([a], [b]) => a.localeCompare(b));
+
+  return (
+    <div className="node-log-backdrop" onMouseDown={() => guard({ kind: "close" })}>
+      <section
+        className="skill-editor knowledge-editor panel"
+        role="dialog"
+        aria-label={`Knowledge base ${baseId}`}
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <header className="node-log-head">
+          <span className="who mono">{baseId}</span>
+          {base && (
+            <span className="eyebrow">
+              {base.scope} · {base.files} file{base.files === 1 ? "" : "s"} ·{" "}
+              {Math.max(1, Math.round(base.bytes / 1024))} kB
+            </span>
+          )}
+          {dirty && <span className="eyebrow">unsaved</span>}
+          <span className="spacer" />
+          <button
+            className="node-log-close"
+            onClick={() => guard({ kind: "close" })}
+            aria-label="Close"
+          >
+            ✕
+          </button>
+        </header>
+
+        <div className="knowledge-editor-body">
+          <nav className="knowledge-editor-files" aria-label="Files">
+            {/* Everything the row cannot fit is on `title=`, which is the
+                convention the handles already use: the column stays one
+                column wide, and the whole path and the file's opening
+                heading are a hover away. */}
+            <button
+              type="button"
+              className={`file-row${selected === MANIFEST ? " on" : ""}`}
+              title={`${MANIFEST} — what this base is. Read-only here; edit it in the workspace.`}
+              onClick={() => guard({ kind: "open", path: MANIFEST })}
+            >
+              <span className="mono">{MANIFEST}</span>
+              <span className="dim">what this base is · read-only</span>
+            </button>
+
+            {groups.map(([folder, entries]) => (
+              <div className="file-group" key={folder || "."}>
+                {folder && (
+                  <span className="file-folder mono" title={`${folder}/`}>
+                    {folder}/
+                  </span>
+                )}
+                {entries.map((entry) => (
+                  /* The delete is the row's sibling, not its child: a button
+                     inside a button is not a thing the DOM has, which is why
+                     `.skill-slot` exists next door and why this needs its
+                     own. */
+                  <div
+                    key={entry.path}
+                    className={`file-slot${folder ? " is-nested" : ""}`}
+                  >
+                    {removing === entry.path ? (
+                      /* **The question stands where the row stood.** Asked
+                         anywhere else it would be a sentence about a file
+                         somewhere up a list you then have to find again. The
+                         row it replaces is the same height plus a button
+                         row, so nothing below it jumps further than the
+                         answer is tall. */
+                      <div className="file-confirm" role="alertdialog">
+                        <span className="mono">
+                          Delete {folder ? entry.path.slice(folder.length + 1) : entry.path}?
+                        </span>
+                        <span className="dim">git is the undo</span>
+                        <span className="row">
+                          <button
+                            type="button"
+                            className="destructive"
+                            disabled={busy}
+                            onClick={() => void remove(entry.path)}
+                          >
+                            {busy ? "Deleting…" : "Delete"}
+                          </button>
+                          <button
+                            type="button"
+                            className="link-button"
+                            disabled={busy}
+                            onClick={() => setRemoving(null)}
+                          >
+                            Cancel
+                          </button>
+                        </span>
+                      </div>
+                    ) : (
+                      <>
+                    <button
+                      type="button"
+                      className={
+                        [
+                          "file-row",
+                          entry.path === selected ? "on" : "",
+                          entry.path === selected && dirty ? "is-dirty" : "",
+                        ]
+                          .filter(Boolean)
+                          .join(" ")
+                      }
+                      title={`${entry.path} · ${Math.max(1, Math.round(entry.bytes / 1024))} kB${
+                        entry.summary ? `\n${entry.summary}` : ""
+                      }`}
+                      onClick={() => guard({ kind: "open", path: entry.path })}
+                    >
+                      <span className="mono">
+                        {folder ? entry.path.slice(folder.length + 1) : entry.path}
+                      </span>
+                      <span className="dim">
+                        {Math.max(1, Math.round(entry.bytes / 1024))} kB
+                        {entry.summary ? ` · ${entry.summary}` : ""}
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      className="card-delete"
+                      aria-label={`Delete ${entry.path}`}
+                      title={`Delete ${entry.path} from this base`}
+                      disabled={busy}
+                      onClick={() => setRemoving(entry.path)}
+                    >
+                      <TrashGlyph />
+                    </button>
+                      </>
+                    )}
+                  </div>
+                ))}
+              </div>
+            ))}
+
+            {base === null ? (
+              <p className="dim">Reading the base…</p>
+            ) : (
+              base.entries.length === 0 && (
+                <p className="dim">
+                  Nothing filed yet. A base gains files in the workspace, or from
+                  a machine wired to write to it.
+                </p>
+              )
+            )}
+          </nav>
+
+          <div className="knowledge-editor-file">
+            {problem && <div className="error">{problem}</div>}
+            {conflicted && selected && (
+              <button
+                type="button"
+                className="link-button"
+                onClick={() => setPending({ kind: "open", path: selected })}
+              >
+                Reload this file
+              </button>
+            )}
+            {selected === null ? (
+              <p className="dim">
+                Everything in <code>_knowledge/{baseId}/</code>. Pick a file.
+              </p>
+            ) : current === null && !problem ? (
+              <p className="dim">Reading {selected}…</p>
+            ) : (
+              current !== null && (
+                <textarea
+                  autoFocus
+                  spellCheck={false}
+                  readOnly={readOnly}
+                  value={text}
+                  aria-label={`${selected} contents`}
+                  onChange={(event) => setText(event.target.value)}
+                />
+              )
+            )}
+          </div>
+        </div>
+
+        <footer className="skill-editor-foot">
+          {/* Discarding is asked here because the edit it would throw away is
+              the pane this footer sits under. Deleting is asked on the row,
+              beside the file it removes. */}
+          {pending ? (
+            <>
+              <span className="hint">
+                Discard your changes to <code>{selected}</code>?
+              </span>
+              <button type="button" className="destructive" onClick={resolve}>
+                Discard
+              </button>
+              <button
+                type="button"
+                className="link-button"
+                onClick={() => setPending(null)}
+              >
+                Keep editing
+              </button>
+            </>
+          ) : (
+            <>
+              <span className="hint">
+                {selected === MANIFEST ? (
+                  <>
+                    This is what the base <em>is</em> — its id, its scope, and the
+                    prose the library shows. Edit it at{" "}
+                    <code>_knowledge/{baseId}/manifest.md</code> and commit it.
+                  </>
+                ) : selected === null ? (
+                  <>
+                    Read anything here. Saving and the bin reach the files
+                    already in the base, and nothing else.
+                  </>
+                ) : current?.truncated ? (
+                  <>
+                    This file is past the 64 kB a base allows per entry, so it is
+                    read here and split in the workspace.
+                  </>
+                ) : (
+                  <>
+                    Saves this file, and only this file. Nothing is created or
+                    renamed here — a base gains a file in the workspace.
+                  </>
+                )}
+              </span>
+              <button
+                type="button"
+                className="primary"
+                disabled={!dirty || busy || readOnly}
+                onClick={() => void save()}
+              >
+                {busy ? "Saving…" : "Save"}
+              </button>
+              <button
+                type="button"
+                className="link-button"
+                onClick={() => guard({ kind: "close" })}
+              >
+                Close
+              </button>
+            </>
+          )}
+        </footer>
+      </section>
+    </div>
+  );
+}
+
+/**
  * The workspace's knowledge bases: what is in `_knowledge/`, and the way to
  * start one.
  *
- * **Creating and deleting, and nothing between.** There is no edit form here
- * and there will not be one: the files are the record, git is the history, and
- * a server that offered an edit endpoint over a document git already owns would
- * be a second authority — the two would disagree the first time somebody
- * pulled. So a base is created here, filled in the workspace or by the machines
- * wired to it, and deleted here.
+ * **Create it, delete it, and maintain what is in it — the base's *files*.**
+ * Not its manifest, and nothing new: a file is edited or removed here, and a
+ * base gains one in the workspace, where `git status` shows a new file as a
+ * new file. "The file
+ * is the editor" was right about *authority* and was being read as a rule about
+ * *access* — the operator has always been able to open these files, and what
+ * they could not do was see one from the screen that had just told them a
+ * machine wrote it (`spec/decisions/0017`).
  *
  * **And no replace.** A skill import can overwrite; this cannot. Replacing a
  * base would silently re-scope a store other projects are reading, and a
@@ -858,6 +1325,7 @@ function KnowledgeLibrary() {
   const [problem, setProblem] = useState<string | null>(null);
   const [confirming, setConfirming] = useState<string | null>(null);
   const [deleting, setDeleting] = useState<string | null>(null);
+  const [opening, setOpening] = useState<string | null>(null);
   const idInput = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
@@ -998,8 +1466,9 @@ function KnowledgeLibrary() {
             />
           </label>
           <p className="hint">
-            Shown here <em>and</em> given to every machine wired to this base, so
-            it is written once for both readers.
+            Shown on the card, in the editor and on the node — so whoever opens
+            this library knows what the shelf is for. The machines are told what
+            belongs in a base by their filing skill, not by this.
           </p>
 
           <div className="row">
@@ -1062,16 +1531,28 @@ function KnowledgeLibrary() {
                 </span>
               </div>
             ) : (
-              <div key={base.id} className="skill-card knowledge-card">
-                <span className="name">{base.title}</span>
-                <span className="desc">{base.about}</span>
-                <span className="meta">
-                  <span className={`scope-tag scope-${base.scope}`}>{base.scope}</span>
-                  {" · "}
-                  {base.files} file{base.files === 1 ? "" : "s"} ·{" "}
-                  {Math.max(1, Math.round(base.bytes / 1024))} kB
-                  {!base.writable && " · read-only to machines"}
-                </span>
+              /* The card is a button now, so the delete has to be its sibling
+                 rather than its child — a button inside a button is not a
+                 thing the DOM has, which is the whole reason `.skill-slot`
+                 exists next door. `.card-delete` is absolute inside it, so
+                 nothing moves. */
+              <div key={base.id} className="skill-slot">
+                <button
+                  type="button"
+                  className="skill-card knowledge-card"
+                  title={`Open ${base.id}`}
+                  onClick={() => setOpening(base.id)}
+                >
+                  <span className="name">{base.title}</span>
+                  <span className="desc">{base.about}</span>
+                  <span className="meta">
+                    <span className={`scope-tag scope-${base.scope}`}>{base.scope}</span>
+                    {" · "}
+                    {base.files} file{base.files === 1 ? "" : "s"} ·{" "}
+                    {Math.max(1, Math.round(base.bytes / 1024))} kB
+                    {!base.writable && " · read-only to machines"}
+                  </span>
+                </button>
                 <button
                   type="button"
                   className="card-delete"
@@ -1085,6 +1566,18 @@ function KnowledgeLibrary() {
             ),
           )}
         </div>
+      )}
+
+      {opening && (
+        <KnowledgeEditor
+          baseId={opening}
+          onClose={() => setOpening(null)}
+          onSaved={(fresh) =>
+            setBases((current) =>
+              (current ?? []).map((one) => (one.id === fresh.id ? fresh : one)),
+            )
+          }
+        />
       )}
     </section>
   );

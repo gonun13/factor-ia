@@ -178,7 +178,10 @@ export type KnowledgeBaseSummary = {
   title: string;
   scope: string;
   format: string;
-  /** The manifest's prose: shown here, and given to the agent in its index. */
+  /** The manifest's prose: what this base is for, **written for a person**.
+   * The card, the editor's header and the node's hover note — and nowhere in
+   * an agent's prompt. What belongs in a base is said once, in the filing
+   * skills. */
   about: string;
   files: number;
   bytes: number;
@@ -186,6 +189,11 @@ export type KnowledgeBaseSummary = {
   writable: boolean;
   updated_at: string;
 };
+
+/** The per-file budget, mirrored from `knowledge.store.FILE_MAX_BYTES`. The
+ * editor asks for this many bytes so it sees the whole file: a window it
+ * cannot see the end of is a window it must not offer to save over. */
+export const KNOWLEDGE_FILE_MAX_BYTES = 64 * 1024;
 
 /** A base with its contents listed — what a picker opens. */
 export type KnowledgeBase = KnowledgeBaseSummary & { entries: KnowledgeEntry[] };

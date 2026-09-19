@@ -288,6 +288,75 @@ def test_update_is_stale_when_the_anchor_is_ambiguous(base: Path) -> None:
         MarkdownAdapter().update(base, "timeline.md", "same", "different")
 
 
+def test_a_whole_file_replacement_is_a_single_match(base: Path) -> None:
+    """What the library's save leans on: `old` equal to the file is one
+    occurrence by construction, so the anchor rule answers a race for free."""
+    whole = (base / "timeline.md").read_text(encoding="utf-8")
+    MarkdownAdapter().update(base, "timeline.md", whole, "# Timeline\n\nRewritten.\n")
+    assert (base / "timeline.md").read_text(encoding="utf-8") == (
+        "# Timeline\n\nRewritten.\n"
+    )
+
+
+def test_a_whole_file_replacement_is_stale_when_the_file_moved(base: Path) -> None:
+    stale = (base / "timeline.md").read_text(encoding="utf-8")
+    (base / "timeline.md").write_text("# Timeline\n\nSomething else.\n", encoding="utf-8")
+    with pytest.raises(KnowledgeStale, match="not in"):
+        MarkdownAdapter().update(base, "timeline.md", stale, "# Mine\n")
+
+
+def test_a_stale_whole_file_that_is_still_a_prefix_matches_once(base: Path) -> None:
+    """The sharp edge, documented because it is why `knowledge_api.save_entry`
+    compares the text itself under the lock rather than trusting the count: a
+    machine that *appended* leaves the opened text a prefix, still matching
+    exactly once, and replacing it would drop the machine's entry on the floor.
+    """
+    opened = (base / "timeline.md").read_text(encoding="utf-8")
+    with (base / "timeline.md").open("a", encoding="utf-8") as handle:
+        handle.write("\n## Filed by a machine\n")
+    assert (base / "timeline.md").read_text(encoding="utf-8").count(opened) == 1
+    MarkdownAdapter().update(base, "timeline.md", opened, "# Mine\n")
+    # No exception, and the machine's entry is now dangling under someone
+    # else's heading. That is the merge nobody asked for.
+    assert "Filed by a machine" in (base / "timeline.md").read_text(encoding="utf-8")
+    assert "We moved to v3" not in (base / "timeline.md").read_text(encoding="utf-8")
+
+
+def test_remove_deletes_one_entry_and_says_so_when_there_is_none(base: Path) -> None:
+    """A missing file is `not_found`, not a quiet success: "it is gone" and "it
+    was never there" are different answers."""
+    MarkdownAdapter().remove(base, "timeline.md")
+    assert not (base / "timeline.md").exists()
+    with pytest.raises(KnowledgeNotFound):
+        MarkdownAdapter().remove(base, "timeline.md")
+
+
+def test_remove_refuses_a_non_markdown_path(base: Path) -> None:
+    """`_resolve`'s suffix rule applies to every call, so nothing can unlink
+    something the walk never showed."""
+    (base / "notes.bin").write_bytes(b"x")
+    with pytest.raises(KnowledgeNotFound, match="served as text"):
+        MarkdownAdapter().remove(base, "notes.bin")
+    assert (base / "notes.bin").exists()
+
+
+def test_remove_refuses_to_climb_out_of_the_base(base: Path) -> None:
+    outside = base.parent / "secret.md"
+    outside.write_text("# Secret\n", encoding="utf-8")
+    with pytest.raises(PathEscape):
+        MarkdownAdapter().remove(base, "../secret.md")
+    assert outside.exists()
+
+
+def test_remove_prunes_the_folder_it_emptied_but_never_the_base(base: Path) -> None:
+    (base / "alpha").mkdir()
+    (base / "alpha" / "research.md").write_text("# Research\n", encoding="utf-8")
+    MarkdownAdapter().remove(base, "alpha/research.md")
+    assert not (base / "alpha").exists()
+    MarkdownAdapter().remove(base, "timeline.md")
+    assert base.exists() and (base / "manifest.md").exists()
+
+
 def test_a_file_over_budget_is_refused_not_truncated(base: Path) -> None:
     with pytest.raises(KnowledgeTooLarge, match="per file"):
         MarkdownAdapter().append(base, "big.md", "x" * (knowledge.FILE_MAX_BYTES + 1))
@@ -374,6 +443,20 @@ def test_the_block_names_the_base_its_scope_and_its_files(workspace: Path) -> No
     assert "Scope: principles" in block
     assert "naming.md" in block and "Naming" in block
     assert 'base "engineering-principles"' in block
+
+
+def test_the_block_does_not_spend_prompt_on_the_manifest_prose(workspace: Path) -> None:
+    """`about` is the library's sentence to a *person*. What belongs in a base
+    is said once, in the filing skills the orchestrator's filing pass wears —
+    and a per-base paragraph repeating it was paid on every turn of every
+    machine wired to the base."""
+    root = make_base(workspace, "engineering-principles")
+    (root / "naming.md").write_text("# Naming\n\nThe rules.\n", encoding="utf-8")
+    block = index.base_block(
+        knowledge.get_base("engineering-principles"), root, contributes=False
+    )
+    assert "What it holds" not in block
+    assert "when to refuse a design" not in block
 
 
 def test_a_principles_block_says_what_to_do_instead_of_writing(workspace: Path) -> None:

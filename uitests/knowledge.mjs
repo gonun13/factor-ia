@@ -314,6 +314,195 @@ try {
     still.filter((one) => one.id === TIMELINE || one.id === RULES).length,
     2,
   );
+  // ---- the library's editor ----------------------------------------------
+  // Worth doing here rather than in a script of its own: this base has a
+  // *filed* entry now, which no HTTP call could have created, and editing
+  // what a machine wrote is the whole reason the editor exists.
+  await page.goto(`${BASE}/#/`, { waitUntil: "networkidle" });
+  await page.waitForSelector(".knowledge-section");
+  await page.locator(`.knowledge-card:has-text("${TIMELINE}")`).click();
+  await page.waitForSelector(".knowledge-editor");
+  check("a base card opens its files", await page.locator(".knowledge-editor").count(), 1);
+
+  const rows = page.locator(".knowledge-editor-files .file-row");
+  check(
+    "the manifest is the first row, above the content",
+    (await rows.first().innerText()).includes("manifest.md"),
+    true,
+  );
+  // The filing pass writes `<project>/<machine>.md`, so this base has exactly
+  // one folder — said once above its files rather than at the front of each.
+  // The list arrives on its own fetch, so wait for the base rather than for
+  // the window: until it lands there is only the manifest to show.
+  await page.waitForSelector(".knowledge-editor-files .file-group");
+  check(
+    "a nested entry shows its folder once, as a heading",
+    await page.locator(`.knowledge-editor-files .file-folder:has-text("${PROJECT}")`).count(),
+    1,
+  );
+  check(
+    "…and the row itself carries only the filename",
+    (await rows.nth(1).locator(".mono").innerText()).includes("/"),
+    false,
+  );
+  check(
+    "…with the whole path a hover away",
+    (await rows.nth(1).getAttribute("title")).includes(`${PROJECT}/`),
+    true,
+  );
+  // The point of all of that: nothing scrolls sideways.
+  check(
+    "the file list never scrolls sideways",
+    await page.locator(".knowledge-editor-files").evaluate(
+      (el) => el.scrollWidth <= el.clientWidth,
+    ),
+    true,
+  );
+  await rows.first().click();
+  await page.waitForSelector(".knowledge-editor-file textarea");
+  check(
+    "…and it is read-only: it is what the base *is*",
+    await page.locator(".knowledge-editor-file textarea").getAttribute("readonly"),
+    "",
+  );
+  // Scoped to the editor's own footer: a card whose title happens to contain
+  // the word would otherwise make this ambiguous.
+  const saveButton = page.locator(".knowledge-editor .skill-editor-foot button.primary");
+  check("…so Save is not offered for it", await saveButton.isDisabled(), true);
+
+  await rows.nth(1).click();
+  await page.waitForSelector(".knowledge-editor-file textarea:not([readonly])");
+  const box = page.locator(".knowledge-editor-file textarea");
+  const before = await box.inputValue();
+  await box.fill(`${before}\n\nEdited by the operator.\n`);
+  await saveButton.click();
+  // The *unsaved* chip going, not Save going grey: Save is disabled for the
+  // whole of the request too, so waiting on it would read the state
+  // mid-flight. The chip clears only once the editor has re-baselined on what
+  // the server wrote back.
+  await page
+    .locator(".knowledge-editor .eyebrow", { hasText: /^unsaved$/i })
+    .waitFor({ state: "detached", timeout: 15_000 });
+  check("saving leaves no error behind", await page.locator(".knowledge-editor .error").count(), 0);
+
+  await page.keyboard.press("Escape");
+  await page.waitForSelector(".knowledge-editor", { state: "detached" });
+  await page.locator(`.knowledge-card:has-text("${TIMELINE}")`).click();
+  await page.waitForSelector(".knowledge-editor");
+  await page.locator(".knowledge-editor-files .file-row").nth(1).click();
+  await page.waitForSelector(".knowledge-editor-file textarea");
+  check(
+    "an edit round-trips through the file on disk",
+    (await page.locator(".knowledge-editor-file textarea").inputValue()).includes(
+      "Edited by the operator.",
+    ),
+    true,
+  );
+  check(
+    "the document wraps rather than scrolling sideways",
+    await page.locator(".knowledge-editor-file textarea").evaluate(
+      (el) => el.scrollWidth <= el.clientWidth,
+    ),
+    true,
+  );
+
+  // ---- deleting one file --------------------------------------------------
+  // The manifest is not content and cannot go: deleting it would not empty a
+  // base, it would stop the directory being one.
+  check(
+    "the manifest row carries no delete: it is not content",
+    await page.locator(".knowledge-editor-files .card-delete").count(),
+    1,
+  );
+  check(
+    "…and the one that does belongs to the file beside it",
+    await page.locator(".knowledge-editor-files .card-delete").getAttribute("aria-label"),
+    `Delete ${PROJECT}/worker.md`,
+  );
+
+  check(
+    "…and it is drawn as a bin, not a dismissing cross",
+    await page.locator(".knowledge-editor-files .card-delete svg").count(),
+    1,
+  );
+
+  await page.locator(".knowledge-editor-files .card-delete").click();
+  check(
+    "deleting asks in the row, where the file is",
+    (await page.locator(".knowledge-editor-files .file-confirm").innerText()).includes(
+      "Delete worker.md?",
+    ),
+    true,
+  );
+  check(
+    "…and the row it replaced is gone while it asks",
+    await page.locator(".knowledge-editor-files .file-row").count(),
+    1,
+  );
+  check(
+    "…though the file is still there until the question is answered",
+    (await (await api(`/api/knowledge/${TIMELINE}`)).json()).files,
+    1,
+  );
+  // Cancel puts the row back, unharmed: a confirm you cannot back out of is a
+  // confirm that only slows the mistake down.
+  await page.locator(".knowledge-editor-files .file-confirm .link-button").click();
+  check(
+    "…and cancelling restores it",
+    await page.locator(".knowledge-editor-files .file-row").count(),
+    2,
+  );
+
+  await page.locator(".knowledge-editor-files .card-delete").click();
+  await page.locator(".knowledge-editor-files .file-confirm button.destructive").click();
+  // The confirm going is the signal, not the row going: the row is replaced
+  // the moment the question opens, so waiting on it would measure the click
+  // rather than the delete — and would then race the request that follows.
+  await page
+    .locator(".knowledge-editor-files .file-confirm")
+    .waitFor({ state: "detached", timeout: 15_000 });
+  check(
+    "…and the base is left with nothing but its manifest",
+    await page.locator(".knowledge-editor-files .file-slot").count(),
+    0,
+  );
+  check(
+    "…which the list says in words rather than leaving blank",
+    (await page.locator(".knowledge-editor-files").innerText()).includes("Nothing filed yet"),
+    true,
+  );
+  check(
+    "…with nothing opened in its place",
+    await page.locator(".knowledge-editor-file textarea").count(),
+    0,
+  );
+  const emptied = await (await api(`/api/knowledge/${TIMELINE}`)).json();
+  check("…and the file really is gone from the base", emptied.files, 0);
+
+  await page.keyboard.press("Escape");
+  await page.waitForSelector(".knowledge-editor", { state: "detached" });
+  check(
+    "the card's count follows the delete without a reload",
+    (await page.locator(`.knowledge-card:has-text("${TIMELINE}") .meta`).innerText()).includes(
+      "0 files",
+    ),
+    true,
+  );
+
+  // The card is a button now and the delete is its sibling. If that nesting
+  // ever goes back to a button inside a button, this is what catches it.
+  await page.locator(`.skill-slot:has(.knowledge-card:has-text("${TIMELINE}")) .card-delete`).click();
+  check(
+    "the delete × still confirms rather than opening the editor",
+    await page.locator(".knowledge-editor").count(),
+    0,
+  );
+  check(
+    "…and the confirm is the one that appears",
+    await page.locator('.skill-card.is-confirming:has-text("Delete")').count(),
+    1,
+  );
+  await page.locator(".skill-card.is-confirming button.link-button").click();
 } finally {
   await browser.close();
   for (const id of [TIMELINE, RULES]) {

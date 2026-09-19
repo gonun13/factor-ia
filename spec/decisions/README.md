@@ -42,3 +42,4 @@ original keeps its number.
 | [0014](0014-cursor-parity-without-flags.md) | Cursor reaches parity through files, not flags | supersedes part of `0011` |
 | [0015](0015-the-wire-files-not-the-agent.md) | The wire files a knowledge base, not the agent | supersedes part of `behaviour/knowledge.md` |
 | [0016](0016-system-skills-and-the-filing-pass.md) | System skills, and a filing pass that writes | supersedes part of `0015` |
+| [0017](0017-the-library-edits-a-bases-files.md) | The library edits a base's files, not its shape | supersedes part of `behaviour/knowledge.md` |

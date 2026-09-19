@@ -8,6 +8,14 @@ this, and it is also the argument for the caps below — the section is paid on
 `memory.WRITER_CONTRACT`'s ~190 tokens, and an index that grew with the base
 would be a tax that grew with the base.
 
+**The manifest's prose is not in here.** `about` is the library's sentence to a
+*person* — what this shelf is for, read off a card. What *belongs* in a base is
+the filing pass's business, and it is already said once, in the system skills
+`knowledge-general` / `knowledge-codebase` / `knowledge-project`
+(`skills.SYSTEM_SKILLS`, worn by `orchestrator._filing_pass`). A per-base
+paragraph restating it was prompt paid on every turn of every machine for a
+sentence written for whoever maintains the base.
+
 The caps, as numbers (`docs/KNOWLEDGE.md`, What the agents are told):
 
 - **40 lines or 800 tokens per base, whichever comes first.** Past that the
@@ -148,7 +156,7 @@ def fingerprint(base: KnowledgeBase, root: Path) -> str:
 
 
 def base_block(base: KnowledgeBase, root: Path, *, contributes: bool) -> str:
-    """One base's block: what it is, what is in it, and what this node puts in it.
+    """One base's block: which shelf this is, what is in it, what this node adds.
 
     `contributes` is the **node's** answer, not the base's: it means the
     operator drew a write wire onto this base, so this machine's final answer
@@ -180,7 +188,6 @@ def base_block(base: KnowledgeBase, root: Path, *, contributes: bool) -> str:
     lines = [
         f"## Knowledge: {base.title}  (base: {base.id})",
         f"Scope: {base.scope} — {note}. {permission}",
-        f"What it holds: {_one_paragraph(base.about)}",
         "Contents:",
         *_contents(base),
         _call_to_action(base, contributes=contributes),
@@ -220,16 +227,6 @@ def _call_to_action(base: KnowledgeBase, *, contributes: bool) -> str:
         "will come back empty. Say in your output what you needed and could not find."
     )
 
-
-def _one_paragraph(about: str) -> str:
-    """The manifest's prose down to its first paragraph, on one line.
-
-    The library shows the whole thing; the agent gets the opening, because the
-    rest of a manifest is usually the part written for whoever maintains the
-    base rather than for whoever reads it.
-    """
-    first = (about or "").strip().split("\n\n", 1)[0]
-    return " ".join(first.split())[:400] or "(the manifest says nothing about it)"
 
 
 def _contents(base: KnowledgeBase) -> list[str]:

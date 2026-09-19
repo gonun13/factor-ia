@@ -238,3 +238,16 @@ export function LogGlyph() {
     </svg>
   );
 }
+
+/** Trash: the bin, with a lid and two ribs. Removing a file, not closing a
+ *  window — a `×` says "dismiss this" and is the wrong promise on a row. */
+export function TrashGlyph() {
+  return (
+    <svg viewBox="0 0 16 16" aria-hidden>
+      <path d="M2.5 4h11" {...stroke} />
+      <path d="M6.2 4V2.5h3.6V4" {...stroke} />
+      <path d="M4 4v9a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V4" {...stroke} />
+      <path d="M6.6 6.8v4.4M9.4 6.8v4.4" {...stroke} />
+    </svg>
+  );
+}

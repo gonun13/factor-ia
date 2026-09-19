@@ -24,10 +24,15 @@ says so in the frontmatter — and a dishonest one for a source of truth. A base
 that silently kept half an entry would hand the next project a decision that
 reads as complete and is not.
 
-**There is no edit path here beyond `append` and `update`,** and none at all
-from the library API (`knowledge_api.py`): the file is the editor. A server that
-offered an edit endpoint over a document git owns would be a second authority,
-and the two would disagree the first time someone pulled.
+**Every write here goes through the adapter.** The library API
+(`knowledge_api.py`) reaches `update` and `remove`, for one content file the
+base already lists, under the lock below — a second *door* onto the files, not
+a second authority over them: same adapter, same budgets, same directory git
+tracks. What it still cannot do is *create* an entry, rename one, or touch
+`manifest.md`. A base gains a file in the workspace, where git sees a new file
+arrive as a new file, and a base's identity is create-time because a re-scope
+through a text box is the one change nothing downstream could detect
+(`../../spec/decisions/0017-the-library-edits-a-bases-files.md`).
 """
 
 from __future__ import annotations
@@ -283,14 +288,14 @@ def validate_manifest(text: str, *, base_id: str) -> KnowledgeBaseSummary:
     if not prose:
         raise KnowledgeInvalid(
             "this manifest has frontmatter but no prose under it — the prose is "
-            "what the library shows a person and what an agent is given in its "
-            "index block, so a base without it cannot say what belongs in it"
+            "what the library shows a person, on the card and in the editor, so "
+            "a base without it cannot say what it is for"
         )
     if len(prose) > _ABOUT_MAX:
         raise KnowledgeInvalid(
             f"the manifest prose is {len(prose)} characters; keep it under "
-            f"{_ABOUT_MAX} — it is paid on every turn of every machine wired to "
-            "this base, and the detail belongs in the base itself"
+            f"{_ABOUT_MAX} — it is a card in a library, read at a glance, and "
+            "the detail belongs in the base itself"
         )
 
     return KnowledgeBaseSummary(

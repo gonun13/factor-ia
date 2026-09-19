@@ -189,6 +189,42 @@ class MarkdownAdapter:
         atomic_write(target, merged)
         return Written(path=relative_path(root, target), bytes=len(merged.encode("utf-8")))
 
+    def remove(self, root: Path, path: str) -> None:
+        """Delete one entry.
+
+        **The only call here that destroys something, and it is not a tool.**
+        No agent can reach it — `mcp.TOOL_SCHEMAS` does not name it, so there
+        is nothing to put on `--disallowedTools`. It exists for the library's
+        operator, who is the one person who can know an entry should not be in
+        a base, and whose undo is git.
+
+        Resolved through `_resolve` like every other path here, so the segment
+        allowlist, the containment re-check and the suffix rule all apply: a
+        base is served as text, and a call that could unlink something the walk
+        never showed would be a second view of what is in a base.
+
+        A missing file is `not_found` rather than a quiet success. "It is gone"
+        and "it was never there" are different answers, and a caller that
+        cannot tell them apart cannot tell a stale list from a finished job.
+        """
+        target = self._resolve(root, path)
+        try:
+            target.unlink()
+        except FileNotFoundError:
+            raise KnowledgeNotFound(f"no entry at {path!r} in this base") from None
+        except OSError as exc:
+            raise KnowledgeNotFound(f"{path!r} could not be removed: {exc}") from None
+        # A directory left behind by its last entry is not content and the walk
+        # does not list it, but it is litter in a directory somebody reads in a
+        # terminal. Pruned upwards while empty, never past the base itself.
+        parent = target.parent
+        while parent != root:
+            try:
+                parent.rmdir()
+            except OSError:
+                break
+            parent = parent.parent
+
     # ---- internals ---------------------------------------------------------
 
     def _resolve(self, root: Path, path: str) -> Path:

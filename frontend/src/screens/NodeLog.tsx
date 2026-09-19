@@ -735,6 +735,14 @@ function ReadPane({ node, events }: { node: FlowNode; events: RunEvent[] }) {
  * memory is discarded when the run ends and kept only when the run failed. "The
  * memory was empty" and "the memory was cleaned up" are different answers, and
  * a reader who cannot tell them apart goes looking for a bug that is not there.
+ *
+ * **This pane stays read-only**, and that is a choice rather than a gap. The
+ * node log is a view of *one run*, and its other panes are history; a base's
+ * files are here so that "a machine wrote `timeline.md`" can be checked
+ * without leaving the canvas. Maintaining a shelf is a different act, in a
+ * different place — the library, where a base is a document you keep rather
+ * than evidence of what just happened, and where nothing may be holding its
+ * lock (`ProjectList.KnowledgeEditor`).
  */
 function ContentPane({ node, runId }: { node: FlowNode; runId: string }) {
   const memory = node.data.definition.type === "memory";

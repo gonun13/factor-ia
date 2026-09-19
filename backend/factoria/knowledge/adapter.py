@@ -1,4 +1,4 @@
-"""The `KnowledgeAdapter` seam — six calls, and one rule about them.
+"""The `KnowledgeAdapter` seam — seven calls, and one rule about them.
 
 Written in the style of `agent/adapter.py`: a `Protocol`, not a base class, so
 two implementations share an interface rather than somewhere for behaviour to
@@ -16,6 +16,13 @@ second adapter cheap: a sqlite base maps `search` to a query and `append` to an
 insert without the agent learning a second vocabulary, and without SQL crossing
 the seam. An agent that had to know a base's storage format to read it would
 make every base's format part of the contract.
+
+`remove` is the seventh, and is not a tool either — **no agent can reach it**,
+and `mcp.TOOL_SCHEMAS` does not name it. It is here rather than as an `unlink`
+in `knowledge_api.py` because deleting an entry is the one operation a caller
+outside the seam cannot express: a markdown base loses a file, and a sqlite one
+loses a row. A library that reached past the adapter to `Path.unlink` would work
+for exactly as long as there was one adapter.
 
 `index` is the sixth, and is not a tool. It is what the system prompt's contents
 list is built from (`index.py`) — the same question `list` answers, asked by the
@@ -118,4 +125,8 @@ class KnowledgeAdapter(Protocol):
 
     def index(self, root: Path) -> Listing:
         """What the system prompt's contents list is built from."""
+        ...
+
+    def remove(self, root: Path, path: str) -> None:
+        """Delete one entry. Not a tool: the operator's, through the library."""
         ...

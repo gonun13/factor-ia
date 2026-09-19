@@ -86,12 +86,33 @@ export const api = {
   knowledge: () => request<KnowledgeBaseSummary[]>("/api/knowledge"),
   knowledgeBase: (id: string) =>
     request<KnowledgeBase>(`/api/knowledge/${encodeURIComponent(id)}`),
-  /** One file out of a base, as text — the read half of "the file is the
-      editor". There is no write twin and there will not be one: editing a base
-      is editing the files and committing them. */
-  knowledgeEntry: (id: string, path: string) =>
+  /** One file out of a base, as text — `manifest.md` included, which the
+      contents listing leaves out because it is not content. `limit` is the
+      editor's: it must see the whole file or it must not offer to save over
+      it, and the server clamps it to the per-file budget. */
+  knowledgeEntry: (id: string, path: string, limit?: number) =>
+    request<KnowledgeEntryText>(
+      `/api/knowledge/${encodeURIComponent(id)}/entry?path=${encodeURIComponent(path)}` +
+        (limit ? `&limit=${limit}` : ""),
+    ),
+  /** Save one **existing content file** back. `baseText` is what the editor
+      opened: the server compares it under the base's lock and refuses with a
+      sentence if a machine filed into the file meanwhile, so nothing of
+      anyone's is overwritten. No create, no rename, no delete, and
+      `manifest.md` is read-only — a base's shape and its identity stay git's. */
+  saveKnowledgeEntry: (id: string, path: string, text: string, baseText: string) =>
     request<KnowledgeEntryText>(
       `/api/knowledge/${encodeURIComponent(id)}/entry?path=${encodeURIComponent(path)}`,
+      { method: "PUT", body: JSON.stringify({ text, base_text: baseText }) },
+    ),
+  /** Remove one content file from a base. Refused for `manifest.md`, and for
+      anything the base does not already list. No agent can do this — it is not
+      an MCP tool — and the undo is git, the same bargain deleting a whole base
+      makes. */
+  deleteKnowledgeEntry: (id: string, path: string) =>
+    request<void>(
+      `/api/knowledge/${encodeURIComponent(id)}/entry?path=${encodeURIComponent(path)}`,
+      { method: "DELETE" },
     ),
   /** Create a base, or import a `manifest.md` the browser already read.
       **No `overwrite`**, unlike a skill import: replacing a base would silently
