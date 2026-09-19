@@ -48,13 +48,13 @@ const codebase = codebases[0].id;
 
 // Two bases: one a machine may write to, and one no machine may ever write to.
 // The pair is the point — every rule below is about the difference between them.
-for (const [id, scope, about] of [
+for (const [id, baseType, about] of [
   [TIMELINE, "codebase", "Every change we have made to this repository, in order."],
   [RULES, "principles", "How we build software here; naming, review standards."],
 ]) {
   const made = await api("/api/knowledge", {
     method: "POST",
-    body: JSON.stringify({ id, title: id, scope, about }),
+    body: JSON.stringify({ id, title: id, type: baseType, about }),
   });
   if (!made.ok) throw new Error(`could not create ${id}: ${await made.text()}`);
 }
@@ -126,6 +126,72 @@ try {
     ),
     true,
   );
+
+  // ---- the base the product ships -----------------------------------------
+  // Seeded into `_knowledge/` by the server, so it is on this screen without
+  // anybody having created it. What the browser has to get right is that it
+  // offers no way to remove it — the card's bin and, inside, every shipped
+  // file's bin.
+  const shipped = page.locator(".knowledge-card.is-system").first();
+  check("the shipped base is in the library", await page.locator(".knowledge-card.is-system").count() >= 1, true);
+  check(
+    "…and says so on the card",
+    (await shipped.locator(".skill-badge").innerText()).trim(),
+    "system",
+  );
+  check(
+    "…and sorts above the operator's own bases",
+    await page.locator(".knowledge-card").first().evaluate((node) => node.classList.contains("is-system")),
+    true,
+  );
+  check(
+    "…and offers no delete at all, rather than one that is refused",
+    await page.locator(".skill-slot:has(.knowledge-card.is-system) .card-delete").count(),
+    0,
+  );
+  check(
+    "…while an ordinary base still has one",
+    await page.locator(`.skill-slot:has(.knowledge-card:has-text("${TIMELINE}")) .card-delete`).count(),
+    1,
+  );
+
+  await shipped.click();
+  await page.waitForSelector(".knowledge-editor");
+  check(
+    "opening it says what is different about it, above the panes",
+    (await page.locator(".knowledge-editor .skill-editor-warning strong").innerText()).includes(
+      "ships with the product",
+    ),
+    true,
+  );
+  check(
+    "…and no file it ships with carries a bin",
+    await page.locator(".knowledge-editor-files .card-delete").count(),
+    0,
+  );
+  // Only `about` on a shipped base: the title is the name everything else
+  // refers to it by, and the server refuses it too (`edit_base`).
+  await page.locator(".knowledge-editor-files .file-row").first().click();
+  await page.waitForSelector(".manifest-form");
+  check(
+    "…its title is not editable, because the product names it",
+    await page.locator('.manifest-form input[aria-label="Base title"]').isDisabled(),
+    true,
+  );
+  check(
+    "…while its prose is",
+    await page
+      .locator('.manifest-form textarea[aria-label="What this base holds"]')
+      .isDisabled(),
+    false,
+  );
+  check(
+    "…and there is plenty in it to read",
+    (await page.locator(".knowledge-editor-files .file-row").count()) >= 12,
+    true,
+  );
+  await page.locator(".knowledge-editor .node-log-close").click();
+  check("the shipped base's editor closes", await page.locator(".knowledge-editor").count(), 0);
   check(
     "…and a writable one does not",
     (await page.locator(`.knowledge-card:has-text("${TIMELINE}") .meta`).innerText()).includes(
@@ -359,16 +425,40 @@ try {
     true,
   );
   await rows.first().click();
-  await page.waitForSelector(".knowledge-editor-file textarea");
+  await page.waitForSelector(".manifest-form");
   check(
-    "…and it is read-only: it is what the base *is*",
-    await page.locator(".knowledge-editor-file textarea").getAttribute("readonly"),
-    "",
+    "…and it opens as a form, not as markdown: its frontmatter is identity",
+    await page.locator(".knowledge-editor-file .manifest-form").count(),
+    1,
+  );
+  check(
+    "…with id, type and format shown but not editable",
+    (await page.locator(".manifest-fixed").innerText()).includes(TIMELINE),
+    true,
+  );
+  check(
+    "…and no input offering to change the type",
+    await page.locator(".manifest-form input:not([disabled]), .manifest-form textarea")
+      .evaluateAll((els) => els.filter((el) => el.value.includes("type:")).length),
+    0,
   );
   // Scoped to the editor's own footer: a card whose title happens to contain
   // the word would otherwise make this ambiguous.
   const saveButton = page.locator(".knowledge-editor .skill-editor-foot button.primary");
-  check("…so Save is not offered for it", await saveButton.isDisabled(), true);
+  check("…though Save waits for an actual edit", await saveButton.isDisabled(), true);
+
+  const about = page.locator('.manifest-form textarea[aria-label="What this base holds"]');
+  await about.fill("Rewritten from the library.");
+  check("…and an edit to the prose enables it", await saveButton.isDisabled(), false);
+  await saveButton.click();
+  await page.waitForSelector(".knowledge-editor .skill-editor-foot button.primary:disabled");
+  check(
+    "saving the prose lands on the card behind the editor",
+    (await page.locator(`.knowledge-card:has-text("${TIMELINE}") .desc`).innerText()).includes(
+      "Rewritten from the library",
+    ),
+    true,
+  );
 
   await rows.nth(1).click();
   await page.waitForSelector(".knowledge-editor-file textarea:not([readonly])");
@@ -410,7 +500,7 @@ try {
   // The manifest is not content and cannot go: deleting it would not empty a
   // base, it would stop the directory being one.
   check(
-    "the manifest row carries no delete: it is not content",
+    "the manifest row carries no delete: editable, never removable",
     await page.locator(".knowledge-editor-files .card-delete").count(),
     1,
   );

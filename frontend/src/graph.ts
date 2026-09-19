@@ -30,7 +30,7 @@ import {
   DEFAULT_INPUT_KIND,
   DEFAULT_MAX_LAPS,
   DEFAULT_OUTPUT_KIND,
-  KNOWLEDGE_READ_ONLY_SCOPES,
+  KNOWLEDGE_READ_ONLY_TYPES,
   MAX_LAPS_LIMIT,
   type Factory,
   type GraphEdge,
@@ -340,7 +340,7 @@ export function knowledgeBase(definition: NodeDefinition): string {
 }
 
 /**
- * Whether a base of this scope may be written by any machine, ever.
+ * Whether a base of this type may be written by any machine, ever.
  *
  * Mirrors `knowledge.store.is_writable`, and the mirror is load-bearing rather
  * than convenient: it is what lets the canvas refuse a write handle onto a
@@ -349,8 +349,8 @@ export function knowledgeBase(definition: NodeDefinition): string {
  * is still the authority — this is a courtesy, like every other rule in
  * `validation.ts`.
  */
-export function knowledgeWritable(scope: string | undefined): boolean {
-  return !KNOWLEDGE_READ_ONLY_SCOPES.has(scope ?? "");
+export function knowledgeWritable(baseType: string | undefined): boolean {
+  return !KNOWLEDGE_READ_ONLY_TYPES.has(baseType ?? "");
 }
 
 /**
@@ -361,7 +361,7 @@ export function knowledgeWritable(scope: string | undefined): boolean {
  * `toFlowEdge` documents: an edge naming a handle its node does not render is
  * *silently dropped* — not a warning, not a broken line, simply not there,
  * while the server goes on treating it as live. So switching a node's base to
- * one with `principles` scope must **normalise the write wires away**, visibly
+ * one of `principles` type must **normalise the write wires away**, visibly
  * and with a notice, rather than leaving wires pointing at a handle that has
  * gone. An invisible wire is worse than a refused one. `FactoryCanvas` is where
  * that normalisation happens; this is the predicate both it and `NodeShell`
@@ -379,7 +379,7 @@ export function hasWriteHandle(
   // base — impossible.
   if (!selected) return true;
   const base = bases.get(selected);
-  return base === undefined || knowledgeWritable(base.scope);
+  return base === undefined || knowledgeWritable(base.type);
 }
 
 /**

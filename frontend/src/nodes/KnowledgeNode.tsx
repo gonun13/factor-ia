@@ -1,7 +1,7 @@
 import type { NodeProps } from "@xyflow/react";
 import { knowledgeBase, knowledgeWritable, type FlowNode } from "../graph";
 import { useCanvas } from "../canvasContext";
-import { KNOWLEDGE_SCOPE_NOTE, type KnowledgeScope } from "../types";
+import { KNOWLEDGE_TYPE_NOTE, type KnowledgeType } from "../types";
 import { HoverNote } from "./NodeNote";
 import { NodeShell } from "./NodeShell";
 
@@ -36,7 +36,7 @@ function size(bytes: number): string {
  * reads the canvas and the base id is the fact, because this is a reference to
  * something that already exists and already has a name.
  *
- * **What it shows is what a wire to it would mean**: the scope, in as many
+ * **What it shows is what a wire to it would mean**: the type, in as many
  * words, and whether anything may write. A base someone drops onto a canvas and
  * does not configure says *no base selected* rather than looking like an empty
  * one — "nothing is in there" and "this points at nothing" are different
@@ -52,7 +52,7 @@ export function KnowledgeNode({ id, data }: NodeProps<FlowNode>) {
    *
    * Off the storage log rather than off a runtime, which this node has not got
    * and must not grow. It is also the one thing on this node that belongs to
-   * the *run*: everything else — the base, its scope, whether anything may
+   * the *run*: everything else — the base, its type, whether anything may
    * write — is true whether or not a run is happening. */
   const touched = storage[id] ?? [];
   const wrote = touched.filter((entry) => entry.op === "write");
@@ -60,7 +60,7 @@ export function KnowledgeNode({ id, data }: NodeProps<FlowNode>) {
   const selected = knowledgeBase(data.definition);
   const base = selected ? knowledgeBases.get(selected) : undefined;
   const missing = Boolean(selected) && knowledgeBases.size > 0 && base === undefined;
-  const scope = base?.scope as KnowledgeScope | undefined;
+  const baseType = base?.type as KnowledgeType | undefined;
 
   return (
     <NodeShell
@@ -73,10 +73,10 @@ export function KnowledgeNode({ id, data }: NodeProps<FlowNode>) {
       report={touched.length > 0}
       note={
         <>
-          {/* The scope, in words, because it is the one thing about a base
+          {/* The type, in words, because it is the one thing about a base
               that changes what a wire to it means — and it is the manifest's
               word, not this node's, so nobody can set it from here. */}
-          {scope && <p className="scope-note">{KNOWLEDGE_SCOPE_NOTE[scope]}</p>}
+          {baseType && <p className="type-note">{KNOWLEDGE_TYPE_NOTE[baseType]}</p>}
           <p>
             Wire this <em>out</em> to every machine that may consult it, and
             wire a machine <em>in</em> to let it contribute — the direction is
@@ -115,9 +115,9 @@ export function KnowledgeNode({ id, data }: NodeProps<FlowNode>) {
       {base ? (
         <HoverNote tag="p" className="filed-line" note={base.about || null}>
           <span className="filed-dot" aria-hidden="true" />
-          {base.scope} · {base.files} file{base.files === 1 ? "" : "s"} ·{" "}
+          {base.type} · {base.files} file{base.files === 1 ? "" : "s"} ·{" "}
           {size(base.bytes)}
-          {!knowledgeWritable(base.scope) && (
+          {!knowledgeWritable(base.type) && (
             <span className="filed-locked"> · read-only</span>
           )}
         </HoverNote>

@@ -24,15 +24,15 @@ import { ApiError, api } from "../api";
 import { TrashGlyph } from "../nodes/Glyphs";
 import {
   KNOWLEDGE_FILE_MAX_BYTES,
-  KNOWLEDGE_SCOPES,
-  KNOWLEDGE_SCOPE_NOTE,
+  KNOWLEDGE_TYPES,
+  KNOWLEDGE_TYPE_NOTE,
   type Codebase,
   type Health,
   type KnowledgeBase,
   type KnowledgeBaseSummary,
   type KnowledgeEntry,
   type KnowledgeEntryText,
-  type KnowledgeScope,
+  type KnowledgeType,
   type Project,
   type Skill,
   type SkillSummary,
@@ -768,7 +768,7 @@ function SkillEditor({
             <div className="skill-editor-warning" role="note">
               <strong>This skill is built into the knowledge node.</strong> It is
               not chosen by a machine — every knowledge base with the matching
-              scope files through it, in every factory and every project.
+              type files through it, in every factory and every project.
               <ul>
                 <li>
                   A change takes effect on the next run, everywhere. Instructions
@@ -894,6 +894,14 @@ function KnowledgeEditor({
   const [selected, setSelected] = useState<string | null>(null);
   const [loaded, setLoaded] = useState<KnowledgeEntryText | null>(null);
   const [text, setText] = useState("");
+  /** The manifest, as a form rather than as markdown.
+   *
+   *  **The manifest is not edited as a document.** Its frontmatter is what the
+   *  base *is* — a textarea over it would offer to change `type`, which the
+   *  server refuses, and offer it in a way that reads like an ordinary edit. So
+   *  the two fields that are *not* identity get inputs, and `PATCH` sends only
+   *  those (`api.editKnowledgeBase`). `null` until the manifest is opened. */
+  const [form, setForm] = useState<{ title: string; about: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
   const [conflicted, setConflicted] = useState(false);
@@ -913,10 +921,20 @@ function KnowledgeEditor({
    *  `loaded` alone put the previous file's text in an editable box under the
    *  new file's name, which is the one mistake this window must not make. */
   const current = loaded !== null && loaded.path === selected ? loaded : null;
-  const dirty = current !== null && text !== current.text;
-  /** The manifest is never writable; a file already past the per-file budget
-   *  cannot be saved whole from here, and the server says so too. */
-  const readOnly = selected === MANIFEST || current?.truncated === true;
+  /** Unsaved changes, whichever shape the open thing has — a file's textarea or
+   *  the manifest's form. One flag because everything downstream of it (the
+   *  discard prompt, Save, the row's dot) asks the same question. */
+  const formDirty =
+    selected === MANIFEST &&
+    form !== null &&
+    base !== null &&
+    (form.title !== base.title || form.about !== base.about);
+  const dirty = (current !== null && text !== current.text) || formDirty;
+  /** Only a file already past the per-file budget, which cannot be saved whole
+   *  from a textarea that cannot show the end of it. The manifest *is* editable
+   *  — its prose is how a base steers the machines wired to it — and the
+   *  server refuses the one field that may not move (`store.save_manifest`). */
+  const readOnly = current?.truncated === true;
 
   useEffect(() => {
     let live = true;
@@ -937,6 +955,15 @@ function KnowledgeEditor({
     setLoaded(null);
     setProblem(null);
     setConflicted(false);
+    // **No fetch for the manifest.** Its two editable fields are already on
+    // the base — `title` and `about` are what `GET /api/knowledge/{id}`
+    // returns — so reading the document would be a second copy of them to
+    // keep in step with the one the card is drawn from.
+    if (selected === MANIFEST) {
+      if (base !== null) setForm({ title: base.title, about: base.about });
+      return;
+    }
+    setForm(null);
     api
       .knowledgeEntry(baseId, selected, KNOWLEDGE_FILE_MAX_BYTES)
       .then((entry) => {
@@ -950,7 +977,7 @@ function KnowledgeEditor({
     return () => {
       live = false;
     };
-  }, [baseId, selected]);
+  }, [baseId, selected, base]);
 
   function guard(next: { kind: "close" } | { kind: "open"; path: string }) {
     if (busy) return;
@@ -987,7 +1014,9 @@ function KnowledgeEditor({
   });
 
   async function save() {
-    if (!selected || !current || readOnly || busy) return;
+    if (busy || !selected) return;
+    if (selected === MANIFEST) return void saveManifest();
+    if (!current || readOnly) return;
     setBusy(true);
     setProblem(null);
     setConflicted(false);
@@ -1004,6 +1033,32 @@ function KnowledgeEditor({
     } catch (cause) {
       setProblem(cause instanceof Error ? cause.message : String(cause));
       setConflicted(cause instanceof ApiError && cause.status === 409);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /** The manifest's save: two fields, or one on a base the product ships.
+   *
+   *  `title` is left out entirely for a system base rather than sent and
+   *  refused — the server refuses it either way (`edit_base`), and a request
+   *  that carries a field it knows will bounce is a request asking for an
+   *  error message. */
+  async function saveManifest() {
+    if (!form || !base || busy) return;
+    setBusy(true);
+    setProblem(null);
+    setConflicted(false);
+    try {
+      const fresh = await api.editKnowledgeBase(
+        baseId,
+        base.system ? { about: form.about } : { title: form.title, about: form.about },
+      );
+      setBase(fresh);
+      setForm({ title: fresh.title, about: fresh.about });
+      onSaved(fresh);
+    } catch (cause) {
+      setProblem(cause instanceof Error ? cause.message : String(cause));
     } finally {
       setBusy(false);
     }
@@ -1053,16 +1108,17 @@ function KnowledgeEditor({
   return (
     <div className="node-log-backdrop" onMouseDown={() => guard({ kind: "close" })}>
       <section
-        className="skill-editor knowledge-editor panel"
+        className={`skill-editor knowledge-editor panel${base?.system ? " is-system" : ""}`}
         role="dialog"
         aria-label={`Knowledge base ${baseId}`}
         onMouseDown={(event) => event.stopPropagation()}
       >
         <header className="node-log-head">
           <span className="who mono">{baseId}</span>
+          {base?.system && <span className="skill-badge">system</span>}
           {base && (
             <span className="eyebrow">
-              {base.scope} · {base.files} file{base.files === 1 ? "" : "s"} ·{" "}
+              {base.type} · {base.files} file{base.files === 1 ? "" : "s"} ·{" "}
               {Math.max(1, Math.round(base.bytes / 1024))} kB
             </span>
           )}
@@ -1077,6 +1133,31 @@ function KnowledgeEditor({
           </button>
         </header>
 
+        {/* Above the panes, on the skill editor's rule: what is surprising
+            about this base has to be read before the textarea is touched, not
+            discovered from a refusal afterwards. */}
+        {base?.system && (
+          <div className="skill-editor-warning" role="note">
+            <strong>This knowledge base ships with the product.</strong> Its
+            content is yours — edit it freely, and your version wins.
+            <ul>
+              <li>
+                A change takes effect on the next run, for every machine wired
+                to this base, in every factory and every project.
+              </li>
+              <li>
+                Neither the base nor the files it ships with can be removed. A
+                file deleted in the workspace is put back on the next read, so
+                empty one rather than deleting it.
+              </li>
+              <li>
+                Nothing overwrites a file you have edited, so an updated version
+                of this base will not reach it. Files you add here are ordinary
+                files and can be deleted.
+              </li>
+            </ul>
+          </div>
+        )}
         <div className="knowledge-editor-body">
           <nav className="knowledge-editor-files" aria-label="Files">
             {/* Everything the row cannot fit is on `title=`, which is the
@@ -1086,11 +1167,11 @@ function KnowledgeEditor({
             <button
               type="button"
               className={`file-row${selected === MANIFEST ? " on" : ""}`}
-              title={`${MANIFEST} — what this base is. Read-only here; edit it in the workspace.`}
+              title={`${MANIFEST} — what this base is for and how it is used. Editable; its type line is not.`}
               onClick={() => guard({ kind: "open", path: MANIFEST })}
             >
               <span className="mono">{MANIFEST}</span>
-              <span className="dim">what this base is · read-only</span>
+              <span className="dim">what this base is for · read first by every agent</span>
             </button>
 
             {groups.map(([folder, entries]) => (
@@ -1166,16 +1247,23 @@ function KnowledgeEditor({
                         {entry.summary ? ` · ${entry.summary}` : ""}
                       </span>
                     </button>
-                    <button
-                      type="button"
-                      className="card-delete"
-                      aria-label={`Delete ${entry.path}`}
-                      title={`Delete ${entry.path} from this base`}
-                      disabled={busy}
-                      onClick={() => setRemoving(entry.path)}
-                    >
-                      <TrashGlyph />
-                    </button>
+                    {/* **No bin beside a file the product ships.** The seed
+                        restores it on the next read, so the control would be
+                        offering something that cannot happen — the library
+                        card's rule, one file smaller. A file the operator
+                        added to the same base keeps its bin. */}
+                    {!entry.protected && (
+                      <button
+                        type="button"
+                        className="card-delete"
+                        aria-label={`Delete ${entry.path}`}
+                        title={`Delete ${entry.path} from this base`}
+                        disabled={busy}
+                        onClick={() => setRemoving(entry.path)}
+                      >
+                        <TrashGlyph />
+                      </button>
+                    )}
                       </>
                     )}
                   </div>
@@ -1206,7 +1294,61 @@ function KnowledgeEditor({
                 Reload this file
               </button>
             )}
-            {selected === null ? (
+            {selected === MANIFEST ? (
+              /* **A form, not a document.** The same fields the create form
+                 asks for, minus the ones that are the base's identity: `id` is
+                 the directory name, `type` decides writability and rank for
+                 every project reading this base, and `format` picks the
+                 adapter. They are shown, because what a base *is* belongs on
+                 this screen, and they are not inputs. */
+              form !== null &&
+              base !== null && (
+                <div className="manifest-form">
+                  <p className="manifest-fixed">
+                    <code>{base.id}</code>
+                    <span className={`type-tag type-${base.type}`}>{base.type}</span>
+                    <span className="dim">{base.format}</span>
+                    <span className="dim">
+                      — fixed. A base's id, type and format are what it{" "}
+                      <em>is</em>, and are set when it is created.
+                    </span>
+                  </p>
+
+                  <label className="field">
+                    <span className="field-name">title</span>
+                    <input
+                      autoFocus={!base.system}
+                      value={form.title}
+                      disabled={base.system}
+                      aria-label="Base title"
+                      onChange={(event) =>
+                        setForm({ ...form, title: event.target.value })
+                      }
+                    />
+                  </label>
+                  {base.system && (
+                    <p className="hint">
+                      This base ships with the product, and its title is the name
+                      everything else refers to it by. Its prose is yours.
+                    </p>
+                  )}
+
+                  <label className="field">
+                    <span className="field-name">what it holds</span>
+                    <textarea
+                      autoFocus={base.system}
+                      rows={16}
+                      spellCheck={false}
+                      value={form.about}
+                      aria-label="What this base holds"
+                      onChange={(event) =>
+                        setForm({ ...form, about: event.target.value })
+                      }
+                    />
+                  </label>
+                </div>
+              )
+            ) : selected === null ? (
               <p className="dim">
                 Everything in <code>_knowledge/{baseId}/</code>. Pick a file.
               </p>
@@ -1252,9 +1394,9 @@ function KnowledgeEditor({
               <span className="hint">
                 {selected === MANIFEST ? (
                   <>
-                    This is what the base <em>is</em> — its id, its scope, and the
-                    prose the library shows. Edit it at{" "}
-                    <code>_knowledge/{baseId}/manifest.md</code> and commit it.
+                    Read first by every machine wired to this base — what it is
+                    for, how it is organised, what belongs in it. This is where
+                    a base is steered.
                   </>
                 ) : selected === null ? (
                   <>
@@ -1310,7 +1452,7 @@ function KnowledgeEditor({
  * machine wrote it (`spec/decisions/0017`).
  *
  * **And no replace.** A skill import can overwrite; this cannot. Replacing a
- * base would silently re-scope a store other projects are reading, and a
+ * base would silently re-type a store other projects are reading, and a
  * `principles` base that became `general` under a factory which had been
  * refused a write handle is the one change nothing downstream could detect.
  */
@@ -1319,7 +1461,7 @@ function KnowledgeLibrary() {
   const [creating, setCreating] = useState(false);
   const [id, setId] = useState("");
   const [title, setTitle] = useState("");
-  const [scope, setScope] = useState<KnowledgeScope>("general");
+  const [baseType, setBaseType] = useState<KnowledgeType>("general");
   const [about, setAbout] = useState("");
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
@@ -1349,7 +1491,7 @@ function KnowledgeLibrary() {
     setCreating(false);
     setId("");
     setTitle("");
-    setScope("general");
+    setBaseType("general");
     setAbout("");
     setProblem(null);
   }
@@ -1358,17 +1500,16 @@ function KnowledgeLibrary() {
     setBusy(true);
     setProblem(null);
     try {
-      const made = await api.createKnowledgeBase({
+      await api.createKnowledgeBase({
         id: id.trim(),
         title: title.trim() || id.trim(),
-        scope,
+        type: baseType,
         about,
       });
-      setBases((current) =>
-        [...(current ?? []).filter((one) => one.id !== made.id), made].sort((a, b) =>
-          a.id.localeCompare(b.id),
-        ),
-      );
+      // **Re-read rather than splice the new base in.** The order is the
+      // server's — system bases first, then by id — and reproducing that rule
+      // here would be a second copy of it to keep true.
+      setBases(await api.knowledge());
       reset();
     } catch (cause) {
       setProblem(cause instanceof Error ? cause.message : String(cause));
@@ -1435,13 +1576,13 @@ function KnowledgeLibrary() {
           </label>
 
           <label className="field">
-            <span className="field-name">scope</span>
+            <span className="field-name">type</span>
             <select
-              value={scope}
-              aria-label="Base scope"
-              onChange={(event) => setScope(event.target.value as KnowledgeScope)}
+              value={baseType}
+              aria-label="Base type"
+              onChange={(event) => setBaseType(event.target.value as KnowledgeType)}
             >
-              {KNOWLEDGE_SCOPES.map((one) => (
+              {KNOWLEDGE_TYPES.map((one) => (
                 <option key={one} value={one}>
                   {one}
                 </option>
@@ -1449,8 +1590,8 @@ function KnowledgeLibrary() {
             </select>
           </label>
           <p className="hint">
-            {KNOWLEDGE_SCOPE_NOTE[scope]}.{" "}
-            {scope === "principles"
+            {KNOWLEDGE_TYPE_NOTE[baseType]}.{" "}
+            {baseType === "principles"
               ? "Read-only to every machine, permanently: principles are what the agents are measured against, and one that could edit the standard it is judged by could pass its own review."
               : "Machines may write to it where you draw a write wire, and only there."}
           </p>
@@ -1493,79 +1634,102 @@ function KnowledgeLibrary() {
 
       {bases === null ? (
         <p className="muted">Reading the workspace…</p>
-      ) : bases.length === 0 ? (
-        <p className="muted">
-          None yet. A base is a directory under <code>_knowledge/</code> with a{" "}
-          <code>manifest.md</code> in it — create one here, or drop one in and
-          commit it.
-        </p>
       ) : (
-        <div className="skill-grid">
-          {bases.map((base) =>
-            confirming === base.id ? (
-              <div key={base.id} className="skill-card is-confirming" role="alertdialog">
-                <span className="name">Delete {base.id}?</span>
-                <span className="desc">
-                  Removes <code>_knowledge/{base.id}/</code> and everything in it
-                  — {base.files} file{base.files === 1 ? "" : "s"}. Any node still
-                  selecting it will refuse to run, by name. It is in the
-                  workspace repo, so git is the undo.
-                </span>
-                <span className="row">
-                  <button
-                    type="button"
-                    className="danger"
-                    onClick={() => void remove(base.id)}
-                    disabled={deleting !== null}
-                  >
-                    {deleting === base.id ? "Deleting…" : "Delete"}
-                  </button>
-                  <button
-                    type="button"
-                    className="link-button"
-                    onClick={() => setConfirming(null)}
-                    disabled={deleting !== null}
-                  >
-                    Cancel
-                  </button>
-                </span>
-              </div>
-            ) : (
-              /* The card is a button now, so the delete has to be its sibling
-                 rather than its child — a button inside a button is not a
-                 thing the DOM has, which is the whole reason `.skill-slot`
-                 exists next door. `.card-delete` is absolute inside it, so
-                 nothing moves. */
-              <div key={base.id} className="skill-slot">
-                <button
-                  type="button"
-                  className="skill-card knowledge-card"
-                  title={`Open ${base.id}`}
-                  onClick={() => setOpening(base.id)}
-                >
-                  <span className="name">{base.title}</span>
-                  <span className="desc">{base.about}</span>
-                  <span className="meta">
-                    <span className={`scope-tag scope-${base.scope}`}>{base.scope}</span>
-                    {" · "}
-                    {base.files} file{base.files === 1 ? "" : "s"} ·{" "}
-                    {Math.max(1, Math.round(base.bytes / 1024))} kB
-                    {!base.writable && " · read-only to machines"}
-                  </span>
-                </button>
-                <button
-                  type="button"
-                  className="card-delete"
-                  aria-label={`Delete ${base.id}`}
-                  title="Delete knowledge base"
-                  onClick={() => setConfirming(base.id)}
-                >
-                  ×
-                </button>
-              </div>
-            ),
+        <>
+          {/* **Never an empty state any more** — the shipped bases are always
+              on the shelf — so this says "nothing of yours yet" and the grid
+              below it still renders. */}
+          {bases.every((one) => one.system) && (
+            <p className="muted">
+              Nothing of your own yet. A base is a directory under{" "}
+              <code>_knowledge/</code> with a <code>manifest.md</code> in it —
+              create one here, or drop one in and commit it.
+            </p>
           )}
-        </div>
+          <div className="skill-grid">
+            {bases.map((base) =>
+              confirming === base.id ? (
+                <div key={base.id} className="skill-card is-confirming" role="alertdialog">
+                  <span className="name">Delete {base.id}?</span>
+                  <span className="desc">
+                    Removes <code>_knowledge/{base.id}/</code> and everything in it
+                    — {base.files} file{base.files === 1 ? "" : "s"}. Any node still
+                    selecting it will refuse to run, by name. It is in the
+                    workspace repo, so git is the undo.
+                  </span>
+                  <span className="row">
+                    <button
+                      type="button"
+                      className="danger"
+                      onClick={() => void remove(base.id)}
+                      disabled={deleting !== null}
+                    >
+                      {deleting === base.id ? "Deleting…" : "Delete"}
+                    </button>
+                    <button
+                      type="button"
+                      className="link-button"
+                      onClick={() => setConfirming(null)}
+                      disabled={deleting !== null}
+                    >
+                      Cancel
+                    </button>
+                  </span>
+                </div>
+              ) : (
+                /* The card is a button now, so the delete has to be its sibling
+                   rather than its child — a button inside a button is not a
+                   thing the DOM has, which is the whole reason `.skill-slot`
+                   exists next door. `.card-delete` is absolute inside it, so
+                   nothing moves. */
+                <div key={base.id} className="skill-slot">
+                  <button
+                    type="button"
+                    className={`skill-card knowledge-card${base.system ? " is-system" : ""}`}
+                    title={`Open ${base.id}`}
+                    onClick={() => setOpening(base.id)}
+                  >
+                    <span className="name">
+                      {base.title}
+                      {base.system && (
+                        <span
+                          className="skill-badge"
+                          title="Shipped with the product. Edit its files freely; it cannot be removed."
+                        >
+                          system
+                        </span>
+                      )}
+                    </span>
+                    <span className="desc">{base.about}</span>
+                    <span className="meta">
+                      <span className={`type-tag type-${base.type}`}>{base.type}</span>
+                      {" · "}
+                      {base.files} file{base.files === 1 ? "" : "s"} ·{" "}
+                      {Math.max(1, Math.round(base.bytes / 1024))} kB
+                      {!base.writable && " · read-only to machines"}
+                    </span>
+                  </button>
+                  {/* **No delete control at all on a system base**, rather than
+                      one that is offered and refused — `ProjectList`'s rule for
+                      an unoverridden system skill, and here it is stronger: the
+                      seed would put the directory straight back, so the button
+                      would be offering something that cannot happen. */}
+                  {!base.system && (
+                    <button
+                      type="button"
+                      className="card-delete"
+                      aria-label={`Delete ${base.id}`}
+                      title="Delete knowledge base"
+                      onClick={() => setConfirming(base.id)}
+                    >
+                      ×
+                    </button>
+                  )}
+                </div>
+              ),
+            )}
+          </div>
+        </>
       )}
 
       {opening && (

@@ -44,7 +44,7 @@ from .test_routing import agent, belt, drive, node, project, repo, orch, save, s
 MANIFEST = """---
 id: {id}
 title: {title}
-scope: {scope}
+type: {type}
 ---
 
 Everything we know about the Acme API client, in order.
@@ -53,7 +53,7 @@ Everything we know about the Acme API client, in order.
 
 @pytest.fixture
 def library(workspace: Path) -> Path:
-    for base_id, title, scope in (
+    for base_id, title, base_type in (
         ("acme-api", "Acme API timeline", "codebase"),
         ("principles", "Engineering principles", "principles"),
         ("elsewhere", "Somebody else's", "general"),
@@ -61,7 +61,7 @@ def library(workspace: Path) -> Path:
         root = workspace / "_knowledge" / base_id
         root.mkdir(parents=True)
         (root / "manifest.md").write_text(
-            MANIFEST.format(id=base_id, title=title, scope=scope), encoding="utf-8"
+            MANIFEST.format(id=base_id, title=title, type=base_type), encoding="utf-8"
         )
         (root / "timeline.md").write_text("# Timeline\n\nMoved to v3.\n", encoding="utf-8")
     return workspace
@@ -163,7 +163,7 @@ def test_a_read_wire_grants_the_base_read_only(
 
     assert [entry["id"] for entry in captured[0].bases] == ["acme-api"]
     assert captured[0].bases[0]["writable"] is False
-    assert captured[0].bases[0]["scope"] == "codebase"
+    assert captured[0].bases[0]["type"] == "codebase"
 
 
 def test_a_write_wire_grants_the_child_nothing_extra(
@@ -799,7 +799,7 @@ def test_the_run_takes_its_grants_and_leaves_the_bases_alone(
 
 # ---- the filing pass -------------------------------------------------------
 #
-# A knowledge node files through a skill chosen by its scope
+# A knowledge node files through a skill chosen by its type
 # (`skills.SYSTEM_SKILLS`), so a base becomes a datastore rather than a
 # transcript. Decision 0015's lesson survives as a *mechanism*: a pass that
 # writes nothing does not leave an empty base, it falls back to the verbatim
@@ -883,11 +883,11 @@ def test_a_pass_that_crashes_still_files_the_answer(
     assert (library / "_knowledge" / "acme-api" / entry).exists()
 
 
-def test_the_pass_gets_the_skill_its_scope_names_and_a_writable_grant(
+def test_the_pass_gets_the_skill_its_type_names_and_a_writable_grant(
     library: Path, test_store: Store, orch: Orchestrator, repo: Path, monkeypatch
 ) -> None:
     """Two claims the canvas makes that only the spawn can make true: the
-    shelf's scope picks the skill, and this is the one spawn in the system
+    shelf's type picks the skill, and this is the one spawn in the system
     holding a write tool."""
     seen: list[tuple[str | None, list[str], dict]] = []
     original = FakeAdapter.create_run
@@ -972,7 +972,7 @@ def test_a_principles_base_never_reaches_a_filing_pass(
     """Read-only is read-only on this path too — and it is settled earlier
     than the pass, at run-check, so a `principles` base cannot reach one at
     all. That is why there are three filing skills and not four: the fourth
-    scope has nothing to write."""
+    type has nothing to write."""
     line(
         test_store,
         writes("n-do", "n-base"),
@@ -982,7 +982,7 @@ def test_a_principles_base_never_reaches_a_filing_pass(
         drive(orch)
     assert "principles base" in str(refused.value)
 
-    # And the registry holds exactly the writable scopes.
+    # And the registry holds exactly the writable types.
     assert skills.SYSTEM_SKILLS == {
-        f"knowledge-{scope}" for scope in ("general", "codebase", "project")
+        f"knowledge-{one}" for one in ("general", "codebase", "project")
     }

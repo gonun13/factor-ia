@@ -25,9 +25,13 @@ disagreement naming both sides. Do not resolve it here.
 
 ## Before you write anything
 
-1. `knowledge_list` the base.
-2. `knowledge_search` for the task, decision or area the answer concerns.
-3. `knowledge_get` the file you are about to change. **Prefer
+1. `knowledge_get` the base's `manifest.md`. It says what this particular
+   base is for, how it is organised and what belongs in it — the filing
+   conventions below are the general rule, and the manifest is this
+   shelf's. **Where they differ, the manifest wins.**
+2. `knowledge_list` the base.
+3. `knowledge_search` for the task, decision or area the answer concerns.
+4. `knowledge_get` the file you are about to change. **Prefer
    `knowledge_update` over `knowledge_append`.** This base describes the
    present, so most writes replace something that is no longer true — a task
    that moved on, a decision that was superseded, a question that got answered.

@@ -49,7 +49,7 @@ Three concepts, easy to confuse, and the differences are the design:
 | Authority | unconditional — it is instruction | reference — check it or ignore it | **source of truth** — level with the project's own docs |
 | Lifetime | reviewed in git, outlives every run | one run, then discarded | permanent, and shared across projects |
 | Written by | a person, in `_skills/` | a machine, during the run | a person *or* a machine, over months |
-| Maintained by | whoever edits the file | nobody — it is discarded | the base's own filing skill, per scope |
+| Maintained by | whoever edits the file | nobody — it is discarded | the base's own filing skill, per type |
 | Delivered as | its body, in the system prompt | a path, in the prompt | **tools**, plus an index in the system prompt |
 | Belongs to | the workspace | one run | the workspace, and any team it is shared with |
 
@@ -60,27 +60,27 @@ concept carrying both sets of rules would be a concept nobody could state.
 
 The only relationship between them is **precedence**, below.
 
-## Scope, and what it buys
+## Type, and what it buys
 
-Every base declares one `scope`, and the scope is not decoration. It is shown to
+Every base declares one `type`, and the type is not decoration. It is shown to
 the user so they know what a base is for, and told to the agent so it knows what
 to do with what it reads.
 
-| scope | holds | example |
+| type | holds | example |
 |---|---|---|
 | `principles` | how work should be done, everywhere, always | software engineering principles, design patterns, the team's review standards |
 | `project` | what is true of one project | its decisions, its task list, its long-term research |
 | `codebase` | what is true of one repository, across the projects that touch it | the timeline of work done on it, its architecture notes, its gotchas |
 | `general` | durable reference that belongs to no project and no repo | vendor API notes, agent logs, accumulated research |
 
-Scope controls exactly two things.
+Type controls exactly two things.
 
 **1. Whether anything may write.** A `principles` base is **read-only inside a
 run**, permanently and without a per-base override — no agent, and no wire.
 Principles are what the agents are measured against; a machine that can edit the
 standard it is judged by is a machine that can pass its own review. The other
-three scopes follow the node's handles (below) — a run fills a base if, and only
-if, someone drew the wire. (No agent writes to a base under any scope; the wire
+three types follow the node's handles (below) — a run fills a base if, and only
+if, someone drew the wire. (No agent writes to a base of any type; the wire
 does, in the orchestrator. See *A write wire files the machine's answer*.)
 
 **2. Precedence when sources disagree**, which the agent is told in as many
@@ -96,11 +96,11 @@ Read downward until something answers the question; when two sources conflict,
 the higher one wins and the disagreement is worth reporting rather than
 silently resolving.
 
-Scope does **not** do anything else, and the omissions are deliberate:
+Type does **not** do anything else, and the omissions are deliberate:
 
-- it does not validate bindings — attaching a `project`-scoped base to a second
+- it does not validate bindings — attaching a `project` base to a second
   project is allowed, because "this base was written for project alpha, and beta
-  now needs it too" is exactly how a base earns a wider scope;
+  now needs it too" is exactly how a base earns a wider reach;
 - it does not constrain the *shape* of an entry beyond the one layout the wire
   files in (`knowledge/filing.py`) — a base's own manifest describes to the
   agent what a good entry *says*, and that is prose, not a schema this code
@@ -138,19 +138,68 @@ A top-level directory beside `_skills/` and `_factories/`, and the bargain is
 ---
 id: engineering-principles
 title: Engineering principles
-scope: principles
+type: principles
 format: markdown
 updated: 2026-09-16T10:18:44Z
 ---
 
-What this base is for: which shelf this is, in a sentence somebody reading a
-library can act on. This prose is shown to the user — the library card, the
-editor's header, the node's hover note — and is **not** given to the agent.
-What *belongs* in a base is said once, in the filing skills
-(`knowledge-general` / `knowledge-codebase` / `knowledge-project`), and a
-per-base paragraph repeating it was prompt paid on every turn of every machine
-wired to the base.
+What this base is for, how it is organised, and what belongs in it. This prose
+is shown to the user — the library card, the editor's header, the node's hover
+note — and is still **not** pasted into any agent's prompt. What it now is, as
+of `../decisions/0018-system-knowledge-bases.md`, is the first thing an agent
+wired to this base is told to go and read: the block below names `manifest.md`
+and sends it there before it searches.
+
+So it is written for both. The general rule about what belongs in a base is
+said once, in the filing skills (`knowledge-general` / `knowledge-codebase` /
+`knowledge-project`); this is what is true of *this* shelf, and where the two
+differ the manifest wins.
 ```
+
+The field was called `scope:` until decision 0018. A manifest that still says
+so is read as `type:`, silently and permanently, and nothing rewrites the file
+— the migration is somebody opening it, not the server doing it behind their
+back. `POST /api/knowledge` does not take the old name.
+
+## The bases the product ships
+
+`store.SYSTEM_BASES` is a frozenset of ids the workspace always has, whatever
+anybody does to it — the knowledge half of `skills.SYSTEM_SKILLS`. It holds one
+today: `software-architecture-principles`, twelve principles at one file each,
+of `type: principles`. The documents live in
+`backend/factoria/system_knowledge/<id>/`, beside `system_skills/`.
+
+**They are seeded into the workspace, not served from the package.**
+`store.ensure_system_bases` copies any shipped file missing from
+`_knowledge/<id>/` and runs at the top of `list_bases`, `get_base` and the app's
+lifespan. After that it is an ordinary base directory: git tracks it, the
+adapter reads it, the budgets bound it, `git log` shows every edit. That is the
+difference from a system skill, and it is deliberate — a skill is one document
+the product goes on authoring, a base is a directory the operator is expected
+to take over.
+
+Membership buys exactly three things:
+
+- **the directory is restored** when a file goes missing, which is what makes
+  "cannot be deleted" a fact about the base rather than a rule in the API;
+- **the base cannot be deleted** — `store.delete_base` refuses a registry id;
+- **a shipped file cannot be removed** — `knowledge_api.delete_entry` refuses a
+  path in `store.system_files(id)`. A file the *operator* added to the same
+  base is ordinary and stays deletable, which is why `KnowledgeEntry.protected`
+  is derived per entry.
+
+All three raise `KnowledgeProtected`, which the API answers with **405** and
+not 403: the caller may act on this base — the editor is right there — and this
+verb is simply not one it has.
+
+It buys **no editing restriction**. The content is the operator's; editing is
+the point. The cost, accepted rather than hidden: nothing overwrites a file
+somebody has changed, so a shipped correction never reaches it.
+
+`system` is carried on `KnowledgeBaseSummary`, derived from the registry on
+every read like `writable` — a stale browser cannot grant it and a manifest
+cannot claim it. The library sorts system bases first, renders a `system` badge,
+and offers no delete control at all rather than one that is refused.
 
 **Budgets, as numbers**: 64 KiB per file, 4 MiB per base, 2 000 files per base.
 Past them a write is refused with `too_large` rather than truncated — truncation
@@ -162,14 +211,27 @@ a section on the projects list (beside `frontend/src/screens/ProjectList.tsx`'s
 `backend/factoria/skills_api.py` — `POST` to create or import, `DELETE` to
 remove, and nothing fetches a URL.
 
-**No `PUT` on a base.** A base's *identity* — its id, its scope, the prose the
-library shows — is create-time, and is edited on disk and committed. A re-scope
-through a text box is the one change nothing downstream could detect.
+**No `PUT` on a base, and a `PATCH`.** A base's *identity* — its id, its
+`type`, its format — is create-time. Its **title and prose are not**, and since
+[`../decisions/0018`](../decisions/0018-system-knowledge-bases.md) they are
+edited through `PATCH /api/knowledge/{id}` (`edit_base`): the prose is what an
+agent reads first, so it is where a base is steered, and it was the one thing
+about a base nobody could change from the screen.
+
+**A form, not a document.** The route takes `title` and `about`, both optional,
+and `store.save_manifest` splices them into the manifest already on disk. Two
+reasons it is not a textarea over the file: a document box would offer a
+re-type in the same gesture as a typo fix, and a form that posted back a
+*rebuilt* manifest would silently drop frontmatter keys this server does not
+read. `type`, `id` and `format` are not expressible here at all. **A system
+base takes `about` only** — its title is the product's name for it.
 
 **A `PUT` and a `DELETE` on one entry.** `PUT /api/knowledge/{id}/entry?path=…`
 (`knowledge_api.save_entry`) saves text over a content file the base **already
 lists**; `DELETE` on the same address (`delete_entry`) removes one. Both share
-one precondition (`_content_entry`) and both refuse `manifest.md`. Neither
+one precondition (`_content_entry`) and both refuse `manifest.md` — it is not
+content, and it is never removed, because without it the directory is not a
+base at all. Neither
 creates anything, and **there is no rename**: a rename is a delete and a
 create, and the create is the half that stays in the workspace, where git sees
 a new file arrive as a new file. Both write through the same adapter the agents
@@ -192,7 +254,7 @@ That narrows the old rule rather than dropping it. "The file is the editor" was
 right about *authority* and was being read as a rule about *access*: two
 authorities was never the risk, two **shapes** was
 ([`../decisions/0017`](../decisions/0017-the-library-edits-a-bases-files.md)).
-The operator's save is **not** gated by scope — `writable` answers "may a
+The operator's save is **not** gated by type — `writable` answers "may a
 machine inside a run write here", and a library that refused what `vim` allows
 would not be a boundary.
 
@@ -275,7 +337,7 @@ for accepting it: work goes in and comes out.
 
 One trap, already documented in `frontend/src/graph.ts:toFlowEdge`: **React Flow
 silently drops an edge whose handle names one its node does not render.** So
-switching a node's base to one with `principles` scope must *normalise the write
+switching a node's base to one of `principles` type must *normalise the write
 wires away* — visibly, with a notice — rather than leaving wires pointing at a
 handle that has gone. An invisible wire is worse than a refused one.
 
@@ -311,7 +373,7 @@ This is the section the rest of the document exists for, and it is new ground:
 Memory is delivered as a path plus `--add-dir`, which is right for a scratch file
 written whole by one process. It is wrong here. A base is a shared, permanent,
 concurrently-read store where a write must be serialized, validated against a
-scope and recorded; handing an agent a directory and hoping would put all three
+type and recorded; handing an agent a directory and hoping would put all three
 rules in a prompt, which is where rules go to be ignored.
 
 ### One server, many bases
@@ -353,7 +415,7 @@ storage format to read it would make every base's format part of the contract.
 without parsing prose:
 
 ```json
-{ "base": "acme-api-timeline", "scope": "codebase", "writable": false,
+{ "base": "acme-api-timeline", "type": "codebase", "writable": false,
   "path": "2026-q3.md", "bytes": 8213, "truncated": false, "next": null }
 ```
 
@@ -367,7 +429,7 @@ returned half a base would be read as the whole of it.
 |---|---|---|
 | `unknown_base` | no such base | stop naming it; it is a wiring bug |
 | `not_wired` | real base, not wired to this node | proceed without it, and say so |
-| `read_only_scope` | a write to `principles`, or any write from a spawn | report the proposed change in its output instead |
+| `read_only_type` | a write to `principles`, or any write from a spawn | report the proposed change in its output instead |
 | `not_found` | no such path in the base | `knowledge_list` first |
 | `too_large` | over a budget | split the entry |
 | `locked` | another writer holds the base | retry once, then report |
@@ -385,7 +447,7 @@ sqlite one loses a row — and a library that reached past the adapter to
 `Path.unlink` would work for exactly as long as there was one adapter.
 `MarkdownAdapter` is the only implementation in v1; sqlite is the proof the seam is real, and is not
 built. The seam's rule is that adapter's rule: **policy never crosses it.** The
-adapter is told a base's root directory and a path, never a scope, never which
+adapter is told a base's root directory and a path, never a type, never which
 node is asking, and never whether writing is allowed. Deciding what a machine may
 reach is a question about the workspace, and an adapter that could answer it
 would be a second place the answer lives.
@@ -398,7 +460,10 @@ same least-negotiable-last order:
 
 ```
 ## Knowledge: Engineering principles  (base: engineering-principles)
-Scope: principles — source of truth, above this project's docs. Read-only.
+Type: principles — source of truth, above this project's docs. Read-only.
+Start here: `knowledge_get` base "engineering-principles" path "manifest.md" — what
+this base is for, how it is organised, and what belongs in it. Read it before you
+search, and follow the conventions it gives.
 Contents:
   - review-standards.md (4.1 kB) — what a review must check, and in what order
   - naming.md (2.8 kB) — the naming rules, with the arguments for them
@@ -410,9 +475,12 @@ already in there beats one derived a second time.
 
 **An index, not a catalogue.** Tool descriptions alone would leave the agent
 guessing whether a base is worth a call; the contents list lets it go straight to
-a file it can see exists. **The manifest's prose is not in the block** — it is
-the library's sentence to a person, and the filing skills already say what
-belongs in a base. The contents are generated from the base, capped at
+a file it can see exists. **The manifest's prose is not in the block, but its
+address is** — one line, so the agent pays for the paragraph only when it
+fetches it. The manifest is skipped by the walk and so appears in no contents
+list; before decision 0018 nothing named it and no machine could find it.
+Reading it through `knowledge_get` works and is tested; **writing it does not**,
+through the library or through the tools. The contents are generated from the base, capped at
 **40 lines or 800 tokens per base, whichever comes first** — past that the list
 degrades to top-level directories with counts. The whole knowledge section is
 capped at **2 500 tokens** and must stay that way: it is paid on every turn of
@@ -442,7 +510,7 @@ shape, so a base filled that way is an append-only transcript: nobody decides
 where an entry belongs, nothing notices the base already covers it, and nothing
 maintains what is there. Before the wire appends, the orchestrator runs a short
 **filing pass** (`orchestrator._filing_pass`) wearing the system skill this
-base's scope names — `knowledge-general`, `knowledge-codebase` or
+base's type names — `knowledge-general`, `knowledge-codebase` or
 `knowledge-project`, in `skills.SYSTEM_SKILLS`. It consults the base through the
 MCP server and files the entry where that base keeps entries.
 
@@ -572,9 +640,9 @@ So:
   (`orchestrator._filing_spawn`): it is handed a grant naming one base with
   `writable: true` and the write tools on `--allowedTools`. It carries no
   belt, no worktree and no other base, and the server still re-derives
-  writability from the scope — so a `principles` base reaching it would be
+  writability from the type — so a `principles` base reaching it would be
   refused by the half that has the last word;
-- the server independently refuses a write with `read_only_scope`.
+- the server independently refuses a write with `read_only_type`.
 
 Three mechanisms for one rule is not redundancy here: the deny list stops the
 call being made, the grant stops a call that was made anyway, and the server is
@@ -713,9 +781,14 @@ and gets no card on the timeline.
 | Whether the pass actually wrote | `orchestrator._filed_anything` |
 | The three shipped skills | `backend/factoria/system_skills/*.md` |
 | The registry, the override, the revert | `skills.SYSTEM_SKILLS`, `skills._resolve`, `skills.delete_skill` |
+| The base the product ships | `backend/factoria/system_knowledge/software-architecture-principles/*.md` |
+| The registry, the seed, the protections | `store.SYSTEM_BASES`, `store.ensure_system_bases`, `store.system_files`, `store.KnowledgeProtected` |
+| Where the agent is sent first | `knowledge/index._manifest_line`, `MarkdownAdapter._resolve(writing=True)` |
 | The MCP server and its five tools | `knowledge/mcp.py` |
 | The library API — create and delete a base, save and delete one entry | `backend/factoria/knowledge_api.py`, a fifth router in `main.py` |
 | What both writing verbs may reach | `knowledge_api._content_entry` |
+| The manifest form, and what it cannot express | `knowledge_api.edit_base`, `store.save_manifest` |
+| The form itself | `ProjectList.KnowledgeEditor`'s `.manifest-form`, `api.editKnowledgeBase` |
 | The library's editor | `ProjectList.KnowledgeEditor`, `api.saveKnowledgeEntry` / `api.deleteKnowledgeEntry` |
 | The node type, and "attached, not on the line" | `models.NodeType`, `models.ATTACHED_TYPES` |
 | The wiring rules | `runcheck._knowledge_problems`, mirrored in `frontend/src/validation.ts` |
@@ -798,9 +871,10 @@ node's answer itself and no spawn holds a write tool.
 
 **6. The library edits content, not shape.** The design said the file was the
 editor and there would be no write endpoint. The build kept the rule and
-narrowed it: `PUT` and `DELETE` on `/api/knowledge/{id}/entry` reach one file
-the base already lists, while creating, renaming and `manifest.md` all stay on
-disk. See
+narrowed it twice: `PUT` and `DELETE` on `/api/knowledge/{id}/entry` reach one
+file the base already lists, and a `PATCH` on the base edits the two manifest
+fields that are not identity — while creating, renaming and the `type:` line
+all stay on disk. See
 [`../decisions/0017`](../decisions/0017-the-library-edits-a-bases-files.md) —
 including the sharp edge that made the save carry the text it opened with: a
 machine that appended while the editor was open leaves that text a *prefix* of
@@ -817,7 +891,7 @@ Two smaller decisions, recorded because both are refusals somebody will meet:
   cheaper than serving it something plausible.
 - **`POST /api/knowledge` has no `overwrite`**, where a skill import does.
   Replacing a skill replaces one reviewed document with another; replacing a
-  base would silently re-scope a store other projects are reading, and a
+  base would silently re-type a store other projects are reading, and a
   `principles` base that became `general` under a factory which had been refused
   a write handle is the one change nothing downstream could detect.
 

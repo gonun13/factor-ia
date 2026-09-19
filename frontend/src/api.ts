@@ -116,16 +116,30 @@ export const api = {
     ),
   /** Create a base, or import a `manifest.md` the browser already read.
       **No `overwrite`**, unlike a skill import: replacing a base would silently
-      re-scope a store other projects are reading. */
+      re-type a store other projects are reading. */
   createKnowledgeBase: (body: {
     id: string;
     title?: string;
-    scope?: string;
+    type?: string;
     about?: string;
     text?: string;
   }) =>
     request<KnowledgeBase>("/api/knowledge", {
       method: "POST",
+      body: JSON.stringify(body),
+    }),
+  /** Edit a base's title and prose — the two fields of the record a base keeps
+      about itself that are **not** its identity.
+
+      `PATCH` and not `PUT`: there is still no way to replace a base. Omitting a
+      field leaves it alone, and neither `type`, `id` nor `format` is
+      expressible here — those are what the base *is*. Fields rather than the
+      whole `manifest.md` so the server splices into the file that is already
+      there, keeping any frontmatter key it does not itself read. A system base
+      takes `about` only. */
+  editKnowledgeBase: (id: string, body: { title?: string; about?: string }) =>
+    request<KnowledgeBase>(`/api/knowledge/${encodeURIComponent(id)}`, {
+      method: "PATCH",
       body: JSON.stringify(body),
     }),
   /** Deletes the directory and everything in it. The one recursive delete in

@@ -8,13 +8,18 @@ this, and it is also the argument for the caps below — the section is paid on
 `memory.WRITER_CONTRACT`'s ~190 tokens, and an index that grew with the base
 would be a tax that grew with the base.
 
-**The manifest's prose is not in here.** `about` is the library's sentence to a
-*person* — what this shelf is for, read off a card. What *belongs* in a base is
-the filing pass's business, and it is already said once, in the system skills
-`knowledge-general` / `knowledge-codebase` / `knowledge-project`
-(`skills.SYSTEM_SKILLS`, worn by `orchestrator._filing_pass`). A per-base
-paragraph restating it was prompt paid on every turn of every machine for a
-sentence written for whoever maintains the base.
+**The manifest's prose is not in here — its address is.** `about` stays out of
+the block, for decision 0017's reason unchanged: a per-base paragraph restating
+what belongs in a base was prompt paid on every turn of every machine, and what
+belongs in a base is already said once, in the system skills `knowledge-general`
+/ `knowledge-codebase` / `knowledge-project` (`skills.SYSTEM_SKILLS`, worn by
+`orchestrator._filing_pass`).
+
+What 0017 left behind was a manifest no machine could find: `store._walk` skips
+it, so it appears in no contents list, and nothing named it. `_manifest_line`
+names it — one line, and the agent pays for the prose only if it fetches it.
+The skill says *how* to use a base; the manifest says what *this* base is for
+and how it is organised, and only the base can say that.
 
 The caps, as numbers (`docs/KNOWLEDGE.md`, What the agents are told):
 
@@ -52,7 +57,7 @@ PER_BASE_MAX_TOKENS = 800
 SECTION_MAX_TOKENS = 2500
 
 #: Stated once, above every block. The order is the design's
-#: (`docs/KNOWLEDGE.md`, Scope), and the last line is the one that keeps memory
+#: (`docs/KNOWLEDGE.md`, Type), and the last line is the one that keeps memory
 #: and knowledge from being read as one thing: a memory is what this run
 #: happened to find out, and it loses to everything durable.
 PRECEDENCE = """\
@@ -116,10 +121,10 @@ substance and let it do the filing.
 - If nothing durable came out of this, say so in one line. A short honest entry
   is worth more than a long one written to fill the space."""
 
-#: What each scope means to the agent reading it, in one clause. Said per base
-#: because the scope is a property of *that* base and is the reason it sits
+#: What each type means to the agent reading it, in one clause. Said per base
+#: because the type is a property of *that* base and is the reason it sits
 #: where it does in the ladder above.
-SCOPE_NOTE = {
+TYPE_NOTE = {
     "principles": "source of truth, above this project's docs",
     "project": "what is true of one project",
     "codebase": "what is true of one repository, across the projects that touch it",
@@ -140,12 +145,12 @@ def fingerprint(base: KnowledgeBase, root: Path) -> str:
     The manifest's `updated` **plus** a hash over every entry's path, size and
     mtime. The manifest alone would be trusting a line a human edits by hand to
     change every time the directory under it does, which is exactly the
-    discipline nobody keeps; the content hash alone would miss a re-scoped base
+    discipline nobody keeps; the content hash alone would miss a re-typed base
     whose files did not move.
     """
     digest = hashlib.sha256()
     digest.update(base.updated_at.isoformat().encode("utf-8"))
-    digest.update(base.scope.encode("utf-8"))
+    digest.update(base.type.encode("utf-8"))
     for entry in base.entries:
         try:
             mtime = (root / entry.path).stat().st_mtime_ns
@@ -173,13 +178,13 @@ def base_block(base: KnowledgeBase, root: Path, *, contributes: bool) -> str:
         if cached is not None and cached[0] == stamp:
             return cached[1]
 
-    note = SCOPE_NOTE.get(base.scope, "durable reference")
+    note = TYPE_NOTE.get(base.type, "durable reference")
     permission = (
         "Read-only to you — your final answer is filed into it when you finish."
         if contributes
         else "Read-only."
     )
-    if not contributes and base.scope in ("principles",):
+    if not contributes and base.type in ("principles",):
         permission = (
             "Read-only — principles are what your work is measured against, so "
             "nothing writes to them from inside a run, this node included. If "
@@ -187,7 +192,8 @@ def base_block(base: KnowledgeBase, root: Path, *, contributes: bool) -> str:
         )
     lines = [
         f"## Knowledge: {base.title}  (base: {base.id})",
-        f"Scope: {base.scope} — {note}. {permission}",
+        f"Type: {base.type} — {note}. {permission}",
+        _manifest_line(base),
         "Contents:",
         *_contents(base),
         _call_to_action(base, contributes=contributes),
@@ -196,6 +202,30 @@ def base_block(base: KnowledgeBase, root: Path, *, contributes: bool) -> str:
     with _cache_guard:
         _cache[key] = (stamp, block)
     return block
+
+
+def _manifest_line(base: KnowledgeBase) -> str:
+    """Where to start: the base's own manifest.
+
+    **A pointer, not the prose.** Decision 0017 took `about` out of this block
+    and that still holds — a paragraph restating what belongs in a base was
+    prompt paid on every turn of every machine, for a sentence most runs never
+    needed. What it left behind was a machine that could not find the sentence
+    even when it *did* need it: the manifest is skipped by `store._walk`, so it
+    is in no contents list, and nothing named it.
+
+    One line fixes that at about a twentieth of the cost. A skill says how to
+    use a base; only the manifest says what *this* base is for, how it is
+    organised and what belongs in it — the context the machine is operating in,
+    which is the one thing neither the tools nor the instructions can supply.
+    An agent that wants it spends a call; an agent that does not spends nothing
+    (`../../spec/decisions/0018-system-knowledge-bases.md`).
+    """
+    return (
+        f'Start here: `knowledge_get` base "{base.id}" path "manifest.md" — what '
+        "this base is for, how it is organised, and what belongs in it. Read it "
+        "before you search, and follow the conventions it gives."
+    )
 
 
 def _call_to_action(base: KnowledgeBase, *, contributes: bool) -> str:

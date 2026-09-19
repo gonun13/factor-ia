@@ -11,10 +11,14 @@ them. Write a document they can read, not a log they have to reconstruct.
 
 ## Before you write anything
 
-1. `knowledge_list` the base, to see what topics it already holds.
-2. `knowledge_search` for the subject of the answer. This base is organised by
+1. `knowledge_get` the base's `manifest.md`. It says what this particular
+   base is for, how it is organised and what belongs in it — the filing
+   conventions below are the general rule, and the manifest is this
+   shelf's. **Where they differ, the manifest wins.**
+2. `knowledge_list` the base, to see what topics it already holds.
+3. `knowledge_search` for the subject of the answer. This base is organised by
    topic, so most new material belongs inside a file that already exists.
-3. `knowledge_get` that file and read it before changing it. **Prefer
+4. `knowledge_get` that file and read it before changing it. **Prefer
    `knowledge_update` over `knowledge_append`**: new material is merged into
    the section it belongs to, in the right place, not bolted onto the end.
 

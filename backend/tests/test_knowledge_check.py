@@ -29,7 +29,7 @@ from .test_routing import agent, belt, node, repo  # noqa: F401
 MANIFEST = """---
 id: {id}
 title: {id}
-scope: {scope}
+type: {type}
 ---
 
 What this base is for.
@@ -39,11 +39,11 @@ What this base is for.
 @pytest.fixture
 def library(workspace: Path) -> Path:
     """Two bases on disk: one writable, one not."""
-    for base_id, scope in (("acme-api", "codebase"), ("principles", "principles")):
+    for base_id, base_type in (("acme-api", "codebase"), ("principles", "principles")):
         root = workspace / "_knowledge" / base_id
         root.mkdir(parents=True)
         (root / "manifest.md").write_text(
-            MANIFEST.format(id=base_id, scope=scope), encoding="utf-8"
+            MANIFEST.format(id=base_id, type=base_type), encoding="utf-8"
         )
     return workspace
 
@@ -247,7 +247,7 @@ def test_a_base_nothing_reaches_is_refused(library: Path, repo: Path) -> None:
     assert "Acme API" in problem
 
 
-# ---- scope -----------------------------------------------------------------
+# ---- type ------------------------------------------------------------------
 
 
 def test_a_write_wire_onto_principles_is_refused_server_side(

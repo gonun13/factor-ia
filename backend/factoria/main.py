@@ -12,6 +12,7 @@ from fastapi.staticfiles import StaticFiles
 
 from . import __version__, config
 from .api import router as api_router
+from .knowledge import store as knowledge_store
 from .knowledge_api import router as knowledge_router
 from .orchestrator import get_orchestrator
 from .runs_api import router as runs_router
@@ -24,7 +25,7 @@ log = logging.getLogger("factoria")
 
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
-    """Durability, on the way up.
+    """Durability, and the shipped bases, on the way up.
 
     `DESIGN.md`, Non-functional requirements: *"a run interrupted mid-flight is
     marked failed on restart, never silently resumed."* The sweep runs before
@@ -33,7 +34,14 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     feature waiting to be built here — a half-finished agent turn cannot be
     picked up mid-sentence, and pretending otherwise is how a tool loses work
     quietly.
+
+    The seed is belt and braces: `store.list_bases` and `store.get_base` both
+    call it, so every path that could observe a system base has already made
+    sure it is there. Doing it here as well means a fresh workspace has the
+    directory on disk — and in `git status` — before anybody opens the library,
+    rather than at the moment they first look.
     """
+    knowledge_store.ensure_system_bases()
     interrupted = get_orchestrator().sweep_interrupted()
     if interrupted:
         log.warning("marked %d interrupted run(s) failed: %s", len(interrupted), ", ".join(interrupted))

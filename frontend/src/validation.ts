@@ -415,9 +415,9 @@ export function runProblems(
         reached.add(target.id);
         const chosen = selected.get(target.id);
         const base = chosen ? library.get(chosen) : undefined;
-        if (base && !knowledgeWritable(base.scope)) {
+        if (base && !knowledgeWritable(base.type)) {
           problems.push({
-            message: `“${label(source)}” is wired to write to “${label(target)}”, which is a ${base.scope} base. Principles are what the machines are measured against, so nothing may edit them from inside a run — a machine that can edit the standard it is judged by is a machine that can pass its own review.`,
+            message: `“${label(source)}” is wired to write to “${label(target)}”, which is a ${base.type} base. Principles are what the machines are measured against, so nothing may edit them from inside a run — a machine that can edit the standard it is judged by is a machine that can pass its own review.`,
             nodeIds: [source.id, target.id],
           });
         }

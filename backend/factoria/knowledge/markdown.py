@@ -24,7 +24,9 @@ from .store import (
     BASE_MAX_BYTES,
     BASE_MAX_FILES,
     FILE_MAX_BYTES,
+    MANIFEST_NAME,
     KnowledgeNotFound,
+    KnowledgeReadOnly,
     KnowledgeStale,
     KnowledgeTooLarge,
     TEXT_SUFFIXES,
@@ -138,12 +140,12 @@ class MarkdownAdapter:
         Separated from the file below it by a blank line and nothing else — no
         heading, no timestamp, no provenance. What a good entry looks like is
         the base's own convention, described to the agent in its manifest prose
-        (`docs/KNOWLEDGE.md`, Scope: "append-only logs, task records and curated
+        (`docs/KNOWLEDGE.md`, Type: "append-only logs, task records and curated
         prose are conventions a base's manifest describes … not a schema this
         code enforces"). An adapter that stamped its own heading on every entry
         would make one of those conventions the only one.
         """
-        target = self._resolve(root, path)
+        target = self._resolve(root, path, writing=True)
         body = (content or "").replace("\r\n", "\n").replace("\r", "\n").strip("\n")
         if not body.strip():
             raise KnowledgeStale("there is nothing in this entry to append")
@@ -166,7 +168,7 @@ class MarkdownAdapter:
         matches are `stale` too — an anchor that is not unique is an anchor that
         does not say which passage was meant.
         """
-        target = self._resolve(root, path)
+        target = self._resolve(root, path, writing=True)
         if not target.exists():
             raise KnowledgeNotFound(f"no entry at {path!r} in this base")
         text = self._read_or_empty(target)
@@ -207,7 +209,7 @@ class MarkdownAdapter:
         and "it was never there" are different answers, and a caller that
         cannot tell them apart cannot tell a stale list from a finished job.
         """
-        target = self._resolve(root, path)
+        target = self._resolve(root, path, writing=True)
         try:
             target.unlink()
         except FileNotFoundError:
@@ -227,15 +229,36 @@ class MarkdownAdapter:
 
     # ---- internals ---------------------------------------------------------
 
-    def _resolve(self, root: Path, path: str) -> Path:
+    def _resolve(self, root: Path, path: str, *, writing: bool = False) -> Path:
         """The file a relative path addresses, containment-checked.
 
         The suffix rule is here rather than only in the walk because this is the
         call a *write* goes through: a base is served as text, and an adapter
         that would create `notes.bin` on request would create an entry its own
         `list` then refuses to show.
+
+        **`writing` refuses the root `manifest.md`.** Reading it is the point —
+        `index._manifest_line` sends every agent there first, and the whole of
+        `knowledge_get` on it is that it works. Writing it is a different act:
+        the manifest is what the base *is*, and an agent that could rewrite it
+        could change the type it is read under, the conventions the next
+        machine is told to follow, or the sentence the operator uses to
+        recognise the shelf. `knowledge_api._content_entry` has always refused
+        this for the library's own editor; nothing refused it here, so a node
+        with a write wire onto a non-`principles` base could reach it through
+        `knowledge_append`. Same rule, now on both doors.
+
+        A nested `notes/manifest.md` is ordinary content, matching `store._walk`,
+        which only skips the root one.
         """
         target = entry_path(root, path)
+        if writing and relative_path(root, target) == MANIFEST_NAME:
+            raise KnowledgeReadOnly(
+                "manifest.md is what this base *is* — its id, its type, and the "
+                "prose that tells you what belongs here. It is read, never "
+                "written: put what you would have changed about it in your "
+                "output, and a person will decide."
+            )
         if target.suffix.lower() not in TEXT_SUFFIXES:
             raise KnowledgeNotFound(
                 f"{path!r} is not a markdown entry — this base is served as text, "

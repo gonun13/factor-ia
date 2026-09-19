@@ -1585,7 +1585,7 @@ class Orchestrator:
             # the one that wins. A `principles` base reached by a write wire
             # some older factory file still carries is refused here exactly as
             # the MCP server would refuse it.
-            if not knowledge_store.is_writable(base.scope):
+            if not knowledge_store.is_writable(base.type):
                 continue
             if not body:
                 # Nothing to file is not a failure — a machine is allowed to
@@ -2832,7 +2832,7 @@ class Orchestrator:
             # drawn onto one — which `runcheck` refuses, and which a hand-edited
             # factory file can still carry — grants nothing here either.
             found.append(
-                (other, base, writable[node_id] and knowledge_store.is_writable(base.scope))
+                (other, base, writable[node_id] and knowledge_store.is_writable(base.type))
             )
         return found
 
@@ -2875,7 +2875,7 @@ class Orchestrator:
                 {
                     "id": base.id,
                     "root": str(knowledge_store.base_path(base.id)),
-                    "scope": base.scope,
+                    "type": base.type,
                     "format": base.format,
                     "title": base.title,
                     # The one `true` in the system, and the server re-derives
@@ -2948,7 +2948,7 @@ class Orchestrator:
         improvement that can take the entry down with it is not one.
         """
         try:
-            instructions = skills.body(f"knowledge-{base.scope}")
+            instructions = skills.body(f"knowledge-{base.type}")
         except (SkillError, PathEscape) as exc:
             # The shipped document is unreadable *and* the override is broken.
             # Falling back is right: an operator who broke their edit gets the
@@ -3094,7 +3094,7 @@ class Orchestrator:
                 {
                     "id": base.id,
                     "root": str(knowledge_store.base_path(base.id)),
-                    "scope": base.scope,
+                    "type": base.type,
                     "format": base.format,
                     "title": base.title,
                     # Never `writable`, whatever the wire says. The child cannot

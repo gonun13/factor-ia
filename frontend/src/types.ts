@@ -107,20 +107,20 @@ export type Codebase = {
 };
 
 /**
- * What one knowledge base holds — `models.KnowledgeScope`.
+ * What one knowledge base holds — `models.KnowledgeType`.
  *
  * **Not a kind.** A kind is how one node type varies and lives in the node's
- * config; a scope is a property of the *base*, declared in its manifest and true
- * of it in every factory that selects it. A scope on the node would be a second
+ * config; a type is a property of the *base*, declared in its manifest and true
+ * of it in every factory that selects it. A type on the node would be a second
  * place the answer lives, and the first time the two disagreed the canvas would
  * be showing a permission the server does not grant.
  *
  * It controls exactly two things: whether an agent may write
- * (`KNOWLEDGE_READ_ONLY_SCOPES`), and precedence when sources disagree.
+ * (`KNOWLEDGE_READ_ONLY_TYPES`), and precedence when sources disagree.
  */
-export type KnowledgeScope = "principles" | "project" | "codebase" | "general";
+export type KnowledgeType = "principles" | "project" | "codebase" | "general";
 
-export const KNOWLEDGE_SCOPES: KnowledgeScope[] = [
+export const KNOWLEDGE_TYPES: KnowledgeType[] = [
   "principles",
   "project",
   "codebase",
@@ -128,15 +128,15 @@ export const KNOWLEDGE_SCOPES: KnowledgeScope[] = [
 ];
 
 /** One line each, for the library and the node's picker. */
-export const KNOWLEDGE_SCOPE_NOTE: Record<KnowledgeScope, string> = {
+export const KNOWLEDGE_TYPE_NOTE: Record<KnowledgeType, string> = {
   principles: "how work should be done, everywhere, always",
   project: "what is true of one project",
   codebase: "what is true of one repository, across the projects that touch it",
   general: "durable reference belonging to no project and no repo",
 };
 
-/** Scopes no agent may ever write to, with no per-base override — `models.READ_ONLY_SCOPES`. */
-export const KNOWLEDGE_READ_ONLY_SCOPES = new Set<string>(["principles"]);
+/** Scopes no agent may ever write to, with no per-base override — `models.READ_ONLY_TYPES`. */
+export const KNOWLEDGE_READ_ONLY_TYPES = new Set<string>(["principles"]);
 
 /**
  * A knowledge node's two handles, and the direction each one implies —
@@ -164,6 +164,11 @@ export type KnowledgeEntry = {
   bytes: number;
   /** The file's opening markdown heading, read off disk rather than written. */
   summary: string;
+  /** The product ships this file, in a base from `SYSTEM_BASES`. It is restored
+   * whenever it goes missing, so the editor offers no bin beside it. A file the
+   * operator *added* to a shipped base is not protected — which is why this is
+   * a property of the entry and not of the base. */
+  protected: boolean;
 };
 
 /**
@@ -176,7 +181,9 @@ export type KnowledgeEntry = {
 export type KnowledgeBaseSummary = {
   id: string;
   title: string;
-  scope: string;
+  /** One of `KNOWLEDGE_TYPES`. Called `scope` in a manifest written before
+   * decision 0018, and read as this either way. */
+  type: string;
   format: string;
   /** The manifest's prose: what this base is for, **written for a person**.
    * The card, the editor's header and the node's hover note — and nowhere in
@@ -185,8 +192,13 @@ export type KnowledgeBaseSummary = {
   about: string;
   files: number;
   bytes: number;
-  /** Derived from `scope` server-side, never stored and never trusted from here. */
+  /** Derived from `type` server-side, never stored and never trusted from here. */
   writable: boolean;
+  /** In `knowledge.store.SYSTEM_BASES` — a base the product ships, seeds into
+   * the workspace and restores when a file goes missing. Its content is the
+   * operator's to edit; neither it nor a shipped file in it can be deleted.
+   * Derived from the registry server-side on every read, like `writable`. */
+  system: boolean;
   updated_at: string;
 };
 

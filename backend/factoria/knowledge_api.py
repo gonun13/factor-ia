@@ -5,11 +5,16 @@ fourth: `api.py`'s every route is project-scoped, and a base belongs to no
 project. Bases sit beside skills in the library because that is what they are to
 the projects — not a project's contents, and not a sibling of one either.
 
-**There is no `PUT` on a base.** A base's *identity* — its id, its scope, the
-prose the library shows — is create-time, and is edited on disk and committed. A
-re-scope through a text box is the one change nothing downstream could detect: a
-`principles` base that became `general` under a factory which had been refused a
-write handle.
+**There is no `PUT` on a base, and there is a `PATCH`.** A base's *identity* —
+its id, its `type`, its format — is create-time: a re-typing through a text box
+is the one change nothing downstream could detect, a `principles` base that
+became `general` under a factory which had been refused a write handle. Its
+*title and prose* are not identity, and since decision 0018 they are edited
+through `PATCH /api/knowledge/{id}` (`edit_base`) — the prose is what an agent
+reads first, so it is where a base is steered, and it was the one thing about a
+base nobody could change from the screen. `PATCH` rather than `PUT` because
+there is still no way to replace a base: two named fields, and nothing else is
+expressible.
 
 **There is a `PUT` and a `DELETE` on one entry.** `save_entry` writes text over
 a content file the base **already lists**; `delete_entry` removes one. Both
@@ -35,7 +40,7 @@ why nothing here rewrites a manifest or invents a path
 (`../../spec/decisions/0017-the-library-edits-a-bases-files.md`).
 
 **And no `overwrite` on `POST`.** A skill import replaces one reviewed document
-with another. Replacing a base would silently re-scope a store other projects
+with another. Replacing a base would silently re-type a store other projects
 are reading — and a `principles` base that became `general` under a factory
 which had been refused a write handle is the one change nothing downstream could
 detect.
@@ -55,7 +60,7 @@ from .knowledge import index as knowledge_index
 from .knowledge import store as knowledge
 from .knowledge.markdown import adapter_for
 from .models import (
-    KNOWLEDGE_SCOPES,
+    KNOWLEDGE_TYPES,
     KnowledgeBase,
     KnowledgeBaseSummary,
     KnowledgeEntryText,
@@ -81,10 +86,16 @@ class KnowledgeCreate(BaseModel):
     #: path — this is the schema saying no early, not the boundary.
     id: str = Field(min_length=1, max_length=64)
     title: str = Field(default="", max_length=120)
-    scope: str = Field(default="general", max_length=32)
-    #: What this base is for, in a person's words. Required rather than nice to
-    #: have because it is the only thing on the card that says which shelf this
-    #: is — see `models.KnowledgeBaseSummary.about` for why no machine reads it.
+    #: Called `scope` before decision 0018. Not accepted under the old name
+    #: here: `model_config` forbids extras, so a client still sending `scope`
+    #: gets a 422 naming the field rather than a base silently created as
+    #: `general`. The alias exists for *manifests already on disk*, which
+    #: nobody can go back and edit, and a request is not one of those.
+    type: str = Field(default="general", max_length=32)
+    #: What this base is for, how it is organised, and what belongs in it.
+    #: Required rather than nice to have: it is the card in the library, and
+    #: since 0018 it is also the first thing an agent wired to the base is
+    #: told to read — see `models.KnowledgeBaseSummary.about`.
     about: str = Field(default="", max_length=4000)
     #: A whole `manifest.md`, frontmatter included. When present the fields
     #: above are ignored except for `id`, which is the directory name and cannot
@@ -136,10 +147,17 @@ def _translate(exc: Exception) -> HTTPException:
         return HTTPException(status.HTTP_423_LOCKED, str(exc))
     if isinstance(exc, knowledge.KnowledgeTooLarge):
         return HTTPException(status.HTTP_413_CONTENT_TOO_LARGE, str(exc))
-    # Nothing on these routes raises it — `save_entry` does not gate by scope,
+    # Nothing on these routes raises it — `save_entry` does not gate by type,
     # deliberately. Mapped so the taxonomy has no hole if a later one does.
     if isinstance(exc, knowledge.KnowledgeReadOnly):
         return HTTPException(status.HTTP_403_FORBIDDEN, str(exc))
+    # **405 and not 403**, which is `skills_api._translate`'s distinction and
+    # worth restating: the caller is allowed to act on this base — they may
+    # edit every file in it, and the library shows them the editor — but *this
+    # verb* is not one the resource has. Nothing about permissions would be
+    # true here, and a 403 would send a client looking for a login.
+    if isinstance(exc, knowledge.KnowledgeProtected):
+        return HTTPException(status.HTTP_405_METHOD_NOT_ALLOWED, str(exc))
     if isinstance(exc, PathEscape):
         # The rejected spelling is never echoed, for `mcp._guard`'s reason:
         # reflecting a path back is how a probe maps the box.
@@ -238,7 +256,7 @@ def _content_entry(base_id: str, root, adapter, path: str) -> str:
 
     **`manifest.md` is refused by name** as well, ahead of the listing, so the
     answer says *why* rather than "no such file". It is what the base *is* — its
-    id, its scope, and the prose the library shows — and re-scoping a store
+    id, its type, and the prose the library shows — and re-typing a store
     other projects read is the one change nothing downstream could detect. A
     nested `notes/manifest.md` is ordinary content, matching `store._walk`,
     which only skips the root one.
@@ -246,10 +264,11 @@ def _content_entry(base_id: str, root, adapter, path: str) -> str:
     relative = knowledge.relative_path(root, knowledge.entry_path(root, path))
     if relative == knowledge.MANIFEST_NAME:
         raise knowledge.KnowledgeInvalid(
-            "manifest.md is what this base *is* — its id, its scope, and the "
-            "prose the library shows. A re-scope through a text box is the one "
-            "change nothing downstream could detect, so it is read here and "
-            f"edited on disk: _knowledge/{base_id}/manifest.md, then commit it."
+            "manifest.md is not content — it is what this base *is*. Its title "
+            f"and its prose are edited through PATCH /api/knowledge/{base_id}, "
+            "field by field, so that its type cannot move and the keys this "
+            "server does not read are not dropped. It is never removed: without "
+            "it the directory is not a base at all."
         )
     if relative not in {entry.path for entry in adapter.list(root).entries}:
         raise knowledge.KnowledgeNotFound(
@@ -272,9 +291,12 @@ def save_entry(
     file that is read at one address and written at another is two resources.
 
     **It creates nothing**, and `manifest.md` is refused by name — both are
-    `_content_entry`'s, which is also what `delete_entry` asks.
+    `_content_entry`'s, which is also what `delete_entry` asks. The manifest is
+    edited by field through `PATCH /api/knowledge/{id}` (`edit_base`), not as a
+    document here: a form that posted back a rebuilt manifest would drop the
+    keys this server does not read.
 
-    **Not gated by scope.** `store.is_writable` answers "may a machine *inside
+    **Not gated by type.** `store.is_writable` answers "may a machine *inside
     a run* write here", which is a run-time question: a `principles` base is
     read-only to agents because a machine that can edit the standard it is
     judged by can pass its own review. The operator is not a machine in a run.
@@ -370,12 +392,25 @@ def delete_entry(base_id: str, path: str = Query(min_length=1)) -> Response:
     The undo is git, which is `delete_base`'s bargain one file smaller: the
     base is in the workspace repo, so a removed entry is a removed line in a
     diff rather than a thing that is simply gone.
+
+    **A file the product ships in a system base is refused**, and a file the
+    operator *added* to that same base is not. The line is `store.system_files`,
+    not the base's id, because the two files differ in exactly the way that
+    matters: `ensure_system_bases` would restore the shipped one on the next
+    read, so removing it is an act that quietly undoes itself, and the added
+    one is an ordinary entry that happens to live on a shelf the product built.
     """
     try:
         base = knowledge.get_base(base_id)
         root = knowledge.base_path(base_id)
         adapter = adapter_for(base.format)
         relative = _content_entry(base_id, root, adapter, path)
+        if relative in knowledge.system_files(base_id):
+            raise knowledge.KnowledgeProtected(
+                f"{relative} is part of {base_id!r}, which the product ships — it "
+                "is restored whenever it goes missing, so removing it here would "
+                "not stick. Edit it instead, or empty it."
+            )
 
         lock = knowledge.base_lock(base_id)
         if not lock.acquire(blocking=False):
@@ -394,18 +429,83 @@ def delete_entry(base_id: str, path: str = Query(min_length=1)) -> Response:
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
+class KnowledgeEdit(BaseModel):
+    """A base's own description, as a form edits it.
+
+    **Fields, not a document**, and that is the whole shape of this route. A
+    manifest may carry keys this server never reads, put there by whoever
+    maintains the base; a form that posted back a rebuilt document would drop
+    them on a save that looked like it only touched a paragraph. So the caller
+    names what it changed, `store.save_manifest` splices it into the file that
+    is already there, and every other line survives byte for byte.
+
+    Both fields are optional and omitting one leaves it alone, which is what
+    makes this a `PATCH`. There is deliberately no `type`, no `id` and no
+    `format`: those are what the base *is*.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    title: str | None = Field(default=None, max_length=120)
+    about: str | None = Field(default=None, max_length=4000)
+
+
+@router.patch("/knowledge/{base_id}", response_model=KnowledgeBase)
+def edit_base(base_id: str, body: KnowledgeEdit) -> KnowledgeBase:
+    """Edit a base's title and prose. Never its type, its id or its format.
+
+    **`PATCH` and not `PUT`**, and the distinction is load-bearing rather than
+    pedantic: there is still no way to *replace* a base, which is what `PUT`
+    would mean and what decision 0017 refused. This edits two named fields of
+    the record a base keeps about itself, and cannot express anything else.
+
+    **A system base takes `about` only.** Its title is the product's name for
+    it — the thing an operator recognises on the shelf and the thing every
+    write-up refers to — while its prose is theirs to steer with. Refused here
+    rather than merely disabled in the browser, because a control that is the
+    only thing enforcing a rule is not enforcing it.
+
+    The prose is what an agent wired to this base reads first
+    (`knowledge/index._manifest_line`), so a save invalidates that base's
+    cached index on the way out, exactly as a content save does.
+    """
+    try:
+        if knowledge.is_system(base_id) and body.title is not None:
+            raise knowledge.KnowledgeProtected(
+                f"{base_id!r} is a base the product ships, and its title is the "
+                "name everything else refers to it by. Its prose is yours — say "
+                "there how you want it used."
+            )
+        lock = knowledge.base_lock(base_id)
+        if not lock.acquire(blocking=False):
+            raise knowledge.KnowledgeLocked(
+                f"a machine is writing to {base_id!r} right now, so this was not "
+                "saved. Nothing of yours was lost — try again in a moment."
+            )
+        try:
+            base = knowledge.save_manifest(
+                base_id, title=body.title, about=body.about
+            )
+        finally:
+            lock.release()
+    except Exception as exc:
+        raise _translate(exc) from exc
+    knowledge_index.forget(base_id)
+    return base
+
+
 @router.post("/knowledge", response_model=KnowledgeBase, status_code=status.HTTP_201_CREATED)
 def create_base(body: KnowledgeCreate) -> KnowledgeBase:
     try:
-        if body.text is None and body.scope not in KNOWLEDGE_SCOPES:
+        if body.text is None and body.type not in KNOWLEDGE_TYPES:
             raise knowledge.KnowledgeInvalid(
-                f"{body.scope!r} is not a knowledge scope — one of "
-                f"{', '.join(sorted(KNOWLEDGE_SCOPES))}."
+                f"{body.type!r} is not a knowledge type — one of "
+                f"{', '.join(sorted(KNOWLEDGE_TYPES))}."
             )
         return knowledge.create_base(
             base_id=body.id.strip(),
             title=body.title.strip() or body.id.strip(),
-            scope=body.scope.strip(),
+            base_type=body.type.strip(),
             about=body.about,
             text=body.text,
         )

@@ -83,7 +83,7 @@ its model.
 
 **System skill** — a skill the product ships and a node type is *hardwired* to,
 rather than one a machine wears by choice (`skills.SYSTEM_SKILLS`). Three
-today, one per writable knowledge scope: a knowledge node applies one to the
+today, one per writable knowledge type: a knowledge node applies one to the
 answer it receives, so its base is a datastore and not a transcript. Listed and
 edited in the library like any other skill — an edit is an ordinary `_skills/`
 file shadowing the shipped one — but **never offered in a node's picker** and
@@ -93,6 +93,15 @@ refused by `runcheck`.
 **Knowledge base** — durable reference, filled before any run exists, outliving
 every run, shared across every project. Discovered like a codebase and a skill:
 the directory is the record and git is the history.
+
+**System knowledge base** — a base the product ships (`store.SYSTEM_BASES`),
+seeded into `_knowledge/` on the first read that does not find it and restored
+whenever a file goes missing. Its content is the operator's to edit, and their
+version always wins; neither the base nor a file it ships with can be deleted,
+and the library renders no delete control for either rather than one that is
+refused. Unlike a system skill, nothing is served out of the package after the
+seed — a base is a directory somebody takes over, so it lives in the workspace
+where git can show it.
 
 **Run** — one execution of a factory, with its input, its adapter, and its final
 status. **NodeRun** — one node's execution within it. **Event** — an append-only
@@ -140,11 +149,13 @@ by name rather than quietly behaving like a success belt.
   every rule differs — who may write, what a failed write means, what happens at
   the end of a run — and one type carrying both sets would be a type nobody
   could state.
-- **`KnowledgeScope` is not a kind either.** `node_kind` reads a *node's*
-  config; scope is a property of the base itself, declared in its manifest and
-  true of it in every factory that selects it. A scope on the node would be a
+- **`KnowledgeType` is not a kind either.** `node_kind` reads a *node's*
+  config; type is a property of the base itself, declared in its manifest and
+  true of it in every factory that selects it. A type on the node would be a
   second place the answer lives, and the first time the two disagreed the canvas
-  would be showing a permission the server does not grant.
+  would be showing a permission the server does not grant. It was spelled
+  `scope` until `decisions/0018-system-knowledge-bases.md`, which collided with
+  `HumanKind`'s interview node and described the wrong thing.
 
 ---
 
@@ -161,7 +172,7 @@ change with a test behind it, not an incidental one.
 | `HumanKind` | `approval` `scope` |
 | `AgentKind` | `worker` `reviewer` |
 | `EdgeOutcome` | `success` `fail` (on `Edge.source_handle`; `None` means `success`) |
-| `KnowledgeScope` | `principles` `project` `codebase` `general` |
+| `KnowledgeType` | `principles` `project` `codebase` `general` |
 | `KnowledgeHandle` | `read` (source) `write` (target) |
 | `NodeStatus` | `pending` `waiting_input` `running` `succeeded` `failed` |
 | `RunStatus` | the five above, plus `cancelled` |
@@ -233,8 +244,11 @@ awkward is not a rule — `main.json` is a file people edit in a pull request.
 11. **Direction is the permission.** An arrow into storage is a write; an arrow
     out of it is a read. A reviewer of a factory reads that off the picture
     without learning a vocabulary.
-12. **Writability is derived from scope, never stored**, and is recomputed
-    server-side on every spawn, so a stale browser cannot grant anything.
+12. **Writability is derived from type, never stored**, and is recomputed
+    server-side on every spawn, so a stale browser cannot grant anything. The
+    same is true of `system` on a base and `protected` on one of its files:
+    derived from `store.SYSTEM_BASES` on every read, so a manifest cannot
+    claim either and a stale browser cannot grant one.
 
 ### Runs
 

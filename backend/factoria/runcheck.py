@@ -631,7 +631,7 @@ def _knowledge_problems(
                 )
             reached.add(target.id)
             chosen = selected.get(target.id)
-            if chosen and not knowledge.is_writable(library[chosen].scope):
+            if chosen and not knowledge.is_writable(library[chosen].type):
                 # Refused as you draw it — a `principles` base renders no write
                 # handle, so there is nothing to drop a wire onto — and refused
                 # again here, because the canvas is not a security boundary and
@@ -641,7 +641,7 @@ def _knowledge_problems(
                 # four, the server is the authoritative one.
                 problems.append(
                     f"“{label(source)}” is wired to write to “{label(target)}”, "
-                    f"which is a {library[chosen].scope} base. Principles are what "
+                    f"which is a {library[chosen].type} base. Principles are what "
                     "the machines are measured against, so nothing may edit them "
                     "from inside a run — a machine that can edit the standard it "
                     "is judged by is a machine that can pass its own review."

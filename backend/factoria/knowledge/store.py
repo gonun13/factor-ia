@@ -30,7 +30,7 @@ base already lists, under the lock below — a second *door* onto the files, not
 a second authority over them: same adapter, same budgets, same directory git
 tracks. What it still cannot do is *create* an entry, rename one, or touch
 `manifest.md`. A base gains a file in the workspace, where git sees a new file
-arrive as a new file, and a base's identity is create-time because a re-scope
+arrive as a new file, and a base's identity is create-time because a re-typing
 through a text box is the one change nothing downstream could detect
 (`../../spec/decisions/0017-the-library-edits-a-bases-files.md`).
 """
@@ -45,8 +45,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from ..models import (
-    KNOWLEDGE_SCOPES,
-    READ_ONLY_SCOPES,
+    KNOWLEDGE_TYPES,
+    READ_ONLY_TYPES,
     KnowledgeBase,
     KnowledgeBaseSummary,
     KnowledgeEntry,
@@ -57,7 +57,24 @@ from ..store import atomic_write
 
 KNOWLEDGE_DIRNAME = "_knowledge"
 
+#: The bases the product ships, beside this package. Seeded into the workspace
+#: rather than served from here — see `ensure_system_bases`.
+SYSTEM_KNOWLEDGE_DIRNAME = "system_knowledge"
+
 MANIFEST_NAME = "manifest.md"
+
+#: The bases a workspace always has, whatever anyone does to it.
+#:
+#: **An explicit registry and not a name prefix**, for `skills.SYSTEM_SKILLS`'
+#: reason restated: a rule over ids would quietly capture an operator's own
+#: `software-architecture-notes` and make it undeletable. Membership buys three
+#: things and no others — the directory is restored when a file goes missing
+#: (`ensure_system_bases`), the base cannot be deleted (`delete_base`), and a
+#: shipped file in it cannot be removed (`knowledge_api.delete_entry`).
+#:
+#: It buys **no** editing restriction. The content is the operator's, and the
+#: whole point of shipping a base rather than a skill is that they take it over.
+SYSTEM_BASES: frozenset[str] = frozenset({"software-architecture-principles"})
 
 #: Per file. The same number `skills.SKILL_MAX_BYTES` uses, for a different
 #: reason: nothing here becomes an argv element, but an entry that has to be
@@ -144,8 +161,19 @@ class KnowledgeStale(KnowledgeError):
 
 
 class KnowledgeReadOnly(KnowledgeError):
-    """A write to a `principles` base. Refused by scope, with no per-base
+    """A write to a `principles` base. Refused by type, with no per-base
     override — see `is_writable`."""
+
+
+class KnowledgeProtected(KnowledgeError):
+    """A system base, or a file the product ships in one, cannot be removed.
+
+    Its own class rather than a `KnowledgeError` with a message, for
+    `skills.SkillProtected`'s reason: the API answers it with a different
+    status and the library offers a different affordance. This is not "that
+    went wrong", it is "that is not a thing this base can do" — and the thing
+    it *can* do, editing, is right there.
+    """
 
 
 # ---- locations -------------------------------------------------------------
@@ -205,19 +233,115 @@ def relative_path(base_root: Path, path: Path) -> str:
     return path.relative_to(base_root).as_posix()
 
 
-# ---- scope -----------------------------------------------------------------
+# ---- type ------------------------------------------------------------------
 
 
-def is_writable(scope: str) -> bool:
-    """Whether an agent may *ever* write to a base of this scope.
+def is_writable(base_type: str) -> bool:
+    """Whether an agent may *ever* write to a base of this type.
 
     **`principles` is read-only to agents, permanently and without a per-base
     override.** Principles are what the agents are measured against; a machine
     that can edit the standard it is judged by is a machine that can pass its
-    own review. Every other scope follows the node's handles, which is a
+    own review. Every other type follows the node's handles, which is a
     question about the canvas and is decided a layer up (`mcp.Grant`).
     """
-    return scope not in READ_ONLY_SCOPES
+    return base_type not in READ_ONLY_TYPES
+
+
+# ---- the bases the product ships -------------------------------------------
+
+
+def system_knowledge_dir() -> Path:
+    """The shipped bases, beside this package.
+
+    Resolved off `__file__` and **not** through `workspace_join`, exactly as
+    `skills.system_skills_dir` is: these are part of the product, not of the
+    workspace, and running them through the containment check would be
+    asserting something about the wrong tree.
+    """
+    return Path(__file__).resolve().parent.parent / SYSTEM_KNOWLEDGE_DIRNAME
+
+
+def is_system(base_id: str) -> bool:
+    """Whether the product ships this base. The one predicate the library, the
+    API and the seed all ask, so they cannot drift."""
+    return base_id in SYSTEM_BASES
+
+
+def system_files(base_id: str) -> set[str]:
+    """What the product ships in this base, by path relative to the base root.
+
+    The set `knowledge_api.delete_entry` checks a removal against: a file the
+    *operator* added to a system base is ordinary and stays deletable, and a
+    file the package ships is not, because the seed below would put it back on
+    the next read and a delete that silently undoes itself is worse than a
+    refusal.
+
+    Empty for anything that is not in the registry, and empty rather than an
+    error if the shipped directory is missing — see `ensure_system_bases`.
+    """
+    if not is_system(base_id):
+        return set()
+    shipped = system_knowledge_dir() / base_id
+    try:
+        return {
+            path.relative_to(shipped).as_posix()
+            for path in shipped.rglob("*")
+            if path.is_file()
+        }
+    except OSError:
+        return set()
+
+
+def ensure_system_bases(root: Path | None = None) -> None:
+    """Copy any shipped file missing from `_knowledge/<id>/` into the workspace.
+
+    **Seeded, not overlaid**, and the difference from `skills._resolve` is
+    deliberate. A skill is one document the product goes on authoring, so the
+    shipped text stays live and a workspace copy shadows it. A base is a
+    directory the operator is *expected* to take over: they will edit these
+    twelve files, add a thirteenth, and want `git log` to show it. Serving half
+    a base out of the package would make the base the one thing in `_knowledge/`
+    that git cannot show you.
+
+    So the copy is one-way and non-destructive:
+
+    - a file already in the workspace is never touched, however far it has
+      drifted from the shipped text — theirs wins, permanently, and a shipped
+      correction does not reach a file somebody has edited;
+    - a file missing from the workspace is written back, which is what makes
+      "a system base cannot be deleted" a fact about the base rather than a
+      rule in the API: `rm -rf` it and the next listing brings it back;
+    - a file the operator *added* is left alone, because nothing here removes.
+
+    **Never raises.** This runs at the top of `list_bases`, whose contract is
+    that it never raises, and a workspace that cannot be written to is a base
+    that is not there yet — not a 500 on the library screen.
+    """
+    shipped_root = system_knowledge_dir()
+    for base_id in sorted(SYSTEM_BASES):
+        source = shipped_root / base_id
+        if not source.is_dir():
+            # A packaging fault, and one the test suite is where to catch:
+            # `list_bases` must not raise, so there is nothing useful to do
+            # here but leave the workspace as it is.
+            continue
+        try:
+            target = base_path(base_id, root)
+        except PathEscape:
+            continue
+        with _lock:
+            for path in sorted(source.rglob("*")):
+                if not path.is_file():
+                    continue
+                relative = path.relative_to(source)
+                destination = target / relative
+                try:
+                    if destination.exists():
+                        continue
+                    atomic_write(destination, path.read_text(encoding="utf-8"))
+                except OSError:
+                    continue
 
 
 # ---- the manifest ----------------------------------------------------------
@@ -263,17 +387,23 @@ def validate_manifest(text: str, *, base_id: str) -> KnowledgeBaseSummary:
             f"the title is {len(title)} characters; keep it under {_TITLE_MAX}"
         )
 
-    scope = fields.get("scope", "").strip()
-    if not scope:
+    # **`scope:` is read as `type:`, silently and forever.** The field was
+    # renamed in decision 0018; the bases already on disk in every workspace
+    # were not, and a rename that made them all unreadable would be a rename
+    # that cost an operator their library. Nothing rewrites the file — a
+    # manifest is edited by hand and committed, so the migration is somebody
+    # opening it, not this function doing it behind their back.
+    base_type = (fields.get("type") or fields.get("scope") or "").strip()
+    if not base_type:
         raise KnowledgeInvalid(
-            "this manifest has no `scope:` — a base's scope decides whether an "
+            "this manifest has no `type:` — a base's type decides whether an "
             "agent may write to it and where it sits in the precedence ladder, "
-            f"so it cannot be guessed. One of {', '.join(sorted(KNOWLEDGE_SCOPES))}."
+            f"so it cannot be guessed. One of {', '.join(sorted(KNOWLEDGE_TYPES))}."
         )
-    if scope not in KNOWLEDGE_SCOPES:
+    if base_type not in KNOWLEDGE_TYPES:
         raise KnowledgeInvalid(
-            f"{scope!r} is not a knowledge scope — one of "
-            f"{', '.join(sorted(KNOWLEDGE_SCOPES))}."
+            f"{base_type!r} is not a knowledge type — one of "
+            f"{', '.join(sorted(KNOWLEDGE_TYPES))}."
         )
 
     fmt = fields.get("format", "").strip() or DEFAULT_FORMAT
@@ -288,23 +418,28 @@ def validate_manifest(text: str, *, base_id: str) -> KnowledgeBaseSummary:
     if not prose:
         raise KnowledgeInvalid(
             "this manifest has frontmatter but no prose under it — the prose is "
-            "what the library shows a person, on the card and in the editor, so "
-            "a base without it cannot say what it is for"
+            "what the library shows a person, and since decision 0018 it is also "
+            "the first thing an agent wired to this base is told to read, so a "
+            "base without it cannot say what it is for to either of them"
         )
     if len(prose) > _ABOUT_MAX:
         raise KnowledgeInvalid(
             f"the manifest prose is {len(prose)} characters; keep it under "
-            f"{_ABOUT_MAX} — it is a card in a library, read at a glance, and "
-            "the detail belongs in the base itself"
+            f"{_ABOUT_MAX} — it is read at a glance off a card and fetched whole "
+            "by an agent starting work, and the detail belongs in the base itself"
         )
 
     return KnowledgeBaseSummary(
         id=base_id,
         title=title,
-        scope=scope,
+        type=base_type,
         format=fmt,
         about=prose,
-        writable=is_writable(scope),
+        writable=is_writable(base_type),
+        # Derived here, in the one function every read goes through, rather
+        # than at each call site: `_summarise`, `_load`, `list_bases` and
+        # `get_base` all inherit it, and none of them can disagree.
+        system=is_system(base_id),
         updated_at=_manifest_time(fields),
     )
 
@@ -327,17 +462,22 @@ def _manifest_time(fields: dict[str, str]) -> datetime:
 
 
 def render_manifest(
-    *, base_id: str, title: str, scope: str, about: str, fmt: str = DEFAULT_FORMAT
+    *, base_id: str, title: str, base_type: str, about: str, fmt: str = DEFAULT_FORMAT
 ) -> str:
     """A manifest this module's own parser reads back. The library's `POST`
-    path, and the only place this server writes one."""
+    path, and the only place this server writes one.
+
+    Writes `type:` and never `scope:`, although `validate_manifest` still reads
+    both: an alias exists to keep old files working, not to keep producing new
+    ones.
+    """
     stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     header = "\n".join(
         [
             "---",
             f"id: {base_id}",
             f"title: {' '.join(title.split())[:_TITLE_MAX]}",
-            f"scope: {scope}",
+            f"type: {base_type}",
             f"format: {fmt}",
             f"updated: {stamp}",
             "---",
@@ -417,6 +557,15 @@ def _first_line(path: Path) -> str:
 
 def _summarise(root: Path, summary: KnowledgeBaseSummary) -> KnowledgeBase:
     entries = _walk(root)
+    # Marked here rather than in `_walk`, which is given a directory and not an
+    # id and should stay that way: whether a file is shipped is a fact about
+    # the *base*, and this is the one function that knows both.
+    shipped = system_files(summary.id)
+    if shipped:
+        entries = [
+            entry.model_copy(update={"protected": entry.path in shipped})
+            for entry in entries
+        ]
     return KnowledgeBase(
         **summary.model_dump(exclude={"files", "bytes"}),
         files=len(entries),
@@ -451,7 +600,14 @@ def list_bases(root: Path | None = None) -> list[KnowledgeBaseSummary]:
     invisible here, but `get_base` still names it and `runcheck` refuses any
     node pointing at it — so it can be missing from a picker, never silently in
     force.
+
+    **Every registry base is here**, because the seed runs first. That is the
+    knowledge half of `skills.list_skills`' guarantee: there is no state of the
+    workspace in which the library shows fewer than `SYSTEM_BASES`. A shipped
+    base whose manifest somebody broke is the one exception, and it is the
+    rule above rather than a new one.
     """
+    ensure_system_bases(root)
     try:
         directory = knowledge_dir(root)
     except PathEscape:
@@ -468,12 +624,25 @@ def list_bases(root: Path | None = None) -> list[KnowledgeBaseSummary]:
             found.append(_load(path, path.name))
         except KnowledgeError:
             continue
+    # **System first, then by id.** `skills.list_skills:447`'s rule and its
+    # reason: they are the shelf furniture — always present, the same ones
+    # every time — so they give the operator's own bases a stable place to
+    # start rather than interleaving differently as the library grows. Sorted
+    # here rather than in the browser so every reader of this list, including
+    # a test, sees the one order.
+    found.sort(key=lambda summary: (not summary.system, summary.id))
     return found
 
 
 def get_base(base_id: str, root: Path | None = None) -> KnowledgeBase:
     """One base, with its contents listed. Raises rather than skipping — this is
-    the call that has to say *why* an id the canvas is showing cannot be used."""
+    the call that has to say *why* an id the canvas is showing cannot be used.
+
+    Seeds first, like `list_bases`, so a system base is readable on the call
+    that addresses it directly — a run spawning against a fresh workspace
+    reaches this without ever having listed the library.
+    """
+    ensure_system_bases(root)
     return _load(base_path(base_id, root), base_id)
 
 
@@ -484,7 +653,7 @@ def create_base(
     *,
     base_id: str,
     title: str,
-    scope: str,
+    base_type: str,
     about: str,
     text: str | None = None,
     root: Path | None = None,
@@ -499,10 +668,19 @@ def create_base(
 
     **Never `overwrite`**, unlike `skills.create_skill`. Replacing a skill
     replaces one reviewed document with another; replacing a base would silently
-    re-scope a store other projects are reading, and a `principles` base that
+    re-type a store other projects are reading, and a `principles` base that
     became `general` under a factory that had been refused a write handle is the
     one change nothing downstream could detect.
     """
+    if is_system(base_id):
+        # The existing "already in _knowledge/" conflict would answer this too,
+        # and would answer it wrongly: it invites the caller to delete that base
+        # and try again, which is the one thing they cannot do.
+        raise KnowledgeProtected(
+            f"{base_id!r} is a knowledge base the product ships — it is already "
+            "in _knowledge/ and cannot be replaced. Edit its files to change "
+            "what it says, or choose another id."
+        )
     if not _BASE_ID.match(base_id or ""):
         raise KnowledgeInvalid(
             f"{base_id!r} cannot be a base id — lowercase letters, digits and "
@@ -513,7 +691,9 @@ def create_base(
     document = (
         text
         if text is not None
-        else render_manifest(base_id=base_id, title=title, scope=scope, about=about)
+        else render_manifest(
+            base_id=base_id, title=title, base_type=base_type, about=about
+        )
     )
     normalised = (
         document.lstrip("﻿").replace("\r\n", "\n").replace("\r", "\n").rstrip("\n") + "\n"
@@ -531,6 +711,87 @@ def create_base(
     return _summarise(root_path, summary)
 
 
+def save_manifest(
+    base_id: str,
+    *,
+    title: str | None = None,
+    about: str | None = None,
+    root: Path | None = None,
+) -> KnowledgeBase:
+    """Edit a base's manifest, by field, in the document that is already there.
+
+    **The prose is the operator's; the identity is not.** Decision 0017 refused
+    this whole file through the library, on the argument that re-typing a base
+    through a text box is the one change nothing downstream could detect. That
+    was right about one field and over-broad about the rest, and 0018 made the
+    imbalance expensive: the prose is now the first thing every agent wired to
+    the base reads, so it is where a base is *steered* — and it was the only
+    file in a base the library would not let anybody change.
+
+    So the line moves from the file to the fields:
+
+    - `about` and `title` are edited here;
+    - `type` is not, and cannot be: it is never written below, and
+      `validate_manifest` is re-run on the result so a splice that ever managed
+      to move it would be refused. It decides writability and rank in the
+      precedence ladder, for **every** project reading this base, and a base
+      that changed rank silently is a base whose readers were told a different
+      thing on Tuesday for no reason they can see;
+    - `id` and `format` are not written either, and defend themselves in
+      `validate_manifest` regardless.
+
+    **Spliced, not re-rendered**, and that is the whole reason this takes
+    fields rather than a document. `render_manifest` emits the five keys this
+    module knows; a manifest may carry others, put there by whoever maintains
+    it. Rebuilding the header from a form would drop them, silently, on a save
+    that looked like it only touched a paragraph — which is exactly the data
+    loss `models.Skill.source` exists to prevent. So every line this call was
+    not asked to change is copied through byte for byte.
+    """
+    root_path = base_path(base_id, root)
+    current_text = (root_path / MANIFEST_NAME).read_text(encoding="utf-8")
+    # Validated before the splice as well as after: editing a manifest that is
+    # already broken would otherwise write a second, differently broken one and
+    # report success.
+    validate_manifest(current_text, base_id=base_id)
+
+    fields, _ = parse_manifest(current_text, base_id=base_id)
+    lines = current_text.replace("\r\n", "\n").split("\n")
+    # The frontmatter is the block between the first two `---` lines, which is
+    # what `skills.parse_frontmatter` read above; the prose is everything after.
+    fence = [index for index, line in enumerate(lines) if line.strip() == "---"][:2]
+    header, body_at = lines[fence[0] + 1 : fence[1]], fence[1] + 1
+
+    if title is not None:
+        wanted = " ".join(title.split())[:_TITLE_MAX]
+        replaced = False
+        for index, line in enumerate(header):
+            if line.split(":", 1)[0].strip() == "title":
+                header[index] = f"title: {wanted}"
+                replaced = True
+                break
+        if not replaced:
+            header.append(f"title: {wanted}")
+    # `updated:` is this manifest's own claim about when it last changed, and
+    # this is a change. Set only when the key is already there — a manifest
+    # that never carried one is not given one here, because adding a key is
+    # the thing the paragraph above says this call does not do.
+    if "updated" in fields:
+        stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        for index, line in enumerate(header):
+            if line.split(":", 1)[0].strip() == "updated":
+                header[index] = f"updated: {stamp}"
+                break
+
+    prose = "\n".join(lines[body_at:]) if about is None else about
+    document = "\n".join(["---", *header, "---", "", prose.strip(), ""])
+
+    proposed = validate_manifest(document, base_id=base_id)
+    with _lock:
+        atomic_write(root_path / MANIFEST_NAME, document)
+    return _summarise(root_path, proposed)
+
+
 def delete_base(base_id: str, root: Path | None = None) -> None:
     """Remove the base directory and everything in it.
 
@@ -541,7 +802,18 @@ def delete_base(base_id: str, root: Path | None = None) -> None:
 
     Everything this destroys is in the workspace repo, which is the only reason
     this is a button at all: `git` is the undo.
+
+    **A system base is refused**, before anything is removed. `ensure_system_bases`
+    would put it straight back on the next read, so allowing this would be
+    offering a delete that silently undoes itself — and a button that lies about
+    what it did is worse than one that is not there.
     """
+    if is_system(base_id):
+        raise KnowledgeProtected(
+            f"{base_id!r} is built into the product and cannot be deleted — it is "
+            "restored whenever a file goes missing from it. Edit its files to "
+            "change what it says."
+        )
     root_path = base_path(base_id, root)
     with _lock:
         if not (root_path / MANIFEST_NAME).exists():

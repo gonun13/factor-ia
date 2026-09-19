@@ -191,43 +191,55 @@ exactly what it meant before this existed.
 DEFAULT_EDGE_OUTCOME: EdgeOutcome = "success"
 EDGE_OUTCOMES: frozenset[str] = frozenset({"success", "fail"})
 
-KnowledgeScope = Literal["principles", "project", "codebase", "general"]
+KnowledgeType = Literal["principles", "project", "codebase", "general"]
 """What one knowledge base holds, and the only thing that varies between bases.
 
-**Not a kind**, although it looks like one: `node_kind` reads a *node's* config,
-and this is a property of the base itself, declared in its manifest and true of
-it in every factory that selects it. A scope on the node would be a second
-place the answer lives, and the first time the two disagreed the canvas would be
-showing a permission the server does not grant.
+**Not a node kind**, although it looks like one: `node_kind` reads a *node's*
+config, and this is a property of the base itself, declared in its manifest and
+true of it in every factory that selects it. A type on the node would be a
+second place the answer lives, and the first time the two disagreed the canvas
+would be showing a permission the server does not grant.
+
+**It was called `scope` until `../../spec/decisions/0018-system-knowledge-bases.md`.**
+Two reasons to have renamed it: there is already a `scope` in this file that
+means something else entirely (`HumanKind`'s interview node, which `runcheck`
+checks two lines from the code that reads a base's), and the word was wrong —
+a base is not scoped to anything, it *is* one of four kinds of thing. A
+manifest that still says `scope:` is read as `type:` and never rewritten; see
+`knowledge.store.validate_manifest`.
 
 - `principles` — how work should be done, everywhere, always.
 - `project` — what is true of one project: its decisions, its long-term research.
 - `codebase` — what is true of one repository, across the projects touching it.
 - `general` — durable reference belonging to no project and no repo.
 
-Scope controls exactly two things, and the omissions are deliberate
-(`docs/KNOWLEDGE.md`, Scope): whether an agent may **write** (`READ_ONLY_SCOPES`),
+Type controls exactly two things, and the omissions are deliberate
+(`docs/KNOWLEDGE.md`, Type): whether an agent may **write** (`READ_ONLY_TYPES`),
 and **precedence** when sources disagree (`knowledge/index.PRECEDENCE`). It does
 not validate bindings — attaching a `project` base to a second project is
 allowed, because "this was written for alpha and beta needs it too" is exactly
-how a base earns a wider scope — and it does not constrain the *shape* of a
+how a base earns a wider reach — and it does not constrain the *shape* of a
 write, which is a convention a base's manifest describes to the agent rather
 than a schema this code enforces. Both are easy to add later and hard to remove
 once something depends on them.
+
+It is also **not** what makes a base a system base: that is a registry of ids
+(`knowledge.store.SYSTEM_BASES`), and the two are independent — the base the
+product ships happens to be `principles`, and neither fact implies the other.
 """
 
-KNOWLEDGE_SCOPES: frozenset[str] = frozenset(
+KNOWLEDGE_TYPES: frozenset[str] = frozenset(
     {"principles", "project", "codebase", "general"}
 )
 
-#: Scopes no agent may ever write to, with no per-base override.
+#: Types no agent may ever write to, with no per-base override.
 #:
 #: Principles are what the agents are measured against; a machine that can edit
 #: the standard it is judged by is a machine that can pass its own review. The
 #: canvas refuses the write handle as you draw it, the spawn names the write
 #: tools on `--disallowedTools`, and the MCP server refuses the call anyway —
 #: three mechanisms for one rule, of which **the server is authoritative**.
-READ_ONLY_SCOPES: frozenset[str] = frozenset({"principles"})
+READ_ONLY_TYPES: frozenset[str] = frozenset({"principles"})
 
 KnowledgeHandle = Literal["read", "write"]
 """A knowledge node's two handles — and **the direction each one implies**.
@@ -349,6 +361,16 @@ class KnowledgeEntry(Base):
     path: str
     bytes: int = 0
     summary: str = ""
+    #: The product ships this file, in a base from `knowledge.store.SYSTEM_BASES`.
+    #: It is restored whenever it goes missing, so removing it would not stick
+    #: and the library offers no bin beside it — see `knowledge_api.delete_entry`.
+    #:
+    #: A file the *operator* added to a shipped base is not protected, which is
+    #: why this is a property of the entry and not of the base: the two live in
+    #: one directory and differ in exactly the way that matters here.
+    #:
+    #: Derived from the package on every read, never stored.
+    protected: bool = False
 
 
 class KnowledgeBaseSummary(Base):
@@ -362,21 +384,35 @@ class KnowledgeBaseSummary(Base):
 
     id: str
     title: str
-    scope: str
+    #: One of `KNOWLEDGE_TYPES`. Called `scope` in a manifest written before
+    #: decision 0018, and read as this either way.
+    type: str
     format: str = "markdown"
-    #: The manifest's prose: what this base is for. **Written for a person,**
-    #: and shown only to one — the library card, the editor's header, the
-    #: node's hover note. It is deliberately *not* in the agent's index block
-    #: (`knowledge/index.py`): what belongs in a base is said once, in the
-    #: filing skills, and a per-base paragraph repeating it was prompt paid on
-    #: every turn of every machine wired to the base.
+    #: The manifest's prose: what this base is for, how it is organised, and
+    #: what belongs in it.
+    #:
+    #: **Written for a person and for a machine, in that order.** It is still
+    #: the library card and the editor's header, and it is still deliberately
+    #: *not* pasted into the agent's system prompt — decision 0017 stands. What
+    #: changed in 0018 is that the index block now points at `manifest.md` and
+    #: tells the agent to read it first, so this prose is what a machine finds
+    #: when it goes looking for the context it is operating in. A base whose
+    #: prose only says "notes" now costs something.
     about: str = ""
     files: int = 0
     bytes: int = 0
-    #: Derived from `scope`, never stored. Carried on the wire so the canvas can
-    #: refuse a write handle without knowing the scope rules, and recomputed
+    #: Derived from `type`, never stored. Carried on the wire so the canvas can
+    #: refuse a write handle without knowing the type rules, and recomputed
     #: server-side on every spawn so a stale browser cannot grant anything.
     writable: bool = True
+    #: In `knowledge.store.SYSTEM_BASES` — a base the product ships, seeds into
+    #: the workspace and restores when a file goes missing. Its content is the
+    #: operator's to edit; neither it nor a shipped file in it can be deleted.
+    #:
+    #: Derived from the registry, never stored, and recomputed server-side on
+    #: every read, exactly as `writable` and `SkillSummary.system` are: a stale
+    #: browser cannot make a base system, and a manifest cannot claim to be one.
+    system: bool = False
     updated_at: datetime
 
 

@@ -8,6 +8,7 @@ here: a base is a source of truth, and "invalid" is not a thing you can act on.
 
 from __future__ import annotations
 
+import shutil
 from datetime import datetime
 from pathlib import Path
 
@@ -27,7 +28,7 @@ from factoria.paths import PathEscape
 MANIFEST = """---
 id: engineering-principles
 title: Engineering principles
-scope: principles
+type: principles
 format: markdown
 updated: 2026-09-16T10:18:44Z
 ---
@@ -37,7 +38,7 @@ How we build software here; naming, review standards, when to refuse a design.
 
 
 def make_base(
-    workspace: Path, base_id: str, manifest: str = MANIFEST, scope: str = "principles"
+    workspace: Path, base_id: str, manifest: str = MANIFEST, base_type: str = "principles"
 ) -> Path:
     """A base on disk. The id in the manifest is rewritten to match the
     directory, because the directory name *is* the id and a helper that let the
@@ -45,10 +46,19 @@ def make_base(
     root = workspace / "_knowledge" / base_id
     root.mkdir(parents=True, exist_ok=True)
     text = manifest.replace("id: engineering-principles", f"id: {base_id}").replace(
-        "scope: principles", f"scope: {scope}"
+        "type: principles", f"type: {base_type}"
     )
     (root / "manifest.md").write_text(text, encoding="utf-8")
     return root
+
+
+def mine(root: Path | None = None) -> list[str]:
+    """The ids the *operator* made, in listing order.
+
+    Filters on the `system` flag rather than subtracting a known set of ids,
+    on `test_skills`' reasoning: a second shipped base should not break every
+    test that only ever cared about what it put on disk itself."""
+    return [base.id for base in knowledge.list_bases(root) if not base.system]
 
 
 @pytest.fixture(autouse=True)
@@ -63,20 +73,20 @@ def _fresh_index() -> None:
 
 def test_reads_the_documented_manifest_shape() -> None:
     base = knowledge.validate_manifest(MANIFEST, base_id="engineering-principles")
-    assert base.scope == "principles"
+    assert base.type == "principles"
     assert base.title == "Engineering principles"
     assert base.about.startswith("How we build software here")
     assert base.writable is False
 
 
-def test_a_missing_scope_is_refused_by_name() -> None:
-    text = MANIFEST.replace("scope: principles\n", "")
-    with pytest.raises(KnowledgeInvalid, match="no `scope:`"):
+def test_a_missing_type_is_refused_by_name() -> None:
+    text = MANIFEST.replace("type: principles\n", "")
+    with pytest.raises(KnowledgeInvalid, match="no `type:`"):
         knowledge.validate_manifest(text, base_id="engineering-principles")
 
 
-def test_an_unknown_scope_lists_the_ones_there_are() -> None:
-    text = MANIFEST.replace("scope: principles", "scope: vibes")
+def test_an_unknown_type_lists_the_ones_there_are() -> None:
+    text = MANIFEST.replace("type: principles", "type: vibes")
     with pytest.raises(KnowledgeInvalid) as raised:
         knowledge.validate_manifest(text, base_id="engineering-principles")
     assert "codebase" in str(raised.value) and "general" in str(raised.value)
@@ -101,15 +111,15 @@ def test_an_unknown_format_names_the_adapter_that_is_missing() -> None:
         knowledge.validate_manifest(text, base_id="engineering-principles")
 
 
-# ---- scope -----------------------------------------------------------------
+# ---- type ------------------------------------------------------------------
 
 
 def test_principles_is_read_only_and_the_rest_are_not() -> None:
-    """The one rule scope enforces about writing, with no per-base override: a
+    """The one rule type enforces about writing, with no per-base override: a
     machine that can edit the standard it is judged by can pass its own review."""
     assert knowledge.is_writable("principles") is False
-    for scope in ("project", "codebase", "general"):
-        assert knowledge.is_writable(scope) is True
+    for base_type in ("project", "codebase", "general"):
+        assert knowledge.is_writable(base_type) is True
 
 
 # ---- the library -----------------------------------------------------------
@@ -129,8 +139,18 @@ def test_the_manifest_is_not_listed_as_content(workspace: Path) -> None:
     assert knowledge.get_base("engineering-principles").entries == []
 
 
-def test_a_missing_knowledge_directory_is_an_empty_library(workspace: Path) -> None:
-    assert knowledge.list_bases() == []
+def test_a_workspace_with_nothing_in_it_still_has_the_shipped_bases(
+    workspace: Path,
+) -> None:
+    """`_knowledge/` used to be missing here and the library used to be empty.
+    The seed runs first now, so the directory appears on the first listing and
+    what is in it is exactly `SYSTEM_BASES` — the knowledge half of
+    `skills.list_skills`' guarantee."""
+    assert [base.id for base in knowledge.list_bases()] == sorted(
+        knowledge.SYSTEM_BASES
+    )
+    assert mine() == []
+    assert (workspace / "_knowledge").is_dir()
 
 
 def test_a_broken_base_is_skipped_by_the_listing_and_named_by_get(workspace: Path) -> None:
@@ -141,7 +161,7 @@ def test_a_broken_base_is_skipped_by_the_listing_and_named_by_get(workspace: Pat
     (workspace / "_knowledge" / "broken" / "manifest.md").write_text(
         "not a manifest at all\n", encoding="utf-8"
     )
-    assert [base.id for base in knowledge.list_bases()] == ["good"]
+    assert mine() == ["good"]
     with pytest.raises(KnowledgeInvalid):
         knowledge.get_base("broken")
 
@@ -151,7 +171,7 @@ def test_underscored_directories_are_hidden(workspace: Path) -> None:
     directory = workspace / "_knowledge" / "_template"
     directory.mkdir(parents=True)
     (directory / "manifest.md").write_text(MANIFEST, encoding="utf-8")
-    assert [base.id for base in knowledge.list_bases()] == ["real"]
+    assert mine() == ["real"]
 
 
 def test_nested_entries_are_walked_and_spelled_with_slashes(workspace: Path) -> None:
@@ -175,10 +195,10 @@ def test_creates_a_base_from_fields(workspace: Path) -> None:
     base = knowledge.create_base(
         base_id="acme-api-timeline",
         title="Acme API timeline",
-        scope="codebase",
+        base_type="codebase",
         about="Every change we have made to the Acme API client, in order.",
     )
-    assert base.scope == "codebase" and base.writable is True
+    assert base.type == "codebase" and base.writable is True
     assert (workspace / "_knowledge" / "acme-api-timeline" / "manifest.md").exists()
     # It round-trips through its own parser, which is the whole point of
     # rendering rather than templating.
@@ -186,18 +206,18 @@ def test_creates_a_base_from_fields(workspace: Path) -> None:
 
 
 def test_creating_never_replaces_an_existing_base(workspace: Path) -> None:
-    """Unlike a skill import. Replacing a base would silently re-scope a store
+    """Unlike a skill import. Replacing a base would silently re-type a store
     other projects are reading."""
     make_base(workspace, "engineering-principles")
     with pytest.raises(KnowledgeConflict, match="already in _knowledge"):
         knowledge.create_base(
-            base_id="engineering-principles", title="x", scope="general", about="x"
+            base_id="engineering-principles", title="x", base_type="general", about="x"
         )
 
 
 def test_an_unusable_id_says_why_case_matters(workspace: Path) -> None:
     with pytest.raises(KnowledgeInvalid, match="case-insensitive"):
-        knowledge.create_base(base_id="Acme", title="x", scope="general", about="x")
+        knowledge.create_base(base_id="Acme", title="x", base_type="general", about="x")
 
 
 def test_delete_removes_the_whole_base(workspace: Path) -> None:
@@ -227,7 +247,7 @@ def test_entry_paths_refuse_traversal(workspace: Path, bad: str) -> None:
 
 @pytest.fixture
 def base(workspace: Path) -> Path:
-    root = make_base(workspace, "acme", scope="codebase")
+    root = make_base(workspace, "acme", base_type="codebase")
     (root / "timeline.md").write_text(
         "# Timeline\n\nWe moved to v3 of the client in June.\n", encoding="utf-8"
     )
@@ -434,13 +454,13 @@ def test_the_body_is_filed_exactly_as_the_machine_said_it() -> None:
 # ---- the index block -------------------------------------------------------
 
 
-def test_the_block_names_the_base_its_scope_and_its_files(workspace: Path) -> None:
+def test_the_block_names_the_base_its_type_and_its_files(workspace: Path) -> None:
     root = make_base(workspace, "engineering-principles")
     (root / "naming.md").write_text("# Naming\n\nThe rules.\n", encoding="utf-8")
     base = knowledge.get_base("engineering-principles")
     block = index.base_block(base, root, contributes=False)
     assert "(base: engineering-principles)" in block
-    assert "Scope: principles" in block
+    assert "Type: principles" in block
     assert "naming.md" in block and "Naming" in block
     assert 'base "engineering-principles"' in block
 
@@ -469,7 +489,7 @@ def test_no_block_ever_promises_the_agent_a_write(workspace: Path) -> None:
     """**No agent holds a knowledge write tool.** A contributing node is told
     what happens to its answer, not what it may call: the first build said
     "Read and write." and described a capability nobody had."""
-    root = make_base(workspace, "acme", scope="general")
+    root = make_base(workspace, "acme", base_type="general")
     base = knowledge.get_base("acme")
     assert "Read-only." in index.base_block(base, root, contributes=False)
     contributing = index.base_block(base, root, contributes=True)
@@ -480,7 +500,7 @@ def test_no_block_ever_promises_the_agent_a_write(workspace: Path) -> None:
 def test_a_large_base_degrades_to_directories_with_counts(workspace: Path) -> None:
     """Silently listing the first 40 of 340 would be a map that lies by
     omission; "there are 340 files under 2026/" is still a map."""
-    root = make_base(workspace, "acme", scope="general")
+    root = make_base(workspace, "acme", base_type="general")
     (root / "2026").mkdir()
     for n in range(60):
         (root / "2026" / f"note-{n:03}.md").write_text(f"# Note {n}\n", encoding="utf-8")
@@ -491,7 +511,7 @@ def test_a_large_base_degrades_to_directories_with_counts(workspace: Path) -> No
 
 
 def test_an_empty_base_says_so(workspace: Path) -> None:
-    root = make_base(workspace, "acme", scope="general")
+    root = make_base(workspace, "acme", base_type="general")
     assert "empty" in index.base_block(knowledge.get_base("acme"), root, contributes=True)
 
 
@@ -518,7 +538,7 @@ def test_the_section_is_capped_and_says_what_it_dropped() -> None:
 def test_a_filled_base_says_to_consult_it_before_answering(workspace: Path) -> None:
     """Naming the tools is not telling anyone when to reach for them, and a
     base whose index is read but never searched is a base paid for twice."""
-    root = make_base(workspace, "acme", scope="general")
+    root = make_base(workspace, "acme", base_type="general")
     (root / "naming.md").write_text("# Naming\n", encoding="utf-8")
     block = index.base_block(knowledge.get_base("acme"), root, contributes=False)
     assert "Consult it before you answer" in block
@@ -528,14 +548,14 @@ def test_a_filled_base_says_to_consult_it_before_answering(workspace: Path) -> N
 def test_an_empty_base_this_node_fills_says_so(workspace: Path) -> None:
     """Sending an agent to search an empty base spends a call on a certain
     miss. What is useful there is what is about to happen to it."""
-    root = make_base(workspace, "acme", scope="general")
+    root = make_base(workspace, "acme", base_type="general")
     block = index.base_block(knowledge.get_base("acme"), root, contributes=True)
     assert "your answer will be the first entry" in block
     assert "knowledge_append" not in block
 
 
 def test_an_empty_read_only_base_says_the_search_will_miss(workspace: Path) -> None:
-    root = make_base(workspace, "acme", scope="general")
+    root = make_base(workspace, "acme", base_type="general")
     block = index.base_block(knowledge.get_base("acme"), root, contributes=False)
     assert "will come back empty" in block
     assert "knowledge_append" not in block
@@ -588,9 +608,196 @@ def test_a_base_is_dropped_before_the_contract_is(workspace: Path) -> None:
 
 def test_the_cache_is_invalidated_by_an_edit_in_the_workspace(workspace: Path) -> None:
     """A base edited by hand must not serve yesterday's table of contents."""
-    root = make_base(workspace, "acme", scope="general")
+    root = make_base(workspace, "acme", base_type="general")
     first = index.base_block(knowledge.get_base("acme"), root, contributes=True)
     assert "later.md" not in first
     (root / "later.md").write_text("# Later\n", encoding="utf-8")
     second = index.base_block(knowledge.get_base("acme"), root, contributes=True)
     assert "later.md" in second
+
+
+# ---- the bases the product ships -------------------------------------------
+
+
+@pytest.mark.parametrize("base_id", sorted(knowledge.SYSTEM_BASES))
+def test_every_shipped_base_is_a_usable_base(base_id: str) -> None:
+    """The check that must not be allowed to fail quietly.
+
+    `list_bases` skips a base whose manifest does not parse, so a broken
+    shipped one would be *invisible* rather than loud — the same hole
+    `test_skills.test_every_shipped_skill_is_a_valid_skill` plugs for the
+    shipped skills. Every file is read here, not just the manifest, because a
+    principle nobody can open is a principle that is not in the base.
+    """
+    source = knowledge.system_knowledge_dir() / base_id
+    assert source.is_dir(), f"{base_id} is in the registry but not in the package"
+
+    manifest = (source / knowledge.MANIFEST_NAME).read_text(encoding="utf-8")
+    summary = knowledge.validate_manifest(manifest, base_id=base_id)
+    assert summary.id == base_id and summary.system is True
+    assert summary.type in {"principles", "project", "codebase", "general"}
+
+    entries = sorted(path for path in source.rglob("*") if path.is_file())
+    assert len(entries) > 1, "a base of nothing but a manifest is a base of nothing"
+    for path in entries:
+        text = path.read_text(encoding="utf-8")
+        assert len(text.encode("utf-8")) <= knowledge.FILE_MAX_BYTES
+        if path.name != knowledge.MANIFEST_NAME:
+            # `store._first_line` lifts the opening heading into the contents
+            # list every agent reads. A file without one is a line of index
+            # that says nothing.
+            assert text.lstrip().startswith("# ")
+
+
+def test_the_shipped_base_is_seeded_into_an_empty_workspace(workspace: Path) -> None:
+    base_id = sorted(knowledge.SYSTEM_BASES)[0]
+    knowledge.ensure_system_bases()
+    root = workspace / "_knowledge" / base_id
+    assert (root / "manifest.md").is_file()
+    base = knowledge.get_base(base_id)
+    assert base.system is True and base.files == len(knowledge.system_files(base_id)) - 1
+
+
+def test_seeding_twice_changes_nothing(workspace: Path) -> None:
+    base_id = sorted(knowledge.SYSTEM_BASES)[0]
+    knowledge.ensure_system_bases()
+    root = workspace / "_knowledge" / base_id
+    before = {path: path.read_bytes() for path in sorted(root.rglob("*")) if path.is_file()}
+    knowledge.ensure_system_bases()
+    after = {path: path.read_bytes() for path in sorted(root.rglob("*")) if path.is_file()}
+    assert before == after
+
+
+def test_a_shipped_file_deleted_by_hand_comes_back(workspace: Path) -> None:
+    """What makes "cannot be deleted" a fact about the base rather than a rule
+    in the API. The operator's `rm` is not refused — it is undone."""
+    base_id = sorted(knowledge.SYSTEM_BASES)[0]
+    knowledge.ensure_system_bases()
+    root = workspace / "_knowledge" / base_id
+    victim = sorted(path for path in root.glob("*.md") if path.name != "manifest.md")[0]
+    victim.unlink()
+    assert not victim.exists()
+    knowledge.list_bases()
+    assert victim.is_file()
+
+
+def test_the_whole_base_deleted_by_hand_comes_back(workspace: Path) -> None:
+    base_id = sorted(knowledge.SYSTEM_BASES)[0]
+    knowledge.ensure_system_bases()
+    shutil.rmtree(workspace / "_knowledge" / base_id)
+    assert [base.id for base in knowledge.list_bases()] == sorted(knowledge.SYSTEM_BASES)
+
+
+def test_an_edited_shipped_file_is_never_overwritten_by_the_seed(workspace: Path) -> None:
+    """The bargain in one test: their copy wins, permanently. A shipped
+    correction does not reach a file somebody has already changed, and that is
+    the cost of seeding rather than overlaying — paid deliberately."""
+    base_id = sorted(knowledge.SYSTEM_BASES)[0]
+    knowledge.ensure_system_bases()
+    root = workspace / "_knowledge" / base_id
+    victim = sorted(path for path in root.glob("*.md") if path.name != "manifest.md")[0]
+    victim.write_text("# Mine now\n\nRewritten.\n", encoding="utf-8")
+    knowledge.ensure_system_bases()
+    assert victim.read_text(encoding="utf-8") == "# Mine now\n\nRewritten.\n"
+
+
+def test_a_file_added_to_a_shipped_base_is_left_alone(workspace: Path) -> None:
+    base_id = sorted(knowledge.SYSTEM_BASES)[0]
+    knowledge.ensure_system_bases()
+    added = workspace / "_knowledge" / base_id / "ours.md"
+    added.write_text("# Ours\n", encoding="utf-8")
+    knowledge.ensure_system_bases()
+    assert added.is_file()
+    assert "ours.md" not in knowledge.system_files(base_id)
+
+
+def test_a_shipped_base_cannot_be_deleted(workspace: Path) -> None:
+    base_id = sorted(knowledge.SYSTEM_BASES)[0]
+    knowledge.ensure_system_bases()
+    with pytest.raises(knowledge.KnowledgeProtected, match="cannot be deleted"):
+        knowledge.delete_base(base_id)
+    assert (workspace / "_knowledge" / base_id / "manifest.md").is_file()
+
+
+def test_a_shipped_base_cannot_be_created_over(workspace: Path) -> None:
+    base_id = sorted(knowledge.SYSTEM_BASES)[0]
+    with pytest.raises(knowledge.KnowledgeProtected, match="cannot be replaced"):
+        knowledge.create_base(
+            base_id=base_id, title="x", base_type="general", about="x"
+        )
+
+
+def test_an_ordinary_base_with_a_similar_id_is_not_protected(workspace: Path) -> None:
+    """`SYSTEM_BASES` is a registry and not a prefix rule, for exactly this:
+    an operator's own base that reads like a shipped one stays theirs."""
+    make_base(workspace, "software-architecture-notes", base_type="general")
+    assert knowledge.is_system("software-architecture-notes") is False
+    knowledge.delete_base("software-architecture-notes")
+    assert "software-architecture-notes" not in mine()
+
+
+# ---- the manifest as the way in --------------------------------------------
+
+
+def test_a_manifest_that_still_says_scope_is_read_as_type(workspace: Path) -> None:
+    """The field was renamed in decision 0018; the bases on disk in every
+    workspace were not, and a rename that cost an operator their library would
+    be a rename nobody should make."""
+    text = MANIFEST.replace("type: principles", "scope: principles")
+    base = knowledge.validate_manifest(text, base_id="engineering-principles")
+    assert base.type == "principles" and base.writable is False
+
+
+def test_a_manifest_saying_type_wins_over_one_saying_both() -> None:
+    text = MANIFEST.replace("type: principles", "type: general\nscope: principles")
+    assert knowledge.validate_manifest(text, base_id="engineering-principles").type == "general"
+
+
+def test_a_rendered_manifest_says_type_and_reads_back(workspace: Path) -> None:
+    base = knowledge.create_base(
+        base_id="acme", title="Acme", base_type="codebase", about="Notes."
+    )
+    text = (workspace / "_knowledge" / "acme" / "manifest.md").read_text(encoding="utf-8")
+    assert "type: codebase" in text and "scope:" not in text
+    assert base.type == "codebase"
+
+
+def test_the_block_sends_the_agent_to_the_manifest_first(workspace: Path) -> None:
+    """Decision 0017 kept `about` out of the prompt and left the manifest
+    unreachable — skipped by the walk, named by nothing. 0018 names it."""
+    root = make_base(workspace, "acme", base_type="general")
+    (root / "naming.md").write_text("# Naming\n\nRules.\n", encoding="utf-8")
+    block = index.base_block(knowledge.get_base("acme"), root, contributes=False)
+    assert "manifest.md" in block
+    assert block.index("manifest.md") < block.index("naming.md")
+    # The pointer, not the prose: `about` is still not paid for on every turn.
+    assert knowledge.get_base("acme").about not in block
+
+
+def test_the_manifest_can_be_read_through_the_adapter(workspace: Path) -> None:
+    """What the block above promises has to work: `knowledge_get` on
+    `manifest.md` is the whole of the mechanism."""
+    root = make_base(workspace, "acme", base_type="general")
+    chunk = MarkdownAdapter().get(root, "manifest.md")
+    assert "type: general" in chunk.text
+
+
+def test_the_manifest_cannot_be_written_through_the_adapter(workspace: Path) -> None:
+    """The other half. A node with a write wire onto a writable base could
+    reach `manifest.md` through `knowledge_append` until 0018."""
+    root = make_base(workspace, "acme", base_type="general")
+    adapter = MarkdownAdapter()
+    with pytest.raises(knowledge.KnowledgeReadOnly, match="read, never"):
+        adapter.append(root, "manifest.md", "mine now")
+    with pytest.raises(knowledge.KnowledgeReadOnly):
+        adapter.update(root, "manifest.md", "type: general", "type: principles")
+    assert "type: general" in (root / "manifest.md").read_text(encoding="utf-8")
+
+
+def test_a_nested_manifest_is_ordinary_content(workspace: Path) -> None:
+    """Matching `store._walk`, which only skips the root one."""
+    root = make_base(workspace, "acme", base_type="general")
+    (root / "notes").mkdir()
+    (root / "notes" / "manifest.md").write_text("# Notes\n", encoding="utf-8")
+    written = MarkdownAdapter().append(root, "notes/manifest.md", "More.")
+    assert written.path == "notes/manifest.md"

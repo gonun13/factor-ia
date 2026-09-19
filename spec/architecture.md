@@ -41,6 +41,7 @@ backend/     FastAPI app, uv-managed  (factoria.main:app)
              skills.py  the workspace's standing instructions, as files
              skills_api.py  import, list, delete/revert
              system_skills/  the ones a node type is hardwired to, shipped
+             system_knowledge/  the base the product ships, seeded into _knowledge/
              agent/    the CLI subprocess layer — the one runtime dependency
                adapter.py  the AgentAdapter seam, and the permission-mode gate
                events.py  the event union

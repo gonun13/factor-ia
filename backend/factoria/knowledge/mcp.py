@@ -7,7 +7,7 @@ it; this module is the other half.
 Memory is delivered as a path plus `--add-dir`, which is right for a scratch
 file written whole by one process (`memory.py`). It is wrong here. A base is a
 shared, permanent, concurrently-read store where a write must be serialized,
-validated against a scope and recorded — handing an agent a directory and hoping
+validated against a type and recorded — handing an agent a directory and hoping
 would put all three rules in a prompt, which is where rules go to be ignored.
 
 **One server, many bases.** A single stdio process per spawn, handed only the
@@ -80,7 +80,7 @@ PROTOCOL_VERSION = "2025-06-18"
 ErrorCode = Literal[
     "unknown_base",
     "not_wired",
-    "read_only_scope",
+    "read_only_type",
     "not_found",
     "too_large",
     "locked",
@@ -93,7 +93,7 @@ ErrorCode = Literal[
 |---|---|---|
 | `unknown_base` | no such base | stop naming it; it is a wiring bug |
 | `not_wired` | real base, not wired to this node | proceed without it, and say so |
-| `read_only_scope` | a write to `principles` | report the change in its output |
+| `read_only_type` | a write to `principles` | report the change in its output |
 | `not_found` | no such path in the base | `knowledge_list` first |
 | `too_large` | over a budget | split the entry |
 | `locked` | another writer holds the base | retry once, then report |
@@ -149,7 +149,7 @@ class BaseGrant:
 
     id: str
     root: Path
-    scope: str
+    type: str
     title: str
     writable: bool
     format: str = "markdown"
@@ -189,7 +189,7 @@ class Grant:
             grant = BaseGrant(
                 id=str(entry["id"]),
                 root=Path(entry["root"]),
-                scope=str(entry.get("scope", "general")),
+                type=str(entry.get("type") or "general"),
                 title=str(entry.get("title") or entry["id"]),
                 # Belt and braces: the orchestrator already refuses a write
                 # handle on a `principles` base, and this re-derives it rather
@@ -197,7 +197,7 @@ class Grant:
                 # server's own parent, but a permission that is only ever
                 # *copied* is a permission one bug can widen.
                 writable=bool(entry.get("writable"))
-                and store.is_writable(str(entry.get("scope", "general"))),
+                and store.is_writable(str(entry.get("type") or "general")),
                 format=str(entry.get("format") or "markdown"),
             )
             bases[grant.id] = grant
@@ -335,7 +335,7 @@ class Server:
         Three refusals, and they are deliberately different words. `unknown_base`
         is a name for nothing and is a wiring bug the agent should stop
         repeating; `not_wired` is a real base this node was not given, where
-        proceeding without it and saying so is the right move; `read_only_scope`
+        proceeding without it and saying so is the right move; `read_only_type`
         is a base it has and may not change.
         """
         named = str(arguments.get("base") or "").strip()
@@ -358,16 +358,16 @@ class Server:
                 "output that you could not consult it.",
             )
         if writing and not grant.writable:
-            if not store.is_writable(grant.scope):
+            if not store.is_writable(grant.type):
                 raise Refusal(
-                    "read_only_scope",
-                    f"{named!r} is a {grant.scope} base and is read-only to every "
+                    "read_only_type",
+                    f"{named!r} is a {grant.type} base and is read-only to every "
                     "machine, permanently: principles are what your work is "
                     "measured against. Put the change you would make in your "
                     "output instead, and a person will decide.",
                 )
             raise Refusal(
-                "read_only_scope",
+                "read_only_type",
                 f"this machine was wired to {named!r} for reading only — there is "
                 "no write wire from that base to it on the canvas. Report what you "
                 "would have recorded in your output instead.",
@@ -379,7 +379,7 @@ class Server:
         result without parsing prose. `truncated` is the honesty field."""
         body: dict[str, Any] = {
             "base": grant.id,
-            "scope": grant.scope,
+            "type": grant.type,
             "writable": grant.writable,
             "path": None,
             "bytes": 0,
@@ -568,7 +568,7 @@ def _guard(call):
     except KnowledgeLocked as exc:
         raise Refusal("locked", str(exc)) from None
     except KnowledgeReadOnly as exc:
-        raise Refusal("read_only_scope", str(exc)) from None
+        raise Refusal("read_only_type", str(exc)) from None
     except PathEscape:
         # Not echoing the path back, for `api._translate`'s reason: reflecting a
         # rejected path is how a probe maps the box.

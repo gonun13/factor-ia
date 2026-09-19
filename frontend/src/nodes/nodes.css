@@ -891,12 +891,12 @@
   background: color-mix(in srgb, var(--knowledge) 8%, #10141b);
 }
 
-/* The scope in words, on hover and on focus like the skill's description — it
+/* The type in words, on hover and on focus like the skill's description — it
    is the one thing about a base that changes what a wire to it means, and it is
    the manifest's word rather than anything set here. */
-/* The scope keeps the base's own colour inside the popup: it is the manifest
+/* The type keeps the base's own colour inside the popup: it is the manifest
    speaking, not the node. */
-.node-note-popup .scope-note {
+.node-note-popup .type-note {
   color: var(--knowledge);
 }
 

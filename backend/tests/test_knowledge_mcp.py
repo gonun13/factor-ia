@@ -24,7 +24,7 @@ from factoria.knowledge import mcp, store as knowledge
 MANIFEST = """---
 id: {id}
 title: {title}
-scope: {scope}
+type: {type}
 format: markdown
 ---
 
@@ -32,11 +32,11 @@ What this base is for.
 """
 
 
-def make_base(workspace: Path, base_id: str, scope: str) -> Path:
+def make_base(workspace: Path, base_id: str, base_type: str) -> Path:
     root = workspace / "_knowledge" / base_id
     root.mkdir(parents=True, exist_ok=True)
     (root / "manifest.md").write_text(
-        MANIFEST.format(id=base_id, title=base_id, scope=scope), encoding="utf-8"
+        MANIFEST.format(id=base_id, title=base_id, type=base_type), encoding="utf-8"
     )
     (root / "notes.md").write_text("# Notes\n\nThe client moved to v3.\n", encoding="utf-8")
     return root
@@ -45,16 +45,16 @@ def make_base(workspace: Path, base_id: str, scope: str) -> Path:
 def make_server(
     workspace: Path, *bases: tuple[str, str, bool], journal: Path | None = None
 ) -> mcp.Server:
-    """A server over `(id, scope, writable)` triples, with the bases on disk."""
+    """A server over `(id, type, writable)` triples, with the bases on disk."""
     grants = {}
-    for base_id, scope, writable in bases:
-        root = make_base(workspace, base_id, scope)
+    for base_id, base_type, writable in bases:
+        root = make_base(workspace, base_id, base_type)
         grants[base_id] = mcp.BaseGrant(
             id=base_id,
             root=root,
-            scope=scope,
+            type=base_type,
             title=base_id,
-            writable=writable and knowledge.is_writable(scope),
+            writable=writable and knowledge.is_writable(base_type),
         )
     return mcp.Server(
         mcp.Grant(run_id="r1", node_id="n1", journal=journal, bases=grants)
@@ -98,7 +98,7 @@ def test_an_unknown_tool_is_refused_by_name(workspace: Path) -> None:
     assert refusal(server, "knowledge_delete", base="acme").code == "bad_request"
 
 
-# ---- scope and handles -----------------------------------------------------
+# ---- type and handles ------------------------------------------------------
 
 
 def test_a_principles_base_refuses_a_write_even_when_the_grant_says_otherwise(
@@ -108,7 +108,7 @@ def test_a_principles_base_refuses_a_write_even_when_the_grant_says_otherwise(
     permission that is only ever *copied* is a permission one bug can widen."""
     server = make_server(workspace, ("principles", "principles", True))
     error = refusal(server, "knowledge_append", base="principles", path="x.md", content="y")
-    assert error.code == "read_only_scope"
+    assert error.code == "read_only_type"
     assert "measured against" in error.message
 
 
@@ -117,7 +117,7 @@ def test_a_read_only_wire_refuses_a_write_with_a_different_sentence(workspace: P
     change, and the message says so rather than talking about principles."""
     server = make_server(workspace, ("acme", "codebase", False))
     error = refusal(server, "knowledge_append", base="acme", path="x.md", content="y")
-    assert error.code == "read_only_scope"
+    assert error.code == "read_only_type"
     assert "no write wire" in error.message
 
 
@@ -139,8 +139,8 @@ def test_every_response_carries_the_same_envelope(workspace: Path) -> None:
         ("knowledge_get", {"path": "notes.md"}),
     ):
         body = server.call(tool, {"base": "acme", **arguments})
-        assert set(body) >= {"base", "scope", "writable", "path", "bytes", "truncated", "next"}
-        assert body["base"] == "acme" and body["scope"] == "codebase"
+        assert set(body) >= {"base", "type", "writable", "path", "bytes", "truncated", "next"}
+        assert body["base"] == "acme" and body["type"] == "codebase"
 
 
 def test_get_says_it_was_cut_and_where_to_continue(workspace: Path) -> None:
@@ -342,7 +342,7 @@ def test_a_refused_call_is_a_result_with_is_error_not_a_protocol_error(
     assert "error" not in reply
     assert reply["result"]["isError"] is True
     body = json.loads(reply["result"]["content"][0]["text"])
-    assert body["error"]["code"] == "read_only_scope"
+    assert body["error"]["code"] == "read_only_type"
 
 
 def test_an_unknown_method_is_a_protocol_error(workspace: Path) -> None:
@@ -375,7 +375,7 @@ def test_a_grant_is_loaded_from_disk_and_re_derives_writability(
                     {
                         "id": "principles",
                         "root": str(workspace / "_knowledge" / "principles"),
-                        "scope": "principles",
+                        "type": "principles",
                         "writable": True,
                     }
                 ],
@@ -394,3 +394,34 @@ def test_no_grant_is_an_empty_one_rather_than_a_crash(monkeypatch) -> None:
     "the MCP server failed to start", which says nothing about wiring."""
     monkeypatch.delenv(mcp.GRANT_ENV, raising=False)
     assert mcp.Grant.from_env().bases == {}
+
+
+# ---- the manifest, through the tools ---------------------------------------
+
+
+def test_an_agent_can_read_the_manifest(workspace: Path) -> None:
+    """`index._manifest_line` sends every wired machine here first, so this is
+    the call that has to work. It is not in `knowledge_list` — `store._walk`
+    skips the root manifest because it is not content — and `knowledge_get`
+    reaches it anyway, which is the whole mechanism."""
+    server = make_server(workspace, ("acme", "codebase", False))
+    listed = server.call("knowledge_list", {"base": "acme"})
+    assert "manifest.md" not in [entry["path"] for entry in listed["files"]]
+    body = server.call("knowledge_get", {"base": "acme", "path": "manifest.md"})
+    assert "type: codebase" in body["content"]
+
+
+def test_an_agent_cannot_write_the_manifest(workspace: Path) -> None:
+    """Even holding a write wire onto a writable base. The manifest is what the
+    base *is*: its type, and the conventions the next machine is told to follow."""
+    server = make_server(workspace, ("acme", "codebase", True))
+    for tool, arguments in (
+        ("knowledge_append", {"path": "manifest.md", "content": "mine now"}),
+        ("knowledge_update", {"path": "manifest.md", "old": "codebase", "new": "general"}),
+    ):
+        error = refusal(server, tool, base="acme", **arguments)
+        assert error.code == "read_only_type", tool
+        assert "read, never" in error.message
+    assert "type: codebase" in (
+        workspace / "_knowledge" / "acme" / "manifest.md"
+    ).read_text(encoding="utf-8")

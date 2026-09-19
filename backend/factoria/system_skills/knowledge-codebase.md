@@ -11,11 +11,15 @@ person browsing. Dense and exact beats readable and approximate.
 
 ## Before you write anything
 
-1. `knowledge_list` the base. You need to know what files exist before you can
+1. `knowledge_get` the base's `manifest.md`. It says what this particular
+   base is for, how it is organised and what belongs in it — the filing
+   conventions below are the general rule, and the manifest is this
+   shelf's. **Where they differ, the manifest wins.**
+2. `knowledge_list` the base. You need to know what files exist before you can
    decide whether this is new.
-2. `knowledge_search` for the symbols, paths and terms the answer names. An
+3. `knowledge_search` for the symbols, paths and terms the answer names. An
    entry that already covers this ground is the normal case, not the exception.
-3. `knowledge_get` the file you are about to change. Update in place with
+4. `knowledge_get` the file you are about to change. Update in place with
    `knowledge_update` whenever the ground is already covered — **prefer
    `knowledge_update` over `knowledge_append`.** A base that only ever grows is
    a changelog, and a changelog is the thing this base must not become.

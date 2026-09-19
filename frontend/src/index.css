@@ -879,13 +879,13 @@ button.skill-card.is-system:hover {
    one property of a base that changes what wiring to it means, and it is the
    thing somebody scans the list for. `principles` is the only one that is
    coloured, because it is the only one that carries a *restriction* — every
-   other scope behaves the same way and a palette of four would be decoration. */
-.scope-tag {
+   other type behaves the same way and a palette of four would be decoration. */
+.type-tag {
   font-variant: small-caps;
   letter-spacing: 0.04em;
 }
 
-.scope-tag.scope-principles {
+.type-tag.type-principles {
   color: var(--knowledge);
 }
 
@@ -2534,4 +2534,66 @@ ul.plain {
 .url-row .verification-url {
   flex: 1;
   min-width: 0;
+}
+
+/* The knowledge editor's warning sits between the header and the two panes,
+   which are edge-to-edge (`.knowledge-editor-body` has no padding). Given a
+   margin here rather than padding on the body, so the panes keep meeting the
+   panel's sides and only the note is inset. */
+.knowledge-editor > .skill-editor-warning {
+  margin: 0.6rem 0.7rem 0;
+}
+
+/* ---- the manifest, as a form --------------------------------------------
+   The manifest is the one thing in a base that is not edited as a document:
+   its frontmatter is what the base *is*, and a textarea over it would offer a
+   re-type in the same gesture as a typo fix. So the pane holds the create
+   form's fields, minus the ones that are identity — which are printed above
+   them instead, because what a base is belongs on this screen even when it
+   cannot be changed here. */
+.manifest-form {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  overflow-y: auto;
+}
+
+.manifest-fixed {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.4rem;
+  margin: 0;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid var(--edge);
+  font-size: 0.72rem;
+  line-height: 1.5;
+}
+
+/* The prose is the field that matters here, so it takes the room the document
+   would have had rather than sitting in a fixed box under the title. */
+.manifest-form .field:last-child {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.manifest-form .field:last-child textarea {
+  flex: 1 1 auto;
+  min-height: 8rem;
+}
+
+.manifest-form .field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+/* Disabled on a system base, where the title is the product's name for it.
+   Dimmed rather than hidden: it is still what the base is called. */
+.manifest-form input:disabled {
+  color: var(--ink-dim);
+  background: var(--panel);
+  cursor: default;
 }
