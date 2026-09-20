@@ -108,9 +108,56 @@ The same function hands the walk the **loop body** it resets, so *what is
 refused* and *what is re-run* cannot drift. One function, two callers, no
 possibility of disagreement.
 
+### A body stops at the loop it closes
+
+`back_edges` answers two questions, and it answers them over two different
+graphs, because one graph cannot answer both.
+
+**Does this belt close a loop?** Asked over *every* edge, back-edges included —
+the graph the operator drew. A belt qualifies when its target can reach its
+source.
+
+**Which nodes run again on its lap?** Asked over the graph with every *other*
+back-edge removed. A body is the nodes between a belt's target and its source
+going **forward**, and another loop's return conveyor is not a forward path.
+Traverse one and the walk leaves this loop and climbs into the enclosing one,
+so the body collects nodes belonging to a loop this belt does not close.
+
+The shape that shows it is an ordinary one — a reviewer inside a sign-off's
+loop:
+
+```
+Request ──► Plan ──► Implement ──► Reviewer ──pass──► Sign-off ──► Commit
+              ▲          ▲             │                  │
+              │          ╰────fail─────╯                  │
+              ╰──────────────reject─────────────────────-─╯
+```
+
+The reviewer judges what `Implement` produced; its body is `Implement` and
+itself. Computed over all edges it was also `Plan`, `Sign-off` and every
+store wired between them — reachable only by riding the sign-off's reject belt
+backwards — so a failed review re-ran a planning node the reviewer never saw.
+The sign-off's own body **does** contain `Plan`, because the person at the
+bottom judged the whole line.
+
+Removing only the *others* keeps both halves right: the belt's own edge stays,
+so a body is still closed; every other leaves, so a body cannot escape into a
+neighbour. Bodies then nest, which is what the reset relies on when it re-deads
+the back-edges it finds inside one.
+
+**One shape needs the others back.** Two judges can close a *single* cycle
+between them, each one's path home running through the other's belt, neither
+nested in the other. Removing the others severs the only route from target back
+to source and the body comes back empty — a loop the cycle check has already
+dropped, and one the walk would reset nothing for. So **a body that loses its
+own source is recomputed over the whole graph**: a belt whose loop does not
+survive its neighbours leaving does not close a loop by itself, it *shares*
+one, and a shared cycle is the body of every belt on it.
+
 ### Three consequences worth knowing
 
-- **Only nodes on the loop body ever run twice.** The reset set is the body plus
+- **Only nodes on the loop body ever run twice**, and only the loop that
+  actually judged them sends them back. The reset set is the body plus
   anything below it that was settled without being reached. A node that actually
   ran and is not on the body keeps its result — which is what stops an output
   node drawn in parallel from committing on every lap. `runcheck` additionally
@@ -133,7 +180,10 @@ possibility of disagreement.
 - **The back edge stays `taken` across the reset.** That is how the judge's words
   reach the next lap — a reviewer's `reason`, or an operator's note:
   `_incoming_text` then hands the worker both the original request and the
-  critique.
+  critique. **Each lap's delivery is recorded separately** (`run.incoming`), so
+  lap 1's record still says what lap 1 was handed after the worker has run
+  again — and a lap before any judge has spoken shows nothing from the judge,
+  which is the honest thing and was not always what a reader was shown.
 
 ---
 

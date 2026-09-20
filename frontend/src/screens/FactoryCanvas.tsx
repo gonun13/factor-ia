@@ -615,33 +615,15 @@ function CanvasInner({ projectId, onBack }: { projectId: string; onBack: () => v
 
   const logNode = logNodeId ? (nodes.find((node) => node.id === logNodeId) ?? null) : null;
 
-  /** What the machines immediately above this one left behind.
-   *
-   * The nearest honest answer to "what did this node get": the text the belts
-   * actually carried is assembled when a node starts and never written down, so
-   * the log pane shows each predecessor's own output and says that is what it
-   * is. Belts only — a wire from a memory is a reference, not an input.
-   *
-   * **The live text first, the record second.** `run.run` is the record as it
-   * was when the run was created and is refreshed only when a control call
-   * returns one, so during a run — and after one, until the page is reloaded —
-   * every `output_text` on it is still the empty string it was stamped with.
-   * Reading only that made this pane tell a machine with a full belt above it
-   * that nothing had arrived. `runtimes` is the canvas's own live copy,
-   * assembled from the same stream the node is drawn from, so it is what the
-   * operator is already looking at. */
-  const upstream = useMemo(() => {
-    if (!logNodeId) return [];
-    const byId = new Map((run.run?.node_runs ?? []).map((one) => [one.node_id, one]));
-    return edges
-      .filter((edge) => edge.target === logNodeId && edge.type !== "wire")
-      .map((edge) => ({
-        label:
-          nodes.find((node) => node.id === edge.source)?.data.definition.label ?? edge.source,
-        text: run.runtimes[edge.source]?.text || byId.get(edge.source)?.output_text || "",
-      }))
-      .filter((source) => source.text);
-  }, [logNodeId, edges, nodes, run.run, run.runtimes]);
+  /* **There was an `upstream` prop here, and deleting it was the fix.** It
+     answered "what did this node get" from the *drawing* — every incoming
+     belt whose source had any text — because what the belts actually carried
+     was assembled when a node started and never written down. So the pane
+     attributed text to belts that were never taken, and worst of all to a
+     back-edge, whose source usually runs after its target: a worker was shown
+     a critique from a reviewer that had not run. The server records each
+     delivery now (`run.incoming`), and `NodeLog` reads it from the node's own
+     events. Nothing on the canvas needs to know. */
 
   const context = useMemo(
     () => ({
@@ -765,6 +747,9 @@ function CanvasInner({ projectId, onBack }: { projectId: string; onBack: () => v
               edgeTypes={edgeTypes}
               defaultEdgeOptions={{ type: BELT_EDGE }}
               deleteKeyCode={["Backspace", "Delete"]}
+              // Off-screen belts and nodes still animate and repaint if mounted,
+              // so keep only what's in the viewport in the DOM.
+              onlyRenderVisibleElements
               // Only for a graph that already has something in it: `fitView`
               // latches on the first render with measured nodes, so an empty
               // factory would fit on whatever node is dropped first and yank the
@@ -931,7 +916,6 @@ function CanvasInner({ projectId, onBack }: { projectId: string; onBack: () => v
           runId={run.run.id}
           node={logNode}
           nodeRun={run.run.node_runs.find((one) => one.node_id === logNode.id)}
-          upstream={upstream}
           subscribe={run.subscribe}
           onClose={() => setLogNodeId(null)}
         />

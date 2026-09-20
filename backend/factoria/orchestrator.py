@@ -143,12 +143,14 @@ from .questions import (
 )
 from .runevents import (
     AgentStreamEvent,
+    IncomingPart,
     NodeStatusEvent,
     RunArtifactEvent,
     RunStorageEvent,
     RunCostEvent,
     RunDecisionEvent,
     RunDecisionRequestEvent,
+    RunIncomingEvent,
     RunInputEvent,
     RunQuestionEvent,
     RunQuestionRequestEvent,
@@ -520,6 +522,42 @@ class ActiveRun:
 #: read an entry and rewrite it — the shipped skills ask for exactly that
 #: sequence — and short enough that a loop is caught rather than waited out.
 FILING_TIMEOUT_S = 180.0
+
+
+def _decide(state: "ActiveRun", edge_id: str, *, taken: bool) -> None:
+    """Settle one belt into exactly one of the two sets.
+
+    **Discarded from the other, not merely added to this one.** The two were
+    append-only while every belt was decided exactly once; a back-edge is
+    decided again on every lap, and one that was `taken` last lap and is not
+    taken this lap would otherwise sit in both — which reads as "taken"
+    everywhere it is asked (`_incoming_parts`, and `_walk`'s own `reached`),
+    and turns the loop forever.
+
+    One function because there are **two** deciding sites and only one of them
+    used to do this: the settled path below, and the unreached path above it,
+    which marked a node's belts dead and left whatever they were before. No
+    reachable run is known to have reached that second case with a belt still
+    `taken` — `_reset_loop` clears both sets for everything on the body, and
+    the only belt it deliberately leaves `taken` is the back-edge itself, whose
+    target always settles before its source within a lap. It is a rule with one
+    home rather than a bug with a fix, and that is the point: the invariant is
+    *a belt is in exactly one set*, and it is now impossible to write a caller
+    that breaks it.
+    """
+    (state.dead if taken else state.taken).discard(edge_id)
+    (state.taken if taken else state.dead).add(edge_id)
+
+
+def _joined(parts: list[IncomingPart]) -> str:
+    """The parts as one node reads them, and the only way that string is made.
+
+    Freeform text, joined (open question 4, *"start freeform"*). Stated as a
+    function rather than inlined because it is also the identity a reader of
+    `events.jsonl` relies on: rejoining a `run.incoming`'s parts gives back
+    exactly what the machine was told by its belts.
+    """
+    return "\n\n".join(part.text for part in parts)
 
 
 def _spawn_stem(node_id: str, lap: int) -> str:
@@ -1198,20 +1236,13 @@ class Orchestrator:
                     edge.id in state.taken for edge in incoming[node.id]
                 )
                 if not reached:
-                    state.dead.update(edge.id for edge in outgoing[node.id])
+                    for edge in outgoing[node.id]:
+                        _decide(state, edge.id, taken=False)
                     continue
 
                 outcome = await self._settle(state, node)
                 for edge in outgoing[node.id]:
-                    # Discarded from the other set, not merely added to this
-                    # one. The two were append-only while every belt was decided
-                    # exactly once; a back-edge is decided again on every lap,
-                    # and one that was `taken` last lap and is not taken this
-                    # lap would otherwise sit in both — which reads as "taken"
-                    # everywhere it is asked, and turns the loop forever.
-                    taken = _carries(node, edge, outcome)
-                    (state.dead if taken else state.taken).discard(edge.id)
-                    (state.taken if taken else state.dead).add(edge.id)
+                    _decide(state, edge.id, taken=_carries(node, edge, outcome))
                 for edge in outgoing[node.id]:
                     if edge.id in back and edge.id in state.taken:
                         await self._reset_loop(state, edge, back[edge.id], outgoing)
@@ -1414,7 +1445,26 @@ class Orchestrator:
             # no work yet, and a pip reading "running" over a form nobody has
             # opened would be a lie for as long as the operator took to answer.
             await self._set_node(state, node.id, "running")
-        incoming = self._incoming_text(state, node)
+        # **Assembled once, used twice**, so what the node is told and what the
+        # log says it was told cannot disagree. This is the only place the
+        # belts' contribution is computed, for every node type, and `_settle`
+        # has already returned for the two cases that must not be announced:
+        # an input node, which a person fed and which has `run.input` instead,
+        # and a replayed node on a resumed walk, whose original event is still
+        # in the same `events.jsonl`.
+        parts = self._incoming_parts(state, node)
+        incoming = _joined(parts)
+        # After the `running` transition above, so the log reads *started, and
+        # here is what it got* — and so the event falls inside the right lap
+        # for a reader that splits on the `pending` boundary (`NodeLog`).
+        await state.channel.emit(
+            RunIncomingEvent(
+                run_id=state.run.id,
+                node_id=node.id,
+                lap=node_run.lap if node_run is not None else 0,
+                parts=parts,
+            )
+        )
         if kind == "agent":
             await self._run_agent(state, node, incoming)
         elif kind == "output":
@@ -2723,34 +2773,33 @@ class Orchestrator:
         payload is an added field on the edge, not a change to this function's
         callers.
 
+        A thin wrapper, because the **parts** are the thing: they are what the
+        node is told *and* what `run.incoming` records, and deriving the string
+        anywhere but from them is how a log starts disagreeing with a prompt.
+        """
+        return _joined(self._incoming_parts(state, node))
+
+    def _incoming_parts(self, state: ActiveRun, node: Node) -> list[IncomingPart]:
+        """Everything that arrived at this node, itemised by who sent it.
+
         **Only the belts that actually delivered.** Since stage 8 a predecessor
         may be `pending` because its branch was never taken, or `failed` with
         its output routed down a belt that does not end here. Reading every
         predecessor would hand a node the text of a branch the run did not go
-        down, which is worse than handing it nothing.
-        """
-        # **One predecessor, one contribution.** Two belts between the same pair
-        # of machines carrying the same outcome are both taken, and reading the
-        # source twice would hand this node the same text twice — which is how
-        # it looks on screen: the agent's report, verbatim, repeated. Dropping
-        # the duplicate never loses anything, because a node leaves by exactly
-        # one outcome, so belts on the *other* port are dead and were never in
-        # this list. Two belts from **different** sources are ordinary fan-in
-        # and both still arrive — a worker fed by the request and by a
-        # reviewer's back-edge is a loop, not a mistake. `runcheck` refuses the
-        # duplicate belt outright; this is what keeps the text right for a file
-        # edited by hand in between.
-        joined = "\n\n".join(text for _, text in self._incoming_parts(state, node) if text)
-        return joined or (state.run.input_text or "")
+        down, which is worse than handing it nothing — and it is exactly what
+        the node log used to *show*, having no record to read and so guessing
+        from the drawing.
 
-    def _incoming_parts(self, state: ActiveRun, node: Node) -> list[tuple[str, str]]:
-        """`(source node id, its output text)` for every belt that delivered.
+        Returns `IncomingPart`s rather than tuples because the answer is
+        announced as well as used (`RunIncomingEvent`), and one walk producing
+        both is what stops the record and the prompt drifting. A **label** is
+        resolved here, while the factory is the one the run is walking; the
+        file is editable afterwards.
 
-        The taken-belt filter and the de-duplication above live here rather than
-        in `_incoming_text`, because a memory node needs to know *who* said each
-        thing — it files one section per source — and a second copy of this
-        walk would be the drift bug that ends with two nodes disagreeing about
-        which branch the run took.
+        The last resort is the **request**. When no belt delivered anything the
+        node is handed `Run.input_text`, marked as the request rather than
+        attributed to a machine that did not send it. An empty list means
+        nothing arrived at all.
 
         Order is the factory file's edge order, which is the order the operator
         drew the belts. That is what makes a memory document with two writers
@@ -2758,18 +2807,45 @@ class Orchestrator:
         runs, every incoming belt has already settled (`_walk`), so there is no
         arrival order to observe and the file is the only stable answer.
         """
+        labels = {other.id: (other.definition.label or other.id) for other in state.factory.nodes}
         seen: set[str] = set()
-        parts: list[tuple[str, str]] = []
+        parts: list[IncomingPart] = []
         belts, _wires = split_edges(state.factory.nodes, state.factory.edges)
         for edge in belts:
             if edge.target != node.id or edge.id not in state.taken:
                 continue
+            # **One predecessor, one contribution.** Two belts between the same
+            # pair of machines carrying the same outcome are both taken, and
+            # reading the source twice would hand this node the same text twice
+            # — which is how it looks on screen: the agent's report, verbatim,
+            # repeated. Dropping the duplicate never loses anything, because a
+            # node leaves by exactly one outcome, so belts on the *other* port
+            # are dead and were never in this list. Two belts from **different**
+            # sources are ordinary fan-in and both still arrive — a worker fed
+            # by the request and by a reviewer's back-edge is a loop, not a
+            # mistake. `runcheck` refuses the duplicate belt outright; this is
+            # what keeps the text right for a file edited by hand in between.
             if edge.source in seen:
                 continue
             seen.add(edge.source)
             node_run = state.run.node_run(edge.source)
-            parts.append((edge.source, node_run.output_text if node_run else ""))
-        return parts
+            text = node_run.output_text if node_run else ""
+            # A belt that delivered nothing is not a delivery. Dropped here
+            # rather than at the join, so the record says what the prompt says.
+            if not text:
+                continue
+            parts.append(
+                IncomingPart(
+                    source="belt",
+                    node_id=edge.source,
+                    label=labels.get(edge.source, edge.source),
+                    text=text,
+                )
+            )
+        if parts:
+            return parts
+        request = state.run.input_text or ""
+        return [IncomingPart(source="request", text=request)] if request else []
 
     def _memory_neighbours(
         self, state: ActiveRun, node: Node

@@ -27,6 +27,12 @@ Each is an envelope type of its own, never one type with optional fields:
 - `run.decision` — a person answered. The `run.input` of a human node: logged
   because a transcript that shows a run taking the fail belt without showing
   who sent it there is unreadable.
+- `run.incoming` — what the belts actually carried into one machine on one lap,
+  named by the machine that sent each piece. Logged because it was previously
+  assembled at the moment a node started and then thrown away, which left a
+  reader no way to tell a belt that delivered from one merely drawn — and the
+  node log, guessing from the drawing, told operators that a judge which had
+  not run yet had sent work back up the line.
 - `agent`      — an adapter event, verbatim, on a node.
 - `run.artifact` — a worktree was created, a commit was made, or a memory was
   written. The one event that still means something after the process that
@@ -294,6 +300,66 @@ class RunStorageEvent(RunEventBase):
     detail: str = ""
 
 
+class IncomingPart(Base):
+    """One thing that arrived at a machine, and who sent it."""
+
+    #: `belt` — a predecessor's output, carried by a belt that was taken.
+    #: `request` — no belt delivered, so the node was handed the run's request
+    #: text instead (`orchestrator._incoming_text`'s fallback).
+    source: Literal["belt", "request"] = "belt"
+    #: The sending machine. Empty for a `request` part, which no machine sent.
+    node_id: str = ""
+    #: Its label **as the operator drew it when the run happened**. Carried
+    #: rather than resolved at read time, like `RunStorageEvent.machine_label`:
+    #: the factory file is editable after a run, and a log that looked the name
+    #: up later would re-attribute an old run's input to whatever the node is
+    #: called today.
+    label: str = ""
+    text: str
+
+
+class RunIncomingEvent(RunEventBase):
+    """What one machine was handed, on one lap, itemised by sender.
+
+    **The record that replaces a guess.** What the belts carry is assembled
+    when a node starts (`orchestrator._incoming_parts`) and was never written
+    down, so the node log reconstructed it in the browser from the *drawing* —
+    every incoming belt whose source had any text. That is wrong whenever a
+    belt was not taken, and most visibly wrong for a back-edge, whose source
+    usually runs *after* its target: a worker was shown text "from the
+    reviewer, up the belt" on a lap where the reviewer had not run at all.
+
+    Carries the **text**, not just the sender ids, for two reasons. A reader of
+    the log must not need the run record, which a watching tab holds as a
+    snapshot from before the walk — and for an `output`, `human` or storage
+    predecessor there is no transcript to fetch the text from anyway, because
+    those machines stream nothing. And `output_text` is overwritten when a loop
+    sends a machine round again, so ids alone would re-render lap 1 with lap
+    2's words: the same class of inaccuracy this event exists to end.
+
+    The parts rejoin to exactly what the node was told by its belts —
+    `"\n\n".join(part.text for part in parts)` — which is what keeps the pane
+    a rendering rather than a second opinion. It is **not** the whole prompt: a
+    skill body and memory pointers are added after (`_run_agent`).
+    """
+
+    type: Literal["run.incoming"] = "run.incoming"
+    #: **The machine being fed.** The senders live inside `parts`, because
+    #: `runs_api.node_events` filters on this top-level field alone — a sender
+    #: id here would file this event in the wrong machine's log.
+    node_id: str
+    #: Which lap this delivery was for. On the wire for the reason
+    #: `NodeStatusEvent.lap` is: the counter already exists on `NodeRun`, and a
+    #: browser-side re-derivation that only a reconnecting tab exercises is the
+    #: kind that drifts.
+    lap: int = 0
+    #: In factory-file order, de-duplicated by sender. **Empty means nothing
+    #: arrived** — no belt delivered and the run carried no request text. The
+    #: event is emitted anyway, because its presence is what tells a reader
+    #: "nothing arrived" apart from "this run predates the record".
+    parts: list[IncomingPart] = Field(default_factory=list)
+
+
 class RunCostEvent(RunEventBase):
     type: Literal["run.cost"] = "run.cost"
     node_id: str
@@ -315,6 +381,7 @@ RunEvent = Annotated[
         AgentStreamEvent,
         RunArtifactEvent,
         RunStorageEvent,
+        RunIncomingEvent,
         RunCostEvent,
     ],
     Field(discriminator="type"),

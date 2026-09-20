@@ -120,6 +120,10 @@ happening — each with one job:
   reading. What arrived, what left, the agent's words, every tool with its
   actual arguments, the thinking, the decisions, and the raw events underneath
   — with every lap of a loop kept separately rather than only the newest.
+  **What arrived is read from the record, never inferred from the drawing**:
+  each delivery is named by the machine that sent it, and a belt that was not
+  taken appears nowhere. A run recorded before that was written down says so,
+  rather than showing a guess.
 - **The chat** appears over the canvas when the run stops to ask something: the
   request, a gate's sign-off, a scope node's questionnaire, with the exchange so
   far above the open form. It is wide because a sign-off exists so that somebody

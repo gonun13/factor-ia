@@ -22,7 +22,18 @@ from factoria.models import Edge, Factory, Node, NodeDefinition, Project
 from factoria.orchestrator import Orchestrator
 from factoria.store import Store
 
+from factoria.runlog import RunLog
+
 from .conftest import make_git_repo
+
+
+def _incoming(run_id: str, node_id: str) -> list[dict]:
+    """Every `run.incoming` recorded for one machine, oldest lap first."""
+    return [
+        event
+        for event in RunLog(run_id).read(0)
+        if event.get("type") == "run.incoming" and event.get("node_id") == node_id
+    ]
 
 
 def agent(
@@ -234,29 +245,95 @@ def test_a_join_waits_for_the_branch_that_will_never_arrive_to_be_ruled_out(
 def test_a_node_is_handed_only_what_the_taken_belts_delivered(
     test_store: Store, orch: Orchestrator, repo: Path
 ) -> None:
-    """The fake echoes its prompt, so what the rescue agent was handed is
-    readable off its own output — and it must not contain the happy branch,
-    which never ran."""
+    """A dead belt delivers nothing, **and the machine that drew it ran**.
+
+    The graph matters more than the assertion here, and the previous one could
+    not express the claim at all: the node under test had a single incoming
+    belt, which was taken, so there was nothing to filter. Worse, the branch
+    the docstring named as forbidden had never run — and a node that never ran
+    has no output text, so dropping the taken-filter entirely would have
+    changed nothing and the test would still have passed.
+
+    The claim is only observable when the dead belt's source **ran and routed
+    its output somewhere else**. So `n-judge` fails its verdict and leaves by
+    its fail port; its `success` belt into `n-join` is therefore dead while the
+    judge itself has a full report sitting in `output_text`.
+
+    `n-work` is a **sibling** of the judge rather than below it, which is the
+    other half of the design: put the join under the judge's fail belt and the
+    judge's reason reaches it legitimately, and the negative assertion becomes
+    unfalsifiable.
+    """
     save(
         test_store,
         [
             node("n-in", "input"),
-            agent("n-agent", fails=True),
-            agent("n-rescue"),
+            agent("n-judge", reviewer=True, fake_script="verdict-fail"),
+            agent("n-work", fake_script="echo"),
+            agent("n-join", fake_script="echo"),
             node("n-out", "output"),
         ],
         [
-            belt("n-in", "n-agent"),
-            belt("n-agent", "n-out", "success"),
-            belt("n-agent", "n-rescue", "fail"),
-            belt("n-rescue", "n-out", "success"),
+            belt("n-in", "n-judge"),
+            belt("n-in", "n-work"),
+            belt("n-judge", "n-join", "success"),  # dead: the judge failed
+            belt("n-judge", "n-out", "fail"),
+            belt("n-work", "n-join"),
+            belt("n-join", "n-out"),
         ],
     )
     run = drive(orch, "rebuild the widget")
 
-    rescue = run.node_run("n-rescue")
-    assert rescue is not None
-    assert rescue.output_text, "the rescue agent produced nothing"
+    judge, work, join = (run.node_run(one) for one in ("n-judge", "n-work", "n-join"))
+    assert judge is not None and work is not None and join is not None
+    assert "the bounds check is still missing" in judge.output_text, (
+        "the judge did not produce the text this test filters for"
+    )
+
+    # `echo` says its whole prompt back, so what the join was handed is
+    # readable off its own output.
+    assert work.output_text in join.output_text, "the taken belt delivered nothing"
+    assert "the bounds check is still missing" not in join.output_text, (
+        "the join was handed the judge's report down a belt that was never taken"
+    )
+
+    # And the record says the same thing, which is the half a browser reads.
+    incoming = _incoming(run.id, "n-join")
+    assert [(part["source"], part["node_id"]) for part in incoming[0]["parts"]] == [
+        ("belt", "n-work")
+    ]
+    assert "\n\n".join(part["text"] for part in incoming[0]["parts"]) == join.output_text
+
+
+def test_the_record_of_what_arrived_names_only_the_belts_that_delivered(
+    test_store: Store, orch: Orchestrator, repo: Path
+) -> None:
+    """`run.incoming` attributes every delivery to the machine that sent it.
+
+    Including the input node, whose belt is an ordinary taken belt carrying
+    what the person submitted — the request reaches a worker *down a belt*,
+    and saying so is more precise than calling it "the request".
+    """
+    save(
+        test_store,
+        [node("n-in", "input"), agent("n-work", fake_script="echo"), node("n-out", "output")],
+        [belt("n-in", "n-work"), belt("n-work", "n-out")],
+    )
+    run = drive(orch, "rebuild the widget")
+
+    (work,) = _incoming(run.id, "n-work")
+    assert work["lap"] == 1
+    assert work["parts"] == [
+        {"source": "belt", "node_id": "n-in", "label": "n-in", "text": "rebuild the widget"}
+    ]
+
+    # An output node is fed too, and the label is the one on the canvas.
+    (out,) = _incoming(run.id, "n-out")
+    assert [(part["source"], part["label"]) for part in out["parts"]] == [("belt", "n-work")]
+
+    # The input node is not announced: a person fed it, not a belt, and
+    # `run.input` already says what they submitted.
+    assert _incoming(run.id, "n-in") == []
 
 
 # ---- what the run check says about ports -----------------------------------

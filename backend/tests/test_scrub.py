@@ -76,6 +76,38 @@ def test_an_event_model_round_trips_through_the_scrubber() -> None:
     assert ev.ToolEnd.model_validate(scrubbed).tool_use_id == "t1"
 
 
+def test_a_secret_inside_what_arrived_is_redacted_like_any_other_text() -> None:
+    """`run.incoming` carries a **copy** of a predecessor's output.
+
+    A new exit for text is a new way to leak one, so this asserts the new
+    envelope goes through the same single choke point rather than around it:
+    `scrub_value` recurses into the nested `parts` list, and the structure
+    survives so the pane still renders.
+    """
+    from factoria.runevents import IncomingPart, RunIncomingEvent
+
+    event = RunIncomingEvent(
+        run_id="run-1",
+        node_id="n-work",
+        lap=2,
+        parts=[
+            IncomingPart(
+                source="belt",
+                node_id="n-review",
+                label="Reviewer",
+                text="use token sk-ant-oat01-" + "Z" * 40 + " to retry",
+            )
+        ],
+    )
+    scrubbed = scrub_value(event.model_dump(mode="json"))
+
+    assert "sk-ant-" not in scrubbed["parts"][0]["text"]
+    assert "[redacted:" in scrubbed["parts"][0]["text"]
+    # Structure intact: the sender is still named and the event still parses.
+    assert scrubbed["parts"][0]["label"] == "Reviewer"
+    assert RunIncomingEvent.model_validate(scrubbed).lap == 2
+
+
 def test_ordinary_source_code_is_left_alone() -> None:
     """False positives here mangle an agent's own output in the run log, so the
     patterns are documented credential shapes, never an entropy heuristic."""

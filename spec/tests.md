@@ -85,6 +85,12 @@ The rule that keeps this tree honest. Specific pairings that must not rot:
 - **The refusals.** A run check that returns every reason at once is only
   useful if the reasons are right, so each precondition has a test that triggers
   exactly it.
+- **What a machine was handed.** The taken-belt filter is proved on a graph
+  where the dead belt's source **ran and routed elsewhere** — a source that
+  never ran has no text, so the claim is unfalsifiable against it, and the test
+  that used to stand here would have passed with the filter deleted. The
+  per-lap record is proved against a sender that runs twice, which is the only
+  shape that can catch a delivery being re-rendered with later words.
 
 The last two are the pattern worth copying: **test the property over the whole
 surface, not over the places you thought of.**

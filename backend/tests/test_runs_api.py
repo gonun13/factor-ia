@@ -224,6 +224,34 @@ def test_start_asks_for_the_request_then_runs_to_completion(runnable: TestClient
     assert runnable.get("/api/runs").json()[0]["id"] == run["id"]
 
 
+def test_what_arrived_replays_on_the_receiving_machine_only(runnable: TestClient) -> None:
+    """`run.incoming` is filed under the machine being **fed**.
+
+    The node log fetches one machine's slice, and the endpoint filters on the
+    top-level `node_id` alone — so the sender lives inside `parts` rather than
+    beside it. Put a sender id at the top and the event lands in the wrong
+    window, which is the whole reason the field is shaped this way.
+    """
+    run = start(runnable)
+    assert runnable.post(
+        f"/api/runs/{run['id']}/input", json={"text": "tidy the readme"}
+    ).status_code == 200
+    read_stream(runnable, f"/api/runs/{run['id']}/events")  # drain: the run is over
+
+    def arrived(node_id: str) -> list[dict]:
+        page = runnable.get(f"/api/runs/{run['id']}/nodes/{node_id}/events")
+        assert page.status_code == 200, page.text
+        return [one for one in page.json()["events"] if one["type"] == "run.incoming"]
+
+    (fed,) = arrived("n-agent")
+    assert fed["lap"] == 1
+    assert [part["label"] for part in fed["parts"]] == ["Request"]
+    assert fed["parts"][0]["text"] == "tidy the readme"
+
+    # The sender's own page does not carry it, and an input node has none.
+    assert arrived("n-in") == []
+
+
 def test_a_second_run_is_refused_with_the_id_holding_the_slot(runnable: TestClient) -> None:
     first = start(runnable)
     refused = runnable.post("/api/projects/demo/factories/main/runs")

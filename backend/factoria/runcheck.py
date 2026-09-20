@@ -959,17 +959,53 @@ def back_edges(nodes: list[Node], edges: list[Edge]) -> dict[str, list[str]]:
     the `run check` and `orchestrator._walk` read this one function so that what
     is refused here and what is reset there cannot drift apart.
 
-    Ancestry is computed over **all** edges, back-edges included. That is not an
-    oversight: the question "can the target reach the source" is about the graph
-    the operator drew, and a second back-edge inside the body is part of it.
+    **Two passes, because "is this a back-edge" and "what is its body" are
+    different questions and one graph cannot answer both.** Qualification asks
+    whether the target can reach the source, and it asks it over *all* edges —
+    the graph the operator drew, back-edges included. The body then asks which
+    nodes run again on this belt's lap, and it must be computed with every
+    *other* back-edge removed.
+
+    Computing the body over all edges was a real bug, and a quiet one. A loop
+    body is the nodes between a belt's target and its source going *forward*;
+    another loop's return conveyor is not a forward path. Walk one and the
+    traversal leaves this loop and climbs into the enclosing one, so the body
+    swallows nodes that belong to a loop this belt does not close — and
+    `_reset_loop` sends them round again. The shape that shows it is an
+    ordinary one: a reviewer inside an approval gate's loop. Descendants of the
+    reviewer's target reach the gate, the gate's reject belt points back at the
+    *first* worker, and so the reviewer's body picked up a worker above it that
+    the reviewer cannot see and never judged.
+
+    Removing only the *others* is what keeps the pair right. This belt's own
+    edge stays in the graph, so a body is still closed; every other back-edge
+    leaves, so a body cannot escape into a neighbouring loop. Nested loops then
+    nest: the inner body is a subset of the outer one, which is what
+    `_reset_loop` assumes when it re-deads the back-edges it finds inside a body.
+
+    **And one shape needs the others back.** Two judges can close a *single*
+    cycle between them — each one's path home running through the other's belt
+    — and neither is nested in the other. Removing the others severs the only
+    route from target back to source, and the body comes back empty: a loop the
+    cycle check has dropped and the walk would reset nothing for, so it could
+    never make progress. So a body that loses its own source is recomputed over
+    the whole graph. The reading is exact rather than a climbdown — a belt whose
+    loop does not survive its neighbours leaving **does not close a loop by
+    itself, it shares one**, and a shared cycle is the body of both belts on it.
     """
     by_id = {node.id: node for node in nodes}
-    successors: dict[str, list[str]] = {node.id: [] for node in nodes}
-    predecessors: dict[str, list[str]] = {node.id: [] for node in nodes}
-    for edge in edges:
-        if edge.source in successors and edge.target in predecessors:
-            successors[edge.source].append(edge.target)
-            predecessors[edge.target].append(edge.source)
+
+    def graphs(skip: frozenset[str]) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
+        """Successors and predecessors over every edge but `skip`."""
+        successors: dict[str, list[str]] = {node.id: [] for node in nodes}
+        predecessors: dict[str, list[str]] = {node.id: [] for node in nodes}
+        for edge in edges:
+            if edge.id in skip:
+                continue
+            if edge.source in successors and edge.target in predecessors:
+                successors[edge.source].append(edge.target)
+                predecessors[edge.target].append(edge.source)
+        return successors, predecessors
 
     def reach(start: str, graph: dict[str, list[str]]) -> set[str]:
         seen: set[str] = set()
@@ -982,20 +1018,39 @@ def back_edges(nodes: list[Node], edges: list[Edge]) -> dict[str, list[str]]:
             stack.extend(graph[current])
         return seen
 
-    found: dict[str, list[str]] = {}
-    for edge in edges:
+    def judges(edge: Edge) -> bool:
+        """A judge's `fail` belt — a reviewer's, or an approval gate's."""
         source = by_id.get(edge.source)
         if source is None or edge.target not in by_id:
-            continue
+            return False
         if edge_outcome(edge) != "fail" or not has_outcome_ports(source):
-            continue
+            return False
         if source.definition.type not in ("agent", "human"):
-            continue
+            return False
         if source.definition.type == "human" and node_kind(source) != "approval":
-            continue  # a scope node's fail is a crash, not a judgement
+            return False  # a scope node's fail is a crash, not a judgement
+        return True
+
+    # Pass one — qualification, over the whole graph. A belt closes a loop when
+    # its target can reach its source; one that points forward, to a human node
+    # that escalates say, closes nothing.
+    whole = graphs(frozenset())
+    closing = [
+        edge
+        for edge in edges
+        if judges(edge) and edge.source in (reach(edge.target, whole[0]) & reach(edge.source, whole[1]))
+    ]
+    closers = frozenset(edge.id for edge in closing)
+
+    # Pass two — the body of each, with the *other* back-edges taken out so the
+    # walk cannot ride a neighbouring loop's return conveyor out of this one.
+    found: dict[str, list[str]] = {}
+    for edge in closing:
+        successors, predecessors = graphs(closers - {edge.id})
         body = reach(edge.target, successors) & reach(edge.source, predecessors)
         if edge.source not in body:
-            continue  # points forward; closes nothing
+            # A cycle shared with another judge rather than nested inside one.
+            body = reach(edge.target, whole[0]) & reach(edge.source, whole[1])
         # File order, so a run log and a refusal list the body the same way twice.
         found[edge.id] = [node.id for node in nodes if node.id in body]
     return found

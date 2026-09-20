@@ -609,9 +609,9 @@ def nested_factory(test_store: Store, inner: list[str], outer: list[str]) -> Fac
                     └──────────────────fail────────────────────┘
 
     The shape a real factory reaches as soon as it has both a tester and a
-    reviewer, and the one `back_edges` documents when it says ancestry is
-    computed over all edges because "a second back-edge inside the body is part
-    of it".
+    reviewer, and the one that pins both halves of `back_edges`' two-pass rule:
+    the inner body must stay *inside* the inner loop, and resetting it must not
+    strand the outer back-edge it encloses.
     """
     return save(
         test_store,
@@ -659,18 +659,207 @@ def test_an_inner_loop_turning_does_not_strand_the_outer_loop_s_back_edge(
     assert statuses(run)["n-out"] == "succeeded", "the loop passed into a dead line"
     assert laps(run) == {
         "n-in": 0,
-        # **Two, and that is the documented rule rather than a surprise.** The
-        # inner body is `descendants(target) ∩ ancestors(source)` over *all*
-        # edges, and the outer reviewer's fail belt puts `n-plan` on a path from
-        # `n-work` back to `n-inner`. So it is on the inner loop's body and runs
-        # again with it. Asserted rather than glossed over: if the body rule
-        # ever narrows, this is the number that says so.
-        "n-plan": 2,
+        # **One. The inner reviewer never judged `n-plan`, so it cannot send it
+        # back.** The body is computed with the *other* back-edges removed, so
+        # the walk from `n-work` cannot ride the outer reviewer's reject belt up
+        # to `n-plan` and call it part of the inner loop. This number was `2`
+        # while it could, which is the bug the two-pass rule fixes: a lap of the
+        # cheap loop re-ran the expensive node above it.
+        "n-plan": 1,
         "n-work": 2,
         "n-inner": 2,
         "n-outer": 1,
         "n-out": 1,
     }
+
+
+def test_an_inner_loop_s_body_stops_at_the_loop_it_closes(
+    test_store: Store, orch: Orchestrator, repo: Path
+) -> None:
+    """**A loop body may not ride another loop's back-edge out of its own loop.**
+
+    The bodies, not the run — the unit the walk reads, asserted directly so a
+    regression names the cause rather than a lap count three files away.
+
+    A body is the nodes between a belt's target and its source going *forward*.
+    Another loop's return conveyor is not a forward path, and walking one leaves
+    this loop entirely: from `n-work` the traversal reaches `n-outer`, takes its
+    reject belt backwards to `n-plan`, and lands on a node the inner reviewer
+    never saw. `_reset_loop` then sends it round on a verdict passed on somebody
+    else's work.
+
+    The outer loop is the control. It **does** contain `n-plan` — the gate at the
+    bottom judged the whole line, so the whole line goes back — which is what
+    says the fix removed a wrong path rather than simply narrowing every body.
+    """
+    factory = nested_factory(test_store, inner=["verdict-pass"], outer=["verdict-pass"])
+    back = runcheck.back_edges(factory.nodes, factory.edges)
+
+    assert back["n-inner-fail->n-work"] == ["n-work", "n-inner"]
+    assert back["n-outer-fail->n-plan"] == [
+        "n-plan",
+        "n-work",
+        "n-inner",
+        "n-outer",
+    ]
+
+    # Both are still back-edges. Qualification is asked over the whole graph —
+    # only the *body* drops the others — so narrowing a body must never be a
+    # route to a belt quietly ceasing to close a loop at all.
+    assert set(back) == {"n-inner-fail->n-work", "n-outer-fail->n-plan"}
+
+
+def _incoming(run_id: str, node_id: str) -> list[dict]:
+    """Every `run.incoming` recorded for one machine, oldest lap first."""
+    return [
+        event
+        for event in RunLog(run_id).read(0)
+        if event.get("type") == "run.incoming" and event.get("node_id") == node_id
+    ]
+
+
+def test_a_lap_records_what_that_lap_was_handed_and_keeps_it(
+    test_store: Store, orch: Orchestrator, repo: Path
+) -> None:
+    """**The operator's complaint, asserted directly.**
+
+    A worker on lap 1 has not been judged yet, so the reviewer's back-edge has
+    delivered nothing and must appear nowhere in what lap 1 was handed. The
+    node log used to say otherwise — it reconstructed "what arrived" from the
+    *drawing*, so a machine whose reviewer had not run was still shown text
+    "from the reviewer, up the belt", and a back-edge's source almost always
+    runs after its target.
+
+    The second half is why the record carries the **text** and not just the
+    sender's id: `n-work` runs twice and its `output_text` is overwritten by
+    lap 2, so an id resolved at read time would re-render lap 1 with words
+    lap 1 never saw. Lap 1's record must still be lap 1's after the run ends.
+    """
+    loop_factory(test_store, "verdict-fail", "verdict-pass")
+    run = drive(orch, "rebuild the widget")
+    assert run.status == "succeeded", run.detail
+
+    lap_one, lap_two = _incoming(run.id, "n-work")
+    assert (lap_one["lap"], lap_two["lap"]) == (1, 2)
+
+    # Lap 1: the request, and nothing from the machine below.
+    assert [part["node_id"] for part in lap_one["parts"]] == ["n-in"]
+
+    # Lap 2: the request *and* the critique, which is what a lap of a loop is.
+    assert [part["node_id"] for part in lap_two["parts"]] == ["n-in", "n-review"]
+    assert "the bounds check is still missing" in lap_two["parts"][1]["text"]
+
+    # And lap 1 was not rewritten when `n-work` ran again.
+    work = run.node_run("n-work")
+    assert work is not None and work.lap == 2
+    assert "the bounds check is still missing" not in _joined_parts(lap_one)
+    assert _joined_parts(lap_one) != _joined_parts(lap_two)
+
+
+def _joined_parts(event: dict) -> str:
+    return "\n\n".join(part["text"] for part in event["parts"])
+
+
+def test_the_record_rejoins_to_exactly_what_the_machine_was_told(
+    test_store: Store, orch: Orchestrator, repo: Path
+) -> None:
+    """The identity that makes the pane a rendering rather than a second opinion.
+
+    `n-work` wears `echo`, so its output *is* its prompt — and a worker with no
+    skill and no memory is told exactly what its belts carried, nothing more.
+    """
+    save(
+        test_store,
+        [
+            node("n-in", "input"),
+            agent("n-work", fake_script="echo"),
+            reviewer("n-review", "verdict-pass"),
+            node("n-out", "output"),
+        ],
+        [
+            belt("n-in", "n-work"),
+            belt("n-work", "n-review"),
+            belt("n-review", "n-out", "success"),
+            belt("n-review", "n-work", "fail"),
+        ],
+    )
+    run = drive(orch, "rebuild the widget")
+
+    work = run.node_run("n-work")
+    assert work is not None
+    (recorded,) = _incoming(run.id, "n-work")
+    assert _joined_parts(recorded) == work.output_text
+
+
+def test_a_belt_is_never_in_both_sets_at_once(
+    test_store: Store, orch: Orchestrator, repo: Path
+) -> None:
+    """`_decide` is the only way a belt is settled, and it settles it into one set.
+
+    Asserted over the richest shape here — two judges, nested — because the
+    reason the rule needs one home is that a belt is decided **again on every
+    lap**, and one left in both reads as `taken` everywhere it is asked,
+    including by `_incoming_parts`. No reachable run is known that breaks it;
+    this is the guard that keeps it that way as shapes are added.
+    """
+    nested_factory(test_store, inner=["verdict-fail", "verdict-pass"], outer=["verdict-pass"])
+
+    async def go():
+        run = await orch.start("demo", "main")
+        state = orch._active[run.id]
+        await orch.submit_input(run.id, "rebuild the widget")
+        assert state.task is not None
+        await asyncio.wait_for(state.task, 15)
+        return state
+
+    state = asyncio.run(go())
+    overlap = state.taken & state.dead
+    assert not overlap, f"belts settled into both sets: {sorted(overlap)}"
+
+
+def test_two_judges_sharing_one_cycle_keep_the_whole_cycle_as_their_body(
+    test_store: Store, orch: Orchestrator, repo: Path
+) -> None:
+    """**Not nested — shared.** The shape that says why dropping the other
+    back-edges needs a way back.
+
+        n-in ──► n-d ──► n-a ──fail──► n-b ──► n-c ──fail──► n-d
+                          │                      │
+                          ╰─success─► n-out ◄────╯
+
+    Neither reviewer's loop encloses the other's. `n-a`'s path home runs
+    through `n-c`'s belt and `n-c`'s runs through `n-a`'s, so each qualifies
+    only because the other exists. Drop the others and the route from target
+    back to source is severed: the body comes back **empty**, the cycle check
+    has already dropped the belt, and the walk would reset nothing — a loop
+    that can never make progress, which is worse than the bug the two-pass
+    rule fixes.
+
+    So a body that loses its own source is asked again of the whole graph. Both
+    belts are on one cycle, and that cycle is the body of both.
+    """
+    nodes = [
+        node("n-in", "input"),
+        agent("n-d"),
+        reviewer("n-a"),
+        agent("n-b"),
+        reviewer("n-c"),
+        node("n-out", "output"),
+    ]
+    edges = [
+        belt("n-in", "n-d"),
+        belt("n-d", "n-a"),
+        belt("n-a", "n-b", "fail"),
+        belt("n-b", "n-c"),
+        belt("n-c", "n-d", "fail"),
+        belt("n-a", "n-out", "success"),
+        belt("n-c", "n-out", "success"),
+    ]
+    back = runcheck.back_edges(nodes, edges)
+
+    whole = ["n-d", "n-a", "n-b", "n-c"]
+    assert back["n-a-fail->n-b"] == whole
+    assert back["n-c-fail->n-d"] == whole
 
 
 # ---- a person as the judge -------------------------------------------------

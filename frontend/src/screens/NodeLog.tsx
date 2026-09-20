@@ -71,7 +71,6 @@ export function NodeLog({
   runId,
   node,
   nodeRun,
-  upstream,
   subscribe,
   onClose,
 }: {
@@ -80,14 +79,6 @@ export function NodeLog({
   /** The node's record on the run, for the two things the log cannot assemble
    * from its own events: the collected output text and the session id. */
   nodeRun: NodeRun | undefined;
-  /** What the belts brought in, as the machines above this one left it.
-   *
-   * An approximation, and labelled as one in the pane: incoming text is
-   * assembled at the moment a node starts (`orchestrator._incoming_text`) and
-   * never persisted as a field of its own, so the honest thing available is
-   * each predecessor's own output. For an input node and a human node the
-   * event itself carries the real thing, and that is preferred below. */
-  upstream: { label: string; text: string }[];
   subscribe: (tap: (event: RunEvent) => void) => () => void;
   onClose: () => void;
 }) {
@@ -215,7 +206,7 @@ export function NodeLog({
               {tab === "read" && <ReadPane node={node} events={events} />}
               {tab === "content" && <ContentPane node={node} runId={runId} />}
               {tab === "input" && (
-                <InputPane events={events} upstream={upstream} />
+                <InputPane events={events} laps={laps} />
               )}
               {tab === "output" && (
                 <OutputPane laps={laps} nodeRun={nodeRun} events={events} />
@@ -484,18 +475,48 @@ function stringify(value: unknown): string {
 
 /* ---- the other four panes ----------------------------------------------- */
 
-function InputPane({
-  events,
-  upstream,
-}: {
-  events: RunEvent[];
-  upstream: { label: string; text: string }[];
-}) {
+/* **What arrived is read, never inferred.** This pane used to be handed a list
+   built from the *drawing* — every incoming belt whose source had any text —
+   because what the belts carried was assembled when a node started and thrown
+   away. That is wrong for any belt that was not taken, and most visibly wrong
+   for a back-edge, whose source usually runs *after* its target: a worker was
+   shown a critique "from the reviewer, up the belt" on a lap where the
+   reviewer had not run. The server now records each delivery (`run.incoming`),
+   so the guess is gone rather than demoted to a fallback — a wrong answer
+   nobody can see is a guess is worse than no answer. */
+function InputPane({ events, laps }: { events: RunEvent[]; laps: Lap[] }) {
   const submitted = events.filter((event) => event.type === "run.input");
-  const gates = events.filter((event) => event.type === "run.decision.request");
+  const arrived = laps
+    .map((lap) => ({
+      index: lap.index,
+      events: lap.events.filter(
+        (event): event is Extract<RunEvent, { type: "run.incoming" }> =>
+          event.type === "run.incoming",
+      ),
+    }))
+    .filter((lap) => lap.events.length > 0);
 
-  if (submitted.length === 0 && gates.length === 0 && upstream.length === 0) {
-    return <p className="dim">Nothing arrived at this machine.</p>;
+  // Only when there is no record of its own: a gate's `run.decision.request`
+  // carries the same string, so drawing both would show it twice. A run from
+  // before the record still renders from it.
+  const gates = arrived.length
+    ? []
+    : events.filter((event) => event.type === "run.decision.request");
+
+  if (submitted.length === 0 && gates.length === 0 && arrived.length === 0) {
+    // Two different silences, and telling them apart is the point: a machine
+    // that ran must have been handed something, so an empty pane on one means
+    // the run finished before any of this was written down.
+    const ran = events.some(
+      (event) => event.type === "node.status" && event.status !== "pending",
+    );
+    return (
+      <p className="dim">
+        {ran
+          ? "This run finished before what arrived at a machine was written down."
+          : "Nothing arrived at this machine."}
+      </p>
+    );
   }
 
   return (
@@ -516,16 +537,27 @@ function InputPane({
           </article>
         ) : null,
       )}
-      {upstream.map((source) => (
-        <article key={source.label} className="log-block">
-          {/* Named as the predecessor's output rather than as "the input",
-              because that is what it honestly is: what the belts actually
-              carried is assembled when the node starts and is never written
-              down, so this is the nearest true statement. */}
-          <h4>from “{source.label}”, up the belt</h4>
-          <pre className="stream">{source.text}</pre>
-        </article>
-      ))}
+      {arrived.map((lap) =>
+        lap.events.map((event) =>
+          event.parts.length === 0 ? (
+            <article key={event.seq} className="log-block">
+              <h4>{arrived.length > 1 ? `lap ${lap.index} · ` : ""}nothing arrived</h4>
+            </article>
+          ) : (
+            event.parts.map((part, index) => (
+              <article key={`${event.seq}-${index}`} className="log-block">
+                <h4>
+                  {arrived.length > 1 ? `lap ${lap.index} · ` : ""}
+                  {part.source === "request"
+                    ? "the run’s request — no belt delivered"
+                    : `from “${part.label}”, up the belt`}
+                </h4>
+                <pre className="stream">{part.text}</pre>
+              </article>
+            ))
+          ),
+        ),
+      )}
     </div>
   );
 }

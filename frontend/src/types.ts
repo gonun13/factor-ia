@@ -778,6 +778,27 @@ export type RunEvent = { seq: number; run_id: string; timestamp: string } & (
       refused: string;
       detail: string;
     }
+  | {
+      type: "run.incoming";
+      /** **The machine being fed.** The senders are inside `parts`: the node
+       * log fetches one machine's slice and the endpoint filters on this field
+       * alone, so a sender id here would file the event in the wrong window. */
+      node_id: string;
+      lap: number;
+      /** What each belt carried, in the order the operator drew them. Empty
+       * means nothing arrived; **absent entirely** means the run predates the
+       * record, which is a different thing and reads differently in the pane. */
+      parts: {
+        /** `request` is the fallback: no belt delivered, so the node was
+         * handed the run's request text and is not attributed to a machine. */
+        source: "belt" | "request";
+        node_id: string;
+        /** The sender's label as it was when the run happened — the factory
+         * file is editable afterwards. */
+        label: string;
+        text: string;
+      }[];
+    }
   | { type: "run.cost"; node_id: string; delta_usd: number; total_usd: number }
 );
 
@@ -792,6 +813,7 @@ export const RUN_EVENT_TYPES: RunEvent["type"][] = [
   "agent",
   "run.artifact",
   "run.storage",
+  "run.incoming",
   "run.cost",
 ];
 

@@ -445,15 +445,28 @@ export function hasStoreEntry(definition: NodeDefinition): boolean {
  * and the load-time normalisation below — and `validation.ts` imports this file,
  * never the other way round.
  *
- * Typed on the two fields it reads, so it serves an API graph and a React Flow
+ * **`skip` is the other back-edges**, and leaving it out is only right for the
+ * qualification question. A body is the nodes between `target` and `source`
+ * going *forward*; another loop's return conveyor is not a forward path, so
+ * traversing one leaves this loop and climbs into the enclosing one — and the
+ * body collects nodes belonging to a loop this belt does not close. Asking
+ * "would this close a loop" reads the whole graph the operator drew and passes
+ * nothing; asking "what re-runs" passes every other closing belt.
+ * `runcheck.back_edges` splits the same question the same way, including the
+ * fallback its callers need: a body that comes back without its own source
+ * belongs to a cycle *shared* with another judge rather than nested inside one,
+ * and is asked again with nothing skipped.
+ *
+ * Typed on the fields it reads, so it serves an API graph and a React Flow
  * one without a conversion: `loadGraph` walks `GraphEdge`s and the canvas walks
  * `FlowEdge`s.
  */
 export function loopBody(
   nodes: readonly { id: string }[],
-  edges: readonly { source: string; target: string }[],
+  edges: readonly { id?: string; source: string; target: string }[],
   source: string,
   target: string,
+  skip?: ReadonlySet<string>,
 ): Set<string> {
   const forward = new Map<string, string[]>();
   const backward = new Map<string, string[]>();
@@ -462,6 +475,7 @@ export function loopBody(
     backward.set(node.id, []);
   }
   for (const edge of edges) {
+    if (skip && edge.id !== undefined && skip.has(edge.id)) continue;
     forward.get(edge.source)?.push(edge.target);
     backward.get(edge.target)?.push(edge.source);
   }

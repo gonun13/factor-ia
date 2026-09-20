@@ -401,6 +401,13 @@ export function reduceRunEvent(state: RunState, event: RunEvent): RunState {
     }
     case "agent":
       return { ...state, runtimes: reduceAgent(state.runtimes, event.node_id, event.event) };
+    // **`run.incoming` falls through here on purpose.** The canvas draws
+    // nothing from what a machine was handed; only the node log shows it, and
+    // it fetches its own machine's slice. Hoarding every delivery's text in
+    // run state would keep a copy of the whole transcript in memory for a
+    // reader that may never open — the same reason the node log is fetched
+    // rather than streamed (`decisions/0013`). It still reaches an open log
+    // window, which subscribes to the raw tap rather than to this reducer.
     default:
       return state;
   }

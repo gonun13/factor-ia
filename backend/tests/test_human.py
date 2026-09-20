@@ -163,6 +163,33 @@ def test_the_line_stops_at_a_human_node_and_says_what_it_is_asking(
     assert len(waited) == 2, "the run did not report stopping on the person"
 
 
+def test_a_gate_is_handed_the_same_thing_its_form_shows(
+    test_store: Store, orch: Orchestrator, repo: Path
+) -> None:
+    """One delivery, recorded once, however many events mention it.
+
+    A human node gets a `run.incoming` like every other machine, and
+    `run.decision.request` keeps its own `incoming` because the form renders
+    from it. They must agree: the node log prefers the itemised record and so
+    shows the text once, and that de-duplication is only safe because the two
+    are the same string.
+    """
+    save(test_store, *gate(rescue=False, prompt="Ship it?"))
+    run = drive(orch, RunDecision(node_id="n-gate", approved=True))
+
+    events = list(RunLog(run.id).read(0))
+    arrived = [
+        event
+        for event in events
+        if event["type"] == "run.incoming" and event["node_id"] == "n-gate"
+    ]
+    (asked,) = [event for event in events if event["type"] == "run.decision.request"]
+
+    assert len(arrived) == 1, "the gate's delivery was recorded more than once"
+    assert [part["node_id"] for part in arrived[0]["parts"]] == ["n-agent"]
+    assert "\n\n".join(part["text"] for part in arrived[0]["parts"]) == asked["incoming"]
+
+
 def test_the_prompt_is_frozen_at_run_creation_like_every_other_node_field(
     test_store: Store, orch: Orchestrator, repo: Path
 ) -> None:

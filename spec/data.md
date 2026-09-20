@@ -159,6 +159,14 @@ replayable back into the models that wrote it.
   flight — **in the browser**, from that stream. The server already holds every
   one of those bytes in `events.jsonl`, and a second server-side copy of a
   transcript would be a cache with no reader.
+- **`run.incoming` carries a copy of what each belt delivered**, and the
+  duplication is the point. A reader of the log must not need the run record,
+  which a watching tab holds as a snapshot from before the walk; an `output`,
+  `human` or storage predecessor streams nothing, so there is no transcript to
+  recover its text from; and `output_text` is overwritten when a loop sends a
+  machine round again, so sender ids resolved at read time would re-render lap
+  1 with lap 2's words. See
+  [`decisions/0020`](decisions/0020-what-arrived-is-recorded-with-the-text.md).
 
 > **Not built.** Run history is unbounded. No retention policy until it hurts.
 

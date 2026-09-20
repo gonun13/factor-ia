@@ -90,6 +90,13 @@ the one taken. Two consequences:
   worker that crashes has no belt to route down, and that is the whole cost of
   a worker having one way out.
 
+**A belt is `taken` or `dead`, never both.** It matters because a belt is
+decided *again on every lap* — one left in both sets reads as taken everywhere
+it is asked, including by whatever a node is handed. Both deciding sites, the
+one that settles a node and the one that rules out a node nothing reached, go
+through the single function that moves a belt out of one set as it puts it in
+the other.
+
 Per node the state machine is `pending → waiting_input → running →
 succeeded | failed`. There is **no `cancelled` node status**: a cancelled node
 did not succeed, and cancellation surfaces as `failed` with a `detail` naming
@@ -182,8 +189,27 @@ cancellation an explicit endpoint rather than an inferred one.
 
 ## What a node is told
 
-`_incoming_text` assembles a node's prompt from the belts arriving at it. Three
-things reach an agent beyond the request:
+`_incoming_parts` assembles what the belts bring a node, and it is the only
+thing that decides it:
+
+- **Only the belts that were taken deliver.** A predecessor may be `pending`
+  because its branch was never taken, or have routed its output down a belt
+  that does not end here. One contribution per sender, in factory-file order.
+  A belt that carried nothing is not a delivery.
+- **When no belt delivered, the node is handed the run's request** instead,
+  marked as the request rather than attributed to a machine that did not send
+  it.
+- **It is written down.** One `run.incoming` per machine per lap, carrying each
+  sender and the text it sent, so what arrived is a record rather than
+  something re-derived from the drawing. The parts rejoin to exactly what the
+  belts told the node. Two machines are not announced, and both are honest
+  omissions: an **input node**, which a person fed and which has `run.input`
+  instead, and a **replayed** node on a resumed walk, whose original event is
+  already in the same `events.jsonl`.
+- It is **the belts' contribution, not the whole prompt** — the three things
+  below are added after it.
+
+Three things reach an agent beyond the request:
 
 - **Its skill**, if it has one — the body of a `/workspace/_skills/<name>.md`
   document, appended to the prompt on every spawn.

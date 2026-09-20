@@ -638,14 +638,37 @@ export function runProblems(
   // nodes are *inside* a loop. That is worth the same reachability pass,
   // because the two things it tells you are both things to know before you
   // press Run rather than after.
-  for (const edge of edges) {
+  // **Two passes, like `runcheck.back_edges`.** Qualification reads the whole
+  // graph: a belt closes a loop when its target can reach its source. A body
+  // then reads the graph with every *other* closing belt removed, because a
+  // body is what runs again going forward and another loop's return conveyor
+  // is not a forward path — traverse one and the body escapes into the
+  // enclosing loop, and this block names an output node as inside a loop that
+  // does not contain it, closed by a judge that never sees it.
+  const closing = edges.filter((edge) => {
     const source = byId.get(edge.source);
     // **Asked, not re-derived.** This block open-coded the predicate until a
     // sign-off's reject belt was allowed to close a loop too, at which point a
     // third copy of the rule was a third thing to forget.
-    if (!source || !isLoopBelt(source.data.definition, edge.sourceHandle)) continue;
-    const body = loopBody(nodes, edges, edge.source, edge.target);
-    if (!body.has(edge.source)) continue; // runs forward; closes nothing
+    if (!source || !isLoopBelt(source.data.definition, edge.sourceHandle)) return false;
+    return loopBody(nodes, edges, edge.source, edge.target).has(edge.source);
+  });
+  const closers = new Set(closing.map((edge) => edge.id));
+
+  for (const edge of closing) {
+    const source = byId.get(edge.source)!;
+    const others = new Set(closers);
+    others.delete(edge.id);
+    let body = loopBody(nodes, edges, edge.source, edge.target, others);
+    // **A cycle shared with another judge rather than nested inside one.** Two
+    // judges can close a single cycle between them, each one's path home
+    // running through the other's belt. Removing the others severs it, and the
+    // body comes back without its own source — so it is asked again of the
+    // whole graph, which is the cycle both belts are on. Mirrors the same
+    // fallback in `runcheck.back_edges`.
+    if (!body.has(edge.source)) {
+      body = loopBody(nodes, edges, edge.source, edge.target);
+    }
 
     for (const node of nodes) {
       if (!body.has(node.id)) continue;

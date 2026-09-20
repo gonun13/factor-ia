@@ -103,16 +103,18 @@ try {
     1,
   );
   // The same invariant one category over, where it costs the most: filing the
-  // palette must stay a filing decision, never a kind picker. Three commits are
-  // three things you choose between before placing anything — a single "Output"
-  // configured afterwards is how the merging one gets picked by accident.
+  // palette must stay a filing decision, never a kind picker. Each end of the
+  // line is a thing you choose between before placing anything — a single
+  // "Output" configured afterwards is how the merging one gets picked by
+  // accident. `Discard` joined them and is listed for the same reason: what a
+  // line does when it ends is not a setting.
   const outputMenu = await openPalette(page, "output");
   check(
-    "the commit kinds are three separate entries",
+    "each way of ending a line is its own palette entry",
     await outputMenu
       .locator(".palette-item .label")
       .evaluateAll((els) => els.map((el) => el.textContent).sort()),
-    ["Commit", "Commit & merge", "Commit & push"],
+    ["Commit", "Commit & merge", "Commit & push", "Discard"],
   );
 
   // ---- the ports, which are what make a loop drawable ---------------------
@@ -237,6 +239,43 @@ try {
     "the finished worker is green, not still showing a lap in flight",
     await page.locator(".node.kind-worker").getAttribute("data-status"),
     "succeeded",
+  );
+
+  // ---- what the worker was actually handed, per lap -----------------------
+  //
+  // **The bug this fixture is shaped like.** The Input pane used to build its
+  // list from the drawing — every incoming belt whose source had any text — so
+  // a worker was shown a critique "from Review, up the belt" on lap 1, before
+  // the reviewer had run at all. A back-edge's source almost always runs after
+  // its target, which is what made it so visible here.
+  //
+  // Asserted on the headings rather than the prose: they name the sender and
+  // the lap, which is the whole claim. Lap 1 has the request and nothing else.
+  await page.locator(".timeline-card", { hasText: "Build it twice" }).first().click();
+  await page.waitForSelector(".node-log");
+  await page.locator(".node-log-tabs button", { hasText: "Input" }).click();
+  // Lowercased: the pane uppercases its headings in CSS, and `innerText`
+  // reports what is rendered. The claim is the wording, not the styling.
+  const arrived = (await page.locator(".node-log-body h4").allInnerTexts()).map((one) =>
+    one.toLowerCase(),
+  );
+  check("what arrived is recorded per lap, named by sender", arrived, [
+    "lap 1 · from “request”, up the belt",
+    "lap 2 · from “request”, up the belt",
+    "lap 2 · from “review”, up the belt",
+  ]);
+
+  const handed = (await page.locator(".node-log-body").innerText()).toLowerCase();
+  const secondLap = handed.indexOf("lap 2");
+  check(
+    "the reviewer's words reach lap 2",
+    handed.slice(secondLap).includes("the bounds check is still missing"),
+    true,
+  );
+  check(
+    "…and reached no lap before the reviewer had spoken",
+    handed.slice(0, secondLap).includes("the bounds check is still missing"),
+    false,
   );
 } finally {
   await browser.close();
