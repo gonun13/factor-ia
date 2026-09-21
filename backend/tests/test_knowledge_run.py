@@ -986,3 +986,94 @@ def test_a_principles_base_never_reaches_a_filing_pass(
     assert skills.SYSTEM_SKILLS == {
         f"knowledge-{one}" for one in ("general", "codebase", "project")
     }
+
+
+# ---- a stream is not a status ----------------------------------------------
+#
+# The filing pass is a spawn, and it addresses its stream to the **shelf** so
+# the shelf's own log can explain what a writer did. That leaves a base as the
+# only node in a factory with agent events on it and no status behind them —
+# which is a shape a client can get wrong, and did: routing those events
+# through the canvas's runtime map invented a `pending` status for a base, on
+# the node that had done the most work, and put a card for it on the timeline.
+#
+# These pin the two halves of the contract the browser reads: the events do
+# arrive on the shelf, and **nothing will ever arrive to give it a status**.
+
+
+def _statuses_for(run_id: str, node_id: str) -> list[dict]:
+    return [
+        record
+        for record in RunLog(run_id).read(0)
+        if record.get("type") == "node.status" and record.get("node_id") == node_id
+    ]
+
+
+def _agent_events(run_id: str, node_id: str) -> list[dict]:
+    return [
+        record
+        for record in RunLog(run_id).read(0)
+        if record.get("type") == "agent" and record.get("node_id") == node_id
+    ]
+
+
+def test_a_filing_pass_streams_at_the_shelf_and_never_gives_it_a_status(
+    library: Path, test_store: Store, orch: Orchestrator, repo: Path
+) -> None:
+    """**The invariant a client has to be able to rely on.**
+
+    A base has no `NodeRun`, so `_set_node` returns early for it and no
+    `node.status` is emitted — not even the `pending` declaration every machine
+    gets before the walk starts. A reader that creates state for a node on any
+    *other* envelope therefore creates state nothing can ever correct, and the
+    node sits at whatever that reader's default happened to be for the rest of
+    the run.
+
+    Both halves are asserted together because it is the combination that is
+    load-bearing: the stream on its own is fine, and the silence on its own is
+    fine.
+    """
+    line(
+        test_store,
+        writes("n-do", "n-base"),
+        extra_nodes=[_filing("n-base", "acme-api", "knowledge-file")],
+    )
+    run = drive(orch)
+
+    assert statuses(run)["n-do"] == "succeeded", run.node_run("n-do").detail
+    # The pass ran and it was addressed to the shelf.
+    assert _agent_events(run.id, "n-base"), "the filing pass said nothing at the base"
+    # And nothing, on any path, gave the base a status.
+    assert _statuses_for(run.id, "n-base") == []
+    # The base is not in the run's own table either — the same fact, said where
+    # a resumed or reloaded client reads it.
+    assert "n-base" not in statuses(run)
+
+
+def test_a_machine_says_it_is_filing_while_the_pass_runs(
+    library: Path, test_store: Store, orch: Orchestrator, repo: Path
+) -> None:
+    """The pass runs *inside* the contributing machine's `running` window, and
+    it can take `FILING_TIMEOUT_S`. The machine has already streamed its last
+    word by then and the shelf has no status to show, so without this the whole
+    line reads as stopped while it is working hardest.
+
+    Said as a detail on the machine rather than as a status on the base: the
+    base is a shelf, and the run genuinely is still on this node.
+    """
+    line(
+        test_store,
+        writes("n-do", "n-base"),
+        extra_nodes=[_filing("n-base", "acme-api", "knowledge-file")],
+    )
+    run = drive(orch)
+
+    said = _statuses_for(run.id, "n-do")
+    filing = [record for record in said if record.get("detail") == "filing into acme-api"]
+    assert len(filing) == 1, said
+    assert filing[0]["status"] == "running"
+    # Before the outcome, and gone by it: a machine that finished still saying
+    # it was filing would be the same lie one step later.
+    assert said[-1]["status"] == "succeeded"
+    assert said[-1]["detail"] != "filing into acme-api"
+    assert run.node_run("n-do").detail != "filing into acme-api"

@@ -425,7 +425,15 @@ seam.** `RunConfig.permission_mode` is one word every provider is handed, and
 `acceptEdits` and `plan` pass; `bypassPermissions`, `dontAsk`, `auto` and
 `manual` are refused unless the container was started with
 `FACTOR_IA_DANGEROUS_PERMISSIONS=1`; anything else is refused by name rather
-than handed to a CLI to reject. It lives on the seam rather than in an adapter
+than handed to a CLI to reject.
+
+**The opt-in also chooses the default a node that names nothing is given**
+(`adapter.default_permission_mode`): `auto` with it, `acceptEdits` without it.
+So on a container started with the flag, every agent node runs its commands
+without asking unless it names a quieter mode itself, and every run is recorded
+`dangerous` — see
+[`decisions/0022`](decisions/0022-auto-is-the-default-inside-the-container.md),
+which amends the blast-radius requirement in [`PROJECT.md`](PROJECT.md). It lives on the seam rather than in an adapter
 because a gate copied per provider is how two gates drift into one hole — each
 adapter maps the word it is given onto its own CLI (`--permission-mode`;
 `--force` or `--mode plan`) and none of them re-decides it. This is the
@@ -443,6 +451,16 @@ relies on, stated rather than asked for and silently not received.
 The port is published on loopback only — this is remote code execution as a
 service, and LAN access would need auth. The container owns its agent config in
 the `agent-home` named volume; the operator's `~/.claude` is never mounted.
+
+**Which is why the dangerous-mode opt-in is an operator's file and not a
+shipped default.** `docker-compose.yml` forwards
+`FACTOR_IA_DANGEROUS_PERMISSIONS` by bare name and sets no value, so a fresh
+clone runs with the gate closed and turning it on is an edit to a gitignored
+`.env`. What the gate protects is this container rather than the run's
+worktree: an agent running without asking can read
+`/home/factoria/.claude/.credentials.json` and write anywhere under the
+`/workspace` bind mount, including the operator's own checkouts — neither of
+which is discarded when a worktree is.
 
 
 ---

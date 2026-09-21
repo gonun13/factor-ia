@@ -371,6 +371,56 @@ try {
     0,
   );
 
+  // **What it says instead.** A base that was written to says `done` where a
+  // machine says its status — `filing` while the pass is running, which this
+  // check is too late to see. It is not a `NodeStatus` and it must not become
+  // one: the check above is what holds the pip dark.
+  check(
+    "…but it does say its filing finished",
+    // Lowercased: the word is upper-cased in CSS, and `innerText` returns what
+    // is rendered — the same trap the system-badge check above falls into.
+    (
+      await page
+        .locator('.react-flow__node[data-id="n-base"] .status-word.is-activity')
+        .innerText()
+    ).toLowerCase(),
+    "done",
+  );
+  check(
+    "…and the base nothing was filed into says nothing at all",
+    await page
+      .locator('.react-flow__node[data-id="n-rules"] .status-word.is-activity')
+      .count(),
+    0,
+  );
+
+  // **The two checks above are about a stream that is addressed to the base.**
+  // Filing is a spawn — it wears the base's own skill and streams its events
+  // at the shelf — so a base is the one node in a factory with agent events on
+  // it and no status behind them. A client that creates state on any envelope
+  // it is handed gives a base a status nothing will ever correct, which is a
+  // pip and a timeline card for a node the walk never reached.
+  //
+  // Which is why this pair has to hold *with* the transcript still readable:
+  // the guard is about where those events are reduced, never about dropping
+  // them. If the base's log went empty, the two checks above would pass for
+  // the wrong reason and nobody would be able to see what a writer did.
+  await page.locator('.react-flow__node[data-id="n-base"] .node-log-open').click();
+  await page.waitForSelector(".node-log");
+  await page.locator(".node-log-tabs button", { hasText: "Run events" }).click();
+  const shelfLog = await page.locator(".node-log-body").innerText();
+  check(
+    "…while the filing pass is still readable in the base's own log",
+    /agent|session|text/i.test(shelfLog),
+    true,
+  );
+  check(
+    "…which still shows no status for the base, having none",
+    await page.locator(".node-log .status-word").count(),
+    0,
+  );
+  await page.locator(".node-log .node-log-close").click();
+
   // **The claim the lifetime rests on.** A memory is discarded when its run
   // succeeds; nothing in a base is ever cleaned up. Both bases are still here,
   // with everything that was in them.

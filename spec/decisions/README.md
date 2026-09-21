@@ -47,3 +47,4 @@ original keeps its number.
 | [0019](0019-a-person-may-close-a-loop.md) | A person may close a loop, and is their own cap | supersedes part of `0009` |
 | [0020](0020-what-arrived-is-recorded-with-the-text.md) | What arrived is recorded, with the text | stands |
 | [0021](0021-the-machine-contract.md) | The machine contract, stated at spawn time | stands |
+| [0022](0022-auto-is-the-default-inside-the-container.md) | `auto` is the default inside the container | amends `PROJECT.md` blast radius |

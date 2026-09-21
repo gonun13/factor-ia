@@ -80,6 +80,28 @@ export type RunState = {
    * here puts a card on the timeline. */
   storage: Record<string, RunStorage[]>;
   /**
+   * Whether each knowledge base's filing pass is still running, by node id.
+   *
+   * **This is where a shelf's agent events go, and the reason it is not
+   * `runtimes`.** A base's filing pass is a real spawn — it wears a system
+   * skill, it calls tools, it can take three minutes — and it addresses its
+   * stream to the shelf so the shelf's own log can explain what a writer did
+   * (`orchestrator._filing_pass`). But the shelf is not a station: the walk
+   * never reaches it, it has no `NodeRun`, and **no `node.status` will ever
+   * arrive to correct a status invented for it**. Routing those events through
+   * `withNode` is precisely what used to leave a base reading `pending`
+   * forever, with a card on the timeline, on the node that had done the most
+   * work.
+   *
+   * **A boolean, because three states is all a shelf has to say**: absent
+   * (nothing was ever filed here), `true` (filing), `false` (done). The pass's
+   * words and the tools it called are already in `events.jsonl` and the node
+   * log opens them; a second copy in run state for a surface that does not
+   * draw it is how `runtime.detail` came to be computed on every status change
+   * and rendered nowhere.
+   */
+  filing: Record<string, boolean>;
+  /**
    * What each memory node has filed, by node id — the **latest** state of the
    * document, not one entry per write.
    *
@@ -123,6 +145,7 @@ const EMPTY: RunState = {
   costUsd: 0,
   artifacts: [],
   storage: {},
+  filing: {},
   memories: {},
   decisions: {},
   questions: {},
@@ -178,7 +201,21 @@ export function reduceRunEvent(state: RunState, event: RunEvent): RunState {
         runtimes[nodeId] =
           runtime.status === "pending" ? { ...runtime, detail: "not reached" } : runtime;
       }
-      return { ...state, status: event.status, detail: event.detail, runtimes, decisions: {} };
+      // Nothing is still filing once the server has stopped talking. Said
+      // here as well as on the storage event, because a pass whose entry could
+      // not be written emits neither an `exit` nor a `write` — the node fails
+      // with the reason, and a shelf left saying "filing" would be the one
+      // surface still claiming work is happening.
+      const filing: Record<string, boolean> = {};
+      for (const nodeId of Object.keys(state.filing)) filing[nodeId] = false;
+      return {
+        ...state,
+        status: event.status,
+        detail: event.detail,
+        runtimes,
+        filing,
+        decisions: {},
+      };
     }
     case "node.status": {
       // A node that moved off `waiting_input` is no longer asking anything —
@@ -397,10 +434,50 @@ export function reduceRunEvent(state: RunState, event: RunEvent): RunState {
           ...state.storage,
           [event.node_id]: [...(state.storage[event.node_id] ?? []), entry],
         },
+        // **The pass is over when its result lands.** A `write` is the entry
+        // reaching the shelf — by the pass or, when it wrote nothing, by the
+        // wire appending verbatim behind it — and an `offer` is the wire
+        // saying there was nothing to file, which is the one path where no
+        // pass ran at all. Either way nothing more is coming. A `read` is not
+        // an ending: the machine's own consultations are reported here too,
+        // and one of those arriving mid-pass would stop the line early.
+        //
+        // Belt to `exit`'s braces in `reduceFiling`: a pass cut short by the
+        // 180s timeout never delivers its `exit`, and this is what closes it.
+        filing:
+          event.op !== "read" && state.filing[event.node_id]
+            ? { ...state.filing, [event.node_id]: false }
+            : state.filing,
       };
     }
     case "agent":
-      return { ...state, runtimes: reduceAgent(state.runtimes, event.node_id, event.event) };
+      // **A stream is not a status**, and this is the one place that could
+      // forget it. Every other envelope that can name a shelf already checks
+      // (`run.artifact` below, `run.storage` above, which never touches
+      // `runtimes` at all) — this one did not, and `withNode` invents a
+      // `pending` runtime for any node it is handed. The filing pass addresses
+      // its stream to the base it is filing into, so that one omission was
+      // enough to light a pip, print a status word and put a card on the
+      // timeline for a node the walk never reaches.
+      //
+      // A machine always has a runtime before its first agent event — the
+      // `running` transition is emitted by `_run_node` before the spawn — so
+      // "has no runtime" is the same question as "is not a machine", asked
+      // without the reducer needing a copy of the graph.
+      return state.runtimes[event.node_id]
+        ? { ...state, runtimes: reduceAgent(state.runtimes, event.node_id, event.event) }
+        : {
+            ...state,
+            // A shelf's stream says one thing: a pass is running in there. It
+            // stops saying it on `exit` — every adapter script ends with
+            // exactly one, on every path (`agent/fake.py`) — and, for a pass
+            // the 180s timeout cut off before its `exit`, on the storage row
+            // that lands behind it.
+            filing: {
+              ...state.filing,
+              [event.node_id]: event.event.type !== "exit",
+            },
+          };
     // **`run.incoming` falls through here on purpose.** The canvas draws
     // nothing from what a machine was handed; only the node log shows it, and
     // it fetches its own machine's slice. Hoarding every delivery's text in
@@ -413,8 +490,18 @@ export function reduceRunEvent(state: RunState, event: RunEvent): RunState {
   }
 }
 
+/**
+ * One adapter event applied to the machine it came from.
+ *
+ * **Only ever called for a node that already has a runtime** — the `agent`
+ * case above decides that, and it is the whole of the shelf guard. There used
+ * to be a `?? { status: "running" }` here, which read as a second answer to
+ * the question `withNode` answers with `pending`: two defaults for one
+ * question, neither of them reached on any path a machine takes, and the one
+ * that actually got stored was the other one.
+ */
 function reduceAgent(runtimes: Runtimes, nodeId: string, event: AgentEvent): Runtimes {
-  const current = runtimes[nodeId] ?? { status: "running" as const };
+  const current = runtimes[nodeId];
   switch (event.type) {
     case "text.delta":
       return withNode(runtimes, nodeId, { text: (current.text ?? "") + event.text });

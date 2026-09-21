@@ -44,6 +44,18 @@ services:
       - GIT_COMMITTER_NAME
       - GIT_COMMITTER_EMAIL
       - TZ=${TZ:-UTC}
+      # The server-side opt-in a `bypassPermissions`-shaped mode is gated
+      # behind (`config.dangerous_permissions_allowed`). Forwarded by bare
+      # name, never `=1` here: unset is false (`config._flag`), so a fresh
+      # clone still ships the gate closed and an operator turns it on in their
+      # own `.env` — which is gitignored and does not travel with the repo.
+      #
+      # On, it lets a node name `auto` / `bypassPermissions` in its config and
+      # so run commands without asking. That is the whole of what stands
+      # between an agent and this container: `/home/factoria/.credentials.json`
+      # and the `/workspace` bind mount are both inside the blast radius, and
+      # neither is discarded with the run's worktree.
+      - FACTOR_IA_DANGEROUS_PERMISSIONS
     healthcheck:
       test:
         - CMD

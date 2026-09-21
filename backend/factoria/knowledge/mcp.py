@@ -116,11 +116,13 @@ def qualified(tool: str) -> str:
 def allowed_tool_names(*, writable: bool) -> list[str]:
     """The tools a spawn may call, in the CLI's spelling.
 
-    `DEFAULT_PERMISSION_MODE` is `acceptEdits`, and under it a tool that *asks*
-    is denied because nobody is home to answer (`agent/claude.py`). So the read
-    tools have to be named on `--allowedTools` or every call fails as an
-    unanswered permission prompt — an MCP tool is not a file edit and is not
-    covered by `acceptEdits`.
+    Named on `--allowedTools` because the default mode may be `acceptEdits`
+    (`default_permission_mode`, when the container carries no dangerous-
+    permissions opt-in), and under it a tool that *asks* is denied because
+    nobody is home to answer (`agent/claude.py`) — an MCP tool is not a file
+    edit, so `acceptEdits` does not cover it. Under `auto` the allowlist is
+    redundant rather than wrong, and it is still passed: the grant must not
+    depend on which default the container happens to be running.
     """
     names = [qualified(tool) for tool in READ_TOOLS]
     if writable:

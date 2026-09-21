@@ -313,6 +313,15 @@ generalizes: it already drives `claude`, `cursor`, `codex`, `copilot` and
   worktree on a dedicated branch. No force-push, no writes to the default branch,
   no deletes outside the worktree.
 
+  **Amended twice by the implementation.**
+  [`decisions/0010`](decisions/0010-commit-merge-amends-blast-radius.md) narrows
+  "no writes to the default branch" to an exception the operator draws.
+  [`decisions/0022`](decisions/0022-auto-is-the-default-inside-the-container.md)
+  replaces "only inside a git worktree" on a container started with
+  `FACTOR_IA_DANGEROUS_PERMISSIONS=1`: this is automation software, agents run
+  unattended, and the boundary that holds there is the container rather than the
+  worktree. Without that opt-in this clause stands as written.
+
   > **Amendment — the `commit-merge` output node.** "No writes to the default
   > branch" now has one exception, and it is drawn rather than configured: an
   > operator who puts a *commit & merge* node on the line has asked for the base

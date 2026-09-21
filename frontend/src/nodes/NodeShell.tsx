@@ -102,6 +102,7 @@ export function NodeShell({
   kind,
   data,
   report,
+  activity,
   note,
   children,
 }: {
@@ -114,6 +115,16 @@ export function NodeShell({
       was filed, what was written, what was turned away. This says there is one
       to open, and only a memory or a base ever passes it. */
   report?: boolean;
+  /** **A shelf's own word, where a machine's status word goes.**
+      `filing` while its writer is running, `done` once it has finished.
+
+      Storage still has no `NodeStatus` and no pip: the walk never reaches it,
+      nothing green or red is being claimed, and the word comes from the shelf's
+      own work rather than from the run. It is here rather than as a line in the
+      body because the body is what a node *is* — its base, its size — and this
+      is what it is *doing*, which is the head's question everywhere else on the
+      canvas. Only a knowledge node passes it. */
+  activity?: string;
   /** What this machine is for, shown under the pointer after a second's
       dwell (`NodeNote`) rather than inside the chassis. */
   note?: ReactNode;
@@ -287,6 +298,13 @@ export function NodeShell({
         </span>
         <span className="eyebrow">{name}</span>
         {live && <span className="status-word">{status.replace("_", " ")}</span>}
+        {/* A shelf's word sits in the same slot and is styled apart: it is not
+            a `NodeStatus`, and nothing here is going green. */}
+        {activity && (
+          <span className="status-word is-activity" data-activity={activity}>
+            {activity}
+          </span>
+        )}
         {/* Only above one. Every node that runs once is on lap 1, and a chip
             saying so on every node in a factory with no loop in it would be
             noise that means nothing. */}

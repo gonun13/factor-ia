@@ -423,3 +423,47 @@ def test_resolving_an_unknown_request_is_a_no_op(stub, workspace) -> None:
         "go", str(workspace), RunConfig(permission_prompt_tool="stdio")
     )
     asyncio.run(run.resolve_permission("never-asked", allow=False, message="x"))
+
+
+# ---- the default the opt-in chooses (decisions/0022) -----------------------
+
+
+def test_the_opt_in_makes_auto_the_default_for_a_node_that_names_nothing() -> None:
+    """`decisions/0022`: this is automation software and the container is the
+    boundary, so inside one started with the flag a node runs its own commands.
+    """
+    from factoria import config
+    from factoria.agent.adapter import default_permission_mode, resolve_permission_mode
+
+    assert default_permission_mode(dangerous_allowed=True) == "auto"
+    assert resolve_permission_mode(None, dangerous_allowed=True) == ("auto", True)
+
+    argv = build_argv("s-1", RunConfig())
+    # `build_argv` reads the gate from the environment, so assert on the pure
+    # resolution above and on the flag only when the gate is actually open.
+    if config.dangerous_permissions_allowed():
+        assert argv[argv.index("--permission-mode") + 1] == "auto"
+
+
+def test_without_the_opt_in_the_default_is_unchanged() -> None:
+    """A fresh clone behaves exactly as it did before `0022` — the gate closed
+    is the whole of what keeps the old fail-closed policy in force."""
+    from factoria.agent.adapter import default_permission_mode, resolve_permission_mode
+
+    assert default_permission_mode(dangerous_allowed=False) == "acceptEdits"
+    assert resolve_permission_mode(None, dangerous_allowed=False) == ("acceptEdits", False)
+
+
+def test_an_unknown_mode_names_what_this_container_would_accept() -> None:
+    """Failures are sentences: with the gate open the four dangerous modes are
+    available, and a message that omits them sends the reader hunting a typo
+    that is not there."""
+    from factoria.agent.adapter import PermissionDenied, resolve_permission_mode
+
+    with pytest.raises(PermissionDenied) as closed:
+        resolve_permission_mode("nonsense", dangerous_allowed=False)
+    assert "auto" not in str(closed.value)
+
+    with pytest.raises(PermissionDenied) as opened:
+        resolve_permission_mode("nonsense", dangerous_allowed=True)
+    assert "auto" in str(opened.value)

@@ -27,15 +27,15 @@ emits `permission.request` and nothing can answer it, because no
 file is a node that hangs until the watchdog kills it. An unattended factory
 wants a *policy*, not a prompt with no human behind it, so:
 
-- **`acceptEdits` is the default mode** (`DEFAULT_PERMISSION_MODE`). File edits
-  are pre-approved because the blast radius a prompt would be protecting is
-  already bounded by construction: the cwd is a throwaway worktree on the run's
-  own branch, cut from a repo the run-check proved was clean. Approving an edit
-  there is approving a change to a branch nobody has yet seen.
-- **Commands still ask, and an ask with nobody home is a denial, not a hang.**
-  That is the fail-closed half, and it is why the mode is not `dontAsk` or
-  `auto`: `Bash` is the tool that can leave the worktree, so it is the one that
-  must not be pre-approved while v1 has no dind sidecar.
+- **The opt-in chooses the default** (`default_permission_mode`, on the seam).
+  With `FACTOR_IA_DANGEROUS_PERMISSIONS=1` it is `auto`: this is automation
+  software, the container is the boundary, and an agent inside it runs its own
+  commands rather than having each one denied by a prompt with nobody behind
+  it (`decisions/0022`).
+- **Without the opt-in it is `acceptEdits`**, unchanged: file edits
+  pre-approved, commands asking and an ask with nobody home denied rather than
+  hung. A container with the gate closed behaves exactly as it did before that
+  record.
 - **A server-side deny list is passed on every spawn** (`DENIED_TOOLS`), naming
   the git subcommands that reach outside the branch — `push`, `remote`,
   `reset`, `checkout`, `branch`, `clean` — plus `sudo`. Defence in depth rather
@@ -101,6 +101,8 @@ from .normalize import StreamNormalizer
 # has always published them under, because `runcheck` and the orchestrator both
 # import them from here.
 DEFAULT_PERMISSION_MODE = adapter_mod.DEFAULT_PERMISSION_MODE
+DEFAULT_DANGEROUS_PERMISSION_MODE = adapter_mod.DEFAULT_DANGEROUS_PERMISSION_MODE
+default_permission_mode = adapter_mod.default_permission_mode
 SAFE_PERMISSION_MODES = adapter_mod.SAFE_PERMISSION_MODES
 DANGEROUS_PERMISSION_MODES = adapter_mod.DANGEROUS_PERMISSION_MODES
 PermissionDenied = adapter_mod.PermissionDenied

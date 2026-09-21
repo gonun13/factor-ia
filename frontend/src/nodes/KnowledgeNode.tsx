@@ -47,7 +47,7 @@ function size(bytes: number): string {
  * a station the walk stopped at, and this is a shelf. The pip stays dark.
  */
 export function KnowledgeNode({ id, data }: NodeProps<FlowNode>) {
-  const { knowledgeBases, patch, storage } = useCanvas();
+  const { knowledgeBases, patch, storage, filing } = useCanvas();
   /** What this run did to this base.
    *
    * Off the storage log rather than off a runtime, which this node has not got
@@ -55,6 +55,18 @@ export function KnowledgeNode({ id, data }: NodeProps<FlowNode>) {
    * the *run*: everything else — the base, its type, whether anything may
    * write — is true whether or not a run is happening. */
   const touched = storage[id] ?? [];
+  /** Whether a filing pass is running here — `undefined` if none ever was.
+   *
+   * **The one live thing on a shelf, and still not a status.** When a machine
+   * wired in here finishes, its answer is filed by a pass that wears this
+   * base's own skill and decides where the entry belongs — a real spawn, with
+   * its own tools and its own three-minute budget
+   * (`orchestrator._filing_pass`). It runs inside the *contributing* machine's
+   * `running` window, so without this the whole line looks stopped: the
+   * machine has said everything it is going to say, and the thing actually
+   * working has nowhere to show it. */
+  const filingNow = filing[id];
+  const everFiled = filingNow !== undefined;
   const wrote = touched.filter((entry) => entry.op === "write");
   const refused = wrote.filter((entry) => entry.refused).length;
   const selected = knowledgeBase(data.definition);
@@ -70,7 +82,11 @@ export function KnowledgeNode({ id, data }: NodeProps<FlowNode>) {
       // A base anything reached for has a story worth opening — what was
       // written, and by whom, but also who merely consulted it, which is the
       // half that used to live nowhere but the agent's own transcript.
-      report={touched.length > 0}
+      report={touched.length > 0 || everFiled}
+      // `filing` while the pass is running, `done` once it has finished — the
+      // whole of what a shelf has to say about itself while a run is on. Not a
+      // status: the pip stays dark and the walk never came here.
+      activity={everFiled ? (filingNow ? "filing" : "done") : undefined}
       note={
         <>
           {/* The type, in words, because it is the one thing about a base

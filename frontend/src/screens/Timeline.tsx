@@ -22,7 +22,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Panel } from "@xyflow/react";
-import type { FlowNode } from "../graph";
+import { ATTACHED_TYPES, type FlowNode } from "../graph";
 import type { Runtimes } from "../run";
 import type { NodeRuntime } from "../types";
 
@@ -39,8 +39,15 @@ export function Timeline({
   // the belts run left to right, so that is also the order they work in. The
   // same rule the run log used, and it has to stay the same rule — the strip
   // and the sheet are two readings of one line.
+  //
+  // **A machine, asked of the node and not of the state.** "Has a runtime" was
+  // the whole membership rule, which made this strip a reading of the reducer
+  // rather than of the line: one envelope addressed to a shelf, and a memory
+  // or a base got a card here for work the walk never sent it. The reducer no
+  // longer creates those runtimes, and this asks the question the strip is
+  // actually about anyway — storage is not a machine, whatever any event says.
   const reached = nodes
-    .filter((node) => runtimes[node.id])
+    .filter((node) => runtimes[node.id] && !ATTACHED_TYPES.has(node.data.definition.type))
     .sort((first, second) => first.position.x - second.position.x);
 
   const rail = useRef<HTMLDivElement>(null);

@@ -619,6 +619,28 @@
   color: var(--ink-faint);
 }
 
+/* **A shelf's word, not a machine's.** `filing` while a base's writer is
+   running, `done` when it has finished — in the storage colour, because this
+   is the shelf saying what it is doing and not the run saying how a machine is
+   getting on. There is no pip beside it and none is coming: the walk never
+   reaches a base, so there is no state for one to show.
+
+   It pulses while filing for the same reason the status pip does, and stops
+   when the word changes — which is the only moving thing a base ever has. */
+.status-word.is-activity {
+  color: var(--knowledge);
+}
+
+.status-word.is-activity[data-activity="filing"] {
+  animation: pulse 1.4s ease-in-out infinite;
+}
+
+/* Finished, and said quietly: a base that has been written to is the ordinary
+   end of a run with a write wire in it, not news. */
+.status-word.is-activity[data-activity="done"] {
+  color: var(--ink-faint);
+}
+
 /* Only ever drawn above lap 1 (`NodeShell`), so it is a signal that something
    unusual is happening rather than a permanent fixture on every node. */
 .node .lap {
@@ -633,87 +655,11 @@
 }
 
 
-.runtime {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: 0.35rem;
-  border-top: 1px solid var(--edge);
-  padding-top: 0.45rem;
-}
-
-.runtime-detail {
-  font-size: 0.7rem;
-  line-height: 1.35;
-  color: var(--ink-dim);
-  min-width: 0;
-}
-
-.runtime[data-status="failed"] .runtime-detail {
-  color: var(--danger);
-}
-
-/* The tool in flight: name plus the argument that says what it acts on. */
-.runtime .tool {
-  display: flex;
-  gap: 0.35rem;
-  align-items: baseline;
-  font-size: 0.68rem;
-  color: var(--ink-dim);
-  background: #0f151e;
-  border: 1px solid var(--edge);
-  border-radius: 6px;
-  padding: 0.25rem 0.4rem;
-  overflow: hidden;
-}
-
-.runtime .tool b {
-  color: var(--agent);
-  flex: 0 0 auto;
-}
-
-.runtime .tool .target {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.runtime .tool[data-state="running"] b {
-  animation: pulse 1.4s ease-in-out infinite;
-}
-
-.runtime .tool[data-state="error"] b {
-  color: var(--danger);
-}
-
-/* The agent's own words, as they arrive. Fixed height and pinned to the
-   bottom: a node that grows with every delta would shove the graph around. */
-.runtime .stream {
-  margin: 0;
-  max-height: 5.5rem;
-  overflow-y: auto;
-  white-space: pre-wrap;
-  word-break: break-word;
-  font-size: 0.68rem;
-  line-height: 1.45;
-  color: var(--ink);
-  background: #0b1017;
-  border: 1px solid var(--edge);
-  border-radius: 6px;
-  padding: 0.35rem 0.45rem;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-}
-
-/* Wraps rather than overflows: the foot is two or three short readings, and a
-   second line of them is better than one line drawn past the chassis. */
-.runtime-foot {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.6rem;
-  font-size: 0.65rem;
-  color: var(--ink-faint);
-  min-width: 0;
-}
+/* Nothing else here renders from `data.runtime` any more. The docked run pane
+   that held a node's tool chip, its streamed words and its foot of readings
+   became the timeline and the node log, which have room for them — what a
+   machine shows on the chassis is a pip, a word, a lap and the detail above.
+   The rules for those three left with the markup. */
 
 /* The model plate. Neutral on purpose: the codebase slot is violet because it
    is *required*, and two identically-coloured plates would flatten that. */

@@ -1717,6 +1717,18 @@ class Orchestrator:
             # A pass that writes nothing falls through to the verbatim append
             # below, which is the mechanism this replaced and is therefore the
             # worst case rather than a new failure (`_filing_pass`).
+            #
+            # **Said on the machine before it starts.** This node is still
+            # `running` — filing happens before it settles — and it has already
+            # streamed the last word it is going to say. Without this the whole
+            # line reads as stopped for up to `FILING_TIMEOUT_S`, on a run that
+            # is working hard: the machine is quiet, the shelf is not a station
+            # and shows no status, and nothing anywhere names the thing that is
+            # actually happening. Cleared by the `succeeded`/`failed`
+            # transition that follows, which sets its own detail.
+            await self._set_node(
+                state, node.id, "running", f"filing into {base.id}"
+            )
             filed, why = await self._filing_pass(
                 state, node, other, base, body, lap=lap, label=label
             )

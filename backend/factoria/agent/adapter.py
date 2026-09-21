@@ -27,10 +27,17 @@ from pydantic import BaseModel, ConfigDict, Field
 from .events import AgentEvent
 
 
-#: The mode a run uses when a node names none. Not any CLI's own default,
-#: which asks — and an unattended run that asks has nobody there
-#: (`agent/claude.py` carries the full reasoning).
+#: The mode a run uses when a node names none **and** the container carries no
+#: dangerous-permissions opt-in. Not any CLI's own default, which asks — and an
+#: unattended run that asks has nobody there (`agent/claude.py` carries the full
+#: reasoning).
 DEFAULT_PERMISSION_MODE = "acceptEdits"
+
+#: The mode a run uses when a node names none and the opt-in **is** present.
+#: The operator's position (`decisions/0022`): the container is the boundary, so
+#: inside it an agent runs commands without asking rather than having every
+#: `Bash` call denied by a prompt nobody is there to answer.
+DEFAULT_DANGEROUS_PERMISSION_MODE = "auto"
 
 #: Modes a node may select without an opt-in.
 SAFE_PERMISSION_MODES: frozenset[str] = frozenset({"default", "acceptEdits", "plan"})
@@ -43,6 +50,23 @@ DANGEROUS_PERMISSION_MODES: frozenset[str] = frozenset(
 
 class PermissionDenied(ValueError):
     """A node asked for a permission mode the server does not hand out."""
+
+
+def default_permission_mode(*, dangerous_allowed: bool) -> str:
+    """The mode a node that names none is given, which the opt-in decides.
+
+    **Gate-dependent rather than one constant**, because the alternative is
+    worse in both directions. A fixed `auto` would make every run on a container
+    without the opt-in refuse itself at the gate — a fresh clone where nothing
+    runs at all. A fixed `acceptEdits` is what the opt-in was turned on to stop:
+    every `Bash` call denied by a prompt with nobody behind it, which is the
+    failure the operator hit and the reason `0022` exists.
+
+    So the opt-in does two jobs: it unlocks the dangerous vocabulary, and it
+    *is* the choice of default. A container without it behaves exactly as it did
+    before that record.
+    """
+    return DEFAULT_DANGEROUS_PERMISSION_MODE if dangerous_allowed else DEFAULT_PERMISSION_MODE
 
 
 def resolve_permission_mode(requested: str | None, *, dangerous_allowed: bool) -> tuple[str, bool]:
@@ -60,7 +84,8 @@ def resolve_permission_mode(requested: str | None, *, dangerous_allowed: bool) -
     mode nobody has heard of — an unknown string would otherwise reach a CLI and
     be rejected there, which is a failed run instead of a refused one.
     """
-    mode = (requested or DEFAULT_PERMISSION_MODE).strip() or DEFAULT_PERMISSION_MODE
+    fallback = default_permission_mode(dangerous_allowed=dangerous_allowed)
+    mode = (requested or fallback).strip() or fallback
     if mode in SAFE_PERMISSION_MODES:
         return mode, False
     if mode in DANGEROUS_PERMISSION_MODES:
@@ -71,9 +96,14 @@ def resolve_permission_mode(requested: str | None, *, dangerous_allowed: bool) -
                 "FACTOR_IA_DANGEROUS_PERMISSIONS=1."
             )
         return mode, True
+    # Names what this container will actually accept, which is not the same
+    # list with the opt-in on and with it off. "Failures are sentences": a
+    # message that omits the four modes the gate has just unlocked sends the
+    # reader looking for a typo that is not there.
+    available = SAFE_PERMISSION_MODES | (DANGEROUS_PERMISSION_MODES if dangerous_allowed else frozenset())
     raise PermissionDenied(
         f"unknown permission mode {mode!r} — one of "
-        f"{', '.join(sorted(SAFE_PERMISSION_MODES))}."
+        f"{', '.join(sorted(available))}."
     )
 
 

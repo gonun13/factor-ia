@@ -66,6 +66,12 @@ html,
   height: 100%;
 }
 
+/* Two steps above the browser default (16px): every size in this stylesheet
+   is in rem, so bumping the root is what scales the whole app at once. */
+html {
+  font-size: 18px;
+}
+
 code,
 .mono {
   font-family: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;

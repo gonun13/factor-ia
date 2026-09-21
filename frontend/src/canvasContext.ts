@@ -101,6 +101,21 @@ export type CanvasContextValue = {
    */
   storage: Record<string, RunStorage[]>;
   /**
+   * Whether each base's filing pass is still running, by node id.
+   *
+   * The third fact about a shelf, after *what is in it* and *what has happened
+   * to it*: **is something happening in it right now**. It is separate from
+   * both because a filing pass is a spawn — it streams, it calls tools, it can
+   * run for three minutes — while the base it is filing into is still not a
+   * station on the line. Activity without a status is a shape a `runtime`
+   * cannot hold, and holding it in one is what used to light a pip on a shelf
+   * and put a card on the timeline for it.
+   *
+   * Absent means nothing was ever filed here; `true` is filing and `false` is
+   * done, which is the whole of what the node draws.
+   */
+  filing: Record<string, boolean>;
+  /**
    * The workspace's knowledge library, by base id, fetched once per canvas.
    *
    * A `Map` rather than the array the API returns, because every reader of it
@@ -161,6 +176,7 @@ export const CanvasContext = createContext<CanvasContextValue>({
   skills: [],
   memories: {},
   storage: {},
+  filing: {},
   knowledgeBases: new Map(),
   // No graph in hand means nothing to light up. `false` rather than `true`: a
   // default that lit every entry would be a canvas promising drops it cannot

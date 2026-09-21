@@ -108,12 +108,24 @@ Press **Run** and the viewport does not move. No second screen opens. The
 machines light up where they already are, and four surfaces say what is
 happening — each with one job:
 
-- **The node** keeps what reads at a glance: a status pip, a status word, and a
-  lap chip when it is going round more than once.
+- **The node** keeps what reads at a glance, and only that: a status pip, a
+  status word, and a lap chip when it is going round more than once. The
+  sentence behind the word — why a machine failed, what it is waiting on —
+  belongs to the node log, which has room to read it. A chassis is not a place
+  to put messages.
+  **A knowledge node is the one exception, and it is not a status**: while its
+  filing pass is running it says `filing`, and `done` once that pass has
+  finished. In the storage colour, with no pip, because the walk never reaches
+  a shelf and nothing here is going green.
 - **The timeline** floats along the bottom of the sheet: one small card per
   machine the walk has been through, in the order the belts run, linked left to
-  right. The machine currently working gets one more line — the tool it is on
-  and the tail of what it is saying. It never takes more than 80% of the width
+  right. **Machines only**, asked of the node's type: a memory and a base are
+  attached to the line rather than standing on it, and a card for one would be
+  the strip claiming storage is a station. It is a stronger rule than "has the
+  run said anything about this node", which is what it used to be and what once
+  put a base on the strip on the strength of a stream addressed to it. The
+  machine currently working gets one more line — the tool it is on and the tail
+  of what it is saying. It never takes more than 80% of the width
   and never grows taller than a row; a long run scrolls sideways instead.
 - **The node log** opens from the icon in front of a machine's name, or from its
   card on the timeline: one machine's whole story, in a window sized for

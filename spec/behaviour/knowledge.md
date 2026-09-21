@@ -527,6 +527,32 @@ what an operator already tunes, and a second knob would be a second place to
 look when filing turns out to cost more than expected. A per-shelf model would
 be a plate on the node and no change to `_filing_pass`.
 
+**It runs inside the contributing machine's `running` window, and the canvas
+says so.** Filing happens after a machine's answer is final and *before* that
+machine settles (`orchestrator._run_agent`), so a pass that takes the full
+`FILING_TIMEOUT_S` is three minutes in which the machine has streamed its last
+word and the shelf — not being a station — has no status to show. Two surfaces
+close that, and neither of them gives a base a status:
+
+- the **contributing machine** carries `filing into <base>` as the detail on
+  its `running` status while the pass runs, cleared by the outcome that
+  follows. It is read in that machine's node log, not on its chassis;
+- the **base** says `filing` where a machine says its status, and `done` once
+  the pass has finished — driven by the pass's own stream.
+
+**A stream addressed to a shelf is not a status**, and that is a rule a client
+has to keep rather than one the server can enforce. The pass streams its events
+with the *shelf's* node id so the shelf's own log can explain what a writer did
+— which makes a base the one node in a factory carrying agent events with no
+status behind them. No `node.status` is ever emitted for one (a base has no
+`NodeRun`, so `_set_node` returns early), so a client that creates node state
+on any other envelope creates state nothing can ever correct. That is not
+hypothetical: it is what once left a base reading `pending` for a whole run,
+with a card on the timeline, on the node that had done the most work. The
+browser therefore routes a shelf's stream to a filing map and never to a
+runtime (`run.ts`), and the timeline asks the node's type rather than asking
+whether state exists for it.
+
 **It is the one spawn in the system that may write**, which is the single point
 where `0015` is relaxed, and it is relaxed on the ground `0015` named: filing
 now has to choose a path by subject, and the orchestrator cannot — it does not
@@ -624,8 +650,12 @@ of the section that changes what the machine writes.
 The handles on the canvas are a claim about what a machine may do. The thing that
 *makes* it true is the spawn.
 
-`DEFAULT_PERMISSION_MODE` is `acceptEdits`, and under it a tool that asks is
-denied, because nobody is home to answer (`backend/factoria/agent/claude.py`).
+Where the container carries no dangerous-permissions opt-in the default mode is
+`acceptEdits`, and under it a tool that asks is denied, because nobody is home
+to answer (`backend/factoria/agent/claude.py`). With the opt-in the default is
+`auto` and nothing asks at all ([`decisions/0022`](../decisions/0022-auto-is-the-default-inside-the-container.md)),
+which makes the grant below redundant but never wrong — it is passed either
+way, so a base's permissions do not depend on how the container was started.
 So:
 
 - the knowledge tools this node may use — the three read tools, and only ever
@@ -728,6 +758,17 @@ On the canvas the node gains a line reading `n written this run`, and the run
 footer one chip per base, in the danger colour when anything was refused — reads
 are left out of both, because the footer is what a run *did* and consulting a
 base did nothing to it.
+
+**It also carries one word in its head**, where a machine carries its status:
+`filing` while its pass is running, pulsing, then `done`. In the base's own
+colour and with no pip, because a shelf is not a station — nothing here is
+`succeeded` or `failed`, and the walk never came this way. A base nothing was
+filed into says nothing at all.
+
+That word is the only live thing a base ever shows, and it exists because the
+pass runs inside the contributing machine's `running` window (above): without
+it the machine is silent, the shelf says nothing, and a line that is working
+reads as a line that has stopped.
 
 The node draws the **log icon** and opens on the same four tabs a memory does
 (`behaviour/memory.md`): **Written**, **Read**, **Content**, **Run events**. The
