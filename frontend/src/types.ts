@@ -270,7 +270,21 @@ export type SkillSummary = {
  * app rebuilt from `name` and `description` would drop any other key the
  * author put there.
  */
-export type Skill = SkillSummary & { body: string; source: string };
+/**
+ * One line of a skill that will not hold on a line, and what holds instead.
+ *
+ * Advisory: nothing is refused over one. A skill is a document written for
+ * somewhere else, and what makes such a line survivable is the machine
+ * contract the backend appends to every worn skill — these notes are for the
+ * operator, who may want to edit the file. `line` is numbered in `source`.
+ */
+export type SkillNote = { line: number; excerpt: string; note: string };
+
+export type Skill = SkillSummary & {
+  body: string;
+  source: string;
+  notes: SkillNote[];
+};
 
 /**
  * A codebase's live git state — the clean-repo precondition, as data.

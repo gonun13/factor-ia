@@ -646,6 +646,71 @@ def test_a_reviewer_wearing_a_skill_gets_both_and_the_contract_last(
     assert seen[0].index("Read before touching.") < seen[0].index("Your verdict")
 
 
+def test_the_machine_contract_rides_with_a_worn_skill_and_only_then(
+    orch: Orchestrator, test_store: Store, factory: Factory, monkeypatch
+) -> None:
+    """A skill is a document written for somewhere else, and the contract is the
+    condition it is worn under (`machine.py`). It must arrive whenever one is
+    worn — and a machine wearing none must spawn exactly as it did before the
+    contract existed, which is what `test_a_node_wearing_no_skill_appends_nothing`
+    pins from the other side.
+    """
+    seen: list[str | None] = []
+    original = FakeAdapter.create_run
+
+    def capture(self, prompt, cwd, config=None):
+        seen.append(config.append_system_prompt if config else None)
+        return original(self, prompt, cwd, config)
+
+    monkeypatch.setattr(FakeAdapter, "create_run", capture)
+
+    run_to_completion(orch)
+    assert seen == [None], "a machine with no skill was told about the contract"
+
+    seen.clear()
+    skills.create_skill(SKILL)
+    wear_skill(test_store, factory, "repo-recon")
+    run_to_completion(orch)
+
+    assert seen and seen[0] is not None
+    assert "## The machine contract" in seen[0]
+    # Under the skill, because it is the condition that skill is worn under.
+    assert seen[0].index("Read before touching.") < seen[0].index("## The machine contract")
+
+
+def test_the_machine_contract_sits_above_the_verdict_fence(
+    orch: Orchestrator, test_store: Store, factory: Factory, monkeypatch
+) -> None:
+    """The ladder, end to end: a general statement about lines cannot outrank
+    what this particular machine owes this particular run."""
+    skills.create_skill(SKILL)
+    wear_skill(test_store, factory, "repo-recon")
+    loaded = test_store.get_factory("demo", "main")
+    for node in loaded.nodes:
+        if node.definition.type == "agent":
+            node.definition.config["kind"] = "reviewer"
+            node.definition.config["fake_script"] = "verdict-pass"
+    test_store.save_factory(loaded)
+
+    seen: list[str | None] = []
+    original = FakeAdapter.create_run
+
+    def capture(self, prompt, cwd, config=None):
+        seen.append(config.append_system_prompt if config else None)
+        return original(self, prompt, cwd, config)
+
+    monkeypatch.setattr(FakeAdapter, "create_run", capture)
+    run_to_completion(orch)
+
+    assert seen and seen[0] is not None
+    order = [
+        seen[0].index("Read before touching."),
+        seen[0].index("## The machine contract"),
+        seen[0].index("Your verdict"),
+    ]
+    assert order == sorted(order)
+
+
 def test_the_run_record_names_the_skill_that_applied(
     orch: Orchestrator, test_store: Store, factory: Factory
 ) -> None:

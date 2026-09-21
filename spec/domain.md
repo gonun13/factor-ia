@@ -81,6 +81,17 @@ one. An agent node names one and its body is appended to that node's prompt on
 every spawn. **Not a node and not an edge** — a property of the machine, like
 its model.
 
+**Machine contract** — what a machine promises a skill it wears
+(`machine.CONTRACT`), stated in the system prompt directly under the skill's
+body and above every other rung. A skill is a document written for somewhere
+else — the format is the sibling `agent-skills` repo's so a file can move
+between the two untouched — and a document written for an assistant assumes a
+trigger, a person to ask and a chat to answer into. The contract is where a
+line says it has none of those. It is also what the library reads a document
+*against*: an import comes back with the lines that will not hold, by number,
+each with the sentence saying what holds instead. **Those notes never refuse an
+import** — the contract is what makes such a line survivable.
+
 **System skill** — a skill the product ships and a node type is *hardwired* to,
 rather than one a machine wears by choice (`skills.SYSTEM_SKILLS`). Three
 today, one per writable knowledge type: a knowledge node applies one to the

@@ -408,6 +408,99 @@ button.skill-card.is-system:hover {
   font-size: 0.72rem;
 }
 
+/* **Notes, not errors**, so the tone is amber and never --danger: nothing was
+   refused, the skill is in, and these are lines a line will read differently
+   from the assistant they were written for. A red block here would say the
+   import failed, which is the one thing that did not happen. */
+.skill-notes {
+  border: 1px solid color-mix(in srgb, var(--input) 30%, transparent);
+  border-left-width: 3px;
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--input) 7%, var(--panel));
+  padding: 0.55rem 0.7rem;
+  font-size: 0.74rem;
+  line-height: 1.5;
+  color: var(--ink-dim);
+}
+
+.skill-notes-head {
+  display: block;
+  color: var(--input);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  margin-bottom: 0.35rem;
+}
+
+.skill-notes ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 0.4rem;
+}
+
+/* The line number, then the line, then what will happen to it — in that order
+   because the operator is going back to the document, and the number is what
+   they need first. */
+.skill-notes li {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.1rem 0.5rem;
+}
+
+.skill-note-line {
+  color: var(--ink-faint);
+  font-size: 0.7rem;
+}
+
+.skill-note-excerpt {
+  color: var(--ink);
+  font-size: 0.7rem;
+  overflow-wrap: anywhere;
+}
+
+.skill-note-what {
+  grid-column: 2;
+  color: var(--ink-dim);
+}
+
+/* The confirmation an import never had: the name that was taken, and what was
+   read in the document. Sits where the import panel was. */
+.skill-imported {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.skill-imported-head {
+  font-size: 0.78rem;
+  color: var(--ink-dim);
+}
+
+.machine-contract {
+  display: grid;
+  gap: 0.4rem;
+  justify-items: start;
+  margin-bottom: 0.6rem;
+}
+
+/* The agent's own text, shown as text: a monospace block, scrollable, with no
+   attempt to re-render it as prose. What is on screen is what is in the
+   prompt. */
+.machine-contract-text {
+  margin: 0;
+  max-height: 22rem;
+  overflow: auto;
+  width: 100%;
+  padding: 0.7rem 0.8rem;
+  border: 1px solid var(--edge);
+  border-radius: var(--radius);
+  background: var(--panel);
+  color: var(--ink-dim);
+  font-size: 0.72rem;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+
 .skill-editor-body {
   flex: 1 1 auto;
   min-height: 0;

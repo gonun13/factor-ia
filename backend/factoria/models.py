@@ -331,6 +331,22 @@ class SkillSummary(Base):
     overridden: bool = False
 
 
+class SkillNote(Base):
+    """One line of a skill that will not hold on a line, and what holds instead.
+
+    Advisory, and never a refusal: the rules are in `machine.py` beside the
+    contract that makes such a line survivable at run time. `line` is numbered
+    in the document the editor shows, frontmatter included, so the operator can
+    go straight to it.
+    """
+
+    line: int
+    #: The line itself, whitespace collapsed and bounded — it is rendered in a
+    #: list, not opened.
+    excerpt: str
+    note: str
+
+
 class Skill(SkillSummary):
     """A skill and its body — everything after the frontmatter, verbatim.
 
@@ -346,6 +362,10 @@ class Skill(SkillSummary):
 
     body: str
     source: str = ""
+    #: What `machine.lint` read in the body. Derived on every read, never
+    #: stored, and deliberately not on `SkillSummary`: the library listing is a
+    #: directory walk and must not become a scan of every document.
+    notes: list[SkillNote] = Field(default_factory=list)
 
 
 class KnowledgeEntry(Base):

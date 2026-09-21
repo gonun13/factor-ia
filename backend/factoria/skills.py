@@ -47,6 +47,7 @@ import threading
 from datetime import datetime, timezone
 from pathlib import Path
 
+from . import machine
 from .models import Skill, SkillSummary
 from .paths import PathEscape, workspace_join
 from .store import atomic_write
@@ -266,6 +267,13 @@ def validate(text: str, filename: str | None = None) -> Skill:
         updated_at=datetime.now(timezone.utc),
         body=body,
         source=stripped,
+        # Numbered in the document the editor shows rather than in the body,
+        # and derived by subtraction so the frontmatter parser keeps its
+        # signature: the body is the tail of the same lines.
+        notes=machine.lint(
+            body,
+            first_line=len(stripped.splitlines()) - len(body.splitlines()) + 1,
+        ),
     )
 
 
@@ -408,7 +416,7 @@ def list_skills(root: Path | None = None) -> list[SkillSummary]:
             # `system` and `overridden` are excluded and then supplied: they
             # are derived here, and a `Skill` carrying stale ones must not be
             # able to answer for itself.
-            **skill.model_dump(exclude={"body", "source", "system", "overridden"}),
+            **skill.model_dump(exclude={"body", "source", "notes", "system", "overridden"}),
             system=skill.name in SYSTEM_SKILLS,
             overridden=overridden,
         )

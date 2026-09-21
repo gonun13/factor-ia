@@ -85,6 +85,10 @@ The rule that keeps this tree honest. Specific pairings that must not rot:
 - **The refusals.** A run check that returns every reason at once is only
   useful if the reasons are right, so each precondition has a test that triggers
   exactly it.
+- **Every shipped skill lints clean.** The documents in `system_skills/` are
+  ours and are written for a line, so a rule in `machine.lint` that fires on one
+  means either the rule or the skill is wrong. The test is the forcing function:
+  notes an operator learns to ignore are worth nothing.
 - **What a machine was handed.** The taken-belt filter is proved on a graph
   where the dead belt's source **ran and routed elsewhere** — a source that
   never ran has no text, so the claim is unfalsifiable against it, and the test
@@ -109,6 +113,7 @@ surface, not over the places you thought of.**
 | the ask round-trip, or anything it touches | `test_cursor_ask.py` — the adapter's socket server and the real MCP server module driven against each other, with no CLI in the middle. **Assert on the seam's shapes** (`permission.request`, `resolve_permission`), never on anything spelled `ask_operator`: the claim under test is that the orchestrator cannot tell the providers apart |
 | a new exit for text | `test_scrub.py` — a new exit should be hard to add without noticing |
 | an API shape | `test_api.py`, `test_runs_api.py`, `test_settings_api.py` |
+| a rung of the system prompt, or a rule that reads a skill against one | `test_machine.py` for the ladder's order and the lint's sentences, `test_execution.py` for what actually reached the spawn — a contract nobody proved arrived is a contract that is not in force |
 
 ---
 

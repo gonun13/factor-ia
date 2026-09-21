@@ -335,6 +335,7 @@ def compose_system_prompt(
     skill_body: str | None,
     *,
     reviewer: bool,
+    machine: str | None = None,
     memory: str | None = None,
     knowledge: str | None = None,
     scope: str | None = None,
@@ -346,7 +347,8 @@ def compose_system_prompt(
     adapter seam: `RunConfig` takes a composed string and no adapter ever learns
     what a reviewer is (`agent/adapter.py`).
 
-    Order is **skill, then memory, then knowledge, then verdict**, and each step
+    Order is **skill, then the machine contract, then memory, then knowledge,
+    then verdict**, and each step
     of that ladder is the same argument: the thing the agent was told most
     recently is the thing it may not negotiate. A skill cannot be read as
     overriding how this node's output will be stored; neither of those can be
@@ -363,16 +365,28 @@ def compose_system_prompt(
     skill decides what a session interviews about, and what an interview *is* is
     not a skill's to redefine (`questions.INTERVIEW_CONTRACT`).
 
+    `machine` (`machine.CONTRACT`) is first after the skill because it is the
+    condition the skill is worn under and nothing more: it says what a machine
+    on a line can and cannot do — nobody to ask, no trigger, no git, the answer
+    travels — and a skill written for an assistant is exactly the document that
+    would otherwise contradict it. It goes *above* memory, knowledge and the
+    verdict for the ladder's reason in the other direction: those three say what
+    this particular machine owes this particular run, and none of them is a
+    general statement about lines that the caller may override.
+
     `memory` and `knowledge` both arrive already rendered
     (`memory.WRITER_CONTRACT`, `knowledge.index.compose`) so this module learns
     nothing about where either lives, exactly as it learns nothing about where
     skills live. `None` when there is nothing to say, which is what keeps a
-    worker with no skill spawning exactly as it did before this existed.
+    worker with no skill spawning exactly as it did before this existed — and
+    the caller passes `machine=None` in that case for the same reason
+    (`machine.CONTRACT`'s note: with no skill there is no bargain to state).
     """
     parts = [
         part.strip()
         for part in (
             skill_body,
+            machine,
             memory,
             knowledge,
             CONTRACT if reviewer else None,

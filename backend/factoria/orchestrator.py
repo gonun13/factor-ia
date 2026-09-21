@@ -88,7 +88,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
-from . import config, gitwork, memory, runcheck, skills, summary, worktree
+from . import config, gitwork, machine, memory, runcheck, skills, summary, worktree
 from .knowledge import filing as knowledge_filing
 from .knowledge import index as knowledge_index
 from .knowledge import mcp as knowledge_mcp
@@ -2522,6 +2522,11 @@ class Orchestrator:
         appended = verdict.compose_system_prompt(
             appended,
             reviewer=reviewer,
+            # **Only with a skill.** The contract is the condition a *worn
+            # document* is worn under (`machine.py`), so a machine with none
+            # spawns exactly as it did before the contract existed rather than
+            # paying for a paragraph about skills it is not wearing.
+            machine=machine.CONTRACT if appended else None,
             memory=memory.WRITER_CONTRACT if writes else None,
             knowledge=knowledge_block,
         )

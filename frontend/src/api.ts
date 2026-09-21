@@ -80,6 +80,10 @@ export const api = {
     }),
   deleteSkill: (name: string) =>
     request<void>(`/api/skills/${encodeURIComponent(name)}`, { method: "DELETE" }),
+  /** What every worn skill is told, in the words the agent actually gets.
+      Fetched rather than bundled: a second copy of the text in this app would
+      be a claim about the spawn that nothing keeps true. */
+  machineContract: () => request<{ contract: string }>("/api/machine/contract"),
 
   /** The workspace's knowledge bases. A directory walk, like `skills()`, and
       cheap enough to sit in the canvas's own load. */

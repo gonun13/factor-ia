@@ -46,3 +46,4 @@ original keeps its number.
 | [0018](0018-system-knowledge-bases.md) | System knowledge bases, and the manifest as the way in | supersedes part of `behaviour/knowledge.md` and of `0017` |
 | [0019](0019-a-person-may-close-a-loop.md) | A person may close a loop, and is their own cap | supersedes part of `0009` |
 | [0020](0020-what-arrived-is-recorded-with-the-text.md) | What arrived is recorded, with the text | stands |
+| [0021](0021-the-machine-contract.md) | The machine contract, stated at spawn time | stands |

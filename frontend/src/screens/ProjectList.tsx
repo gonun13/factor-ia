@@ -35,6 +35,7 @@ import {
   type KnowledgeType,
   type Project,
   type Skill,
+  type SkillNote,
   type SkillSummary,
 } from "../types";
 
@@ -305,6 +306,103 @@ export function ProjectList({ onOpen }: { onOpen: (projectId: string) => void })
  * document still names itself. The files are committed with the team; git is
  * still the history.
  */
+/**
+ * The lines of a skill that will not hold on a line, as the backend read them.
+ *
+ * **Notes, not errors.** Nothing was refused: the document imported, it will
+ * run, and what makes a line like "ask the user" survivable is the machine
+ * contract the backend appends under every worn skill. These are for the
+ * operator, who may prefer to edit the file — so they are styled as a note and
+ * carry the line number in the document above, not a count of problems.
+ */
+/**
+ * One skill into the library, in the order the server lists them.
+ *
+ * **System first, then by name** — `skills.list_skills` sorts it that way and
+ * says why it sorts it there: so that every reader of the route sees one
+ * order. A screen that re-sorted by name alone would put a freshly imported
+ * `adversarial-review` above the shipped three until the next reload, which is
+ * the library disagreeing with itself about where things live.
+ */
+function insert(current: SkillSummary[], skill: SkillSummary): SkillSummary[] {
+  const rest = current.filter((one) => one.name !== skill.name);
+  return [...rest, skill].sort(
+    (a, b) => Number(b.system) - Number(a.system) || a.name.localeCompare(b.name),
+  );
+}
+
+function SkillNotes({ notes, stale }: { notes: SkillNote[]; stale?: boolean }) {
+  if (notes.length === 0) return null;
+  return (
+    <div className="skill-notes" role="note">
+      <span className="skill-notes-head">
+        On a line{stale ? " · read from the saved document" : ""}
+      </span>
+      <ul>
+        {notes.map((note) => (
+          <li key={`${note.line}-${note.excerpt}`}>
+            <span className="skill-note-line mono">line {note.line}</span>
+            <span className="skill-note-excerpt mono">{note.excerpt}</span>
+            <span className="skill-note-what">{note.note}</span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+/**
+ * What every worn skill is told, on request.
+ *
+ * Fetched rather than written into this file: the point of showing it is that
+ * it is the text the agent actually gets, and a second copy here would be a
+ * claim about the spawn that nothing keeps true. Closed by default — it is the
+ * answer to "why does my skill behave like that", not something to read every
+ * time you open the library.
+ */
+function MachineContract() {
+  const [open, setOpen] = useState(false);
+  const [contract, setContract] = useState<string | null>(null);
+  const [problem, setProblem] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!open || contract !== null) return;
+    let live = true;
+    api
+      .machineContract()
+      .then((answer) => live && setContract(answer.contract))
+      .catch((cause) => {
+        if (live) setProblem(cause instanceof Error ? cause.message : String(cause));
+      });
+    return () => {
+      live = false;
+    };
+  }, [open, contract]);
+
+  return (
+    <div className="machine-contract">
+      <button type="button" className="link-button" onClick={() => setOpen((now) => !now)}>
+        {open ? "Hide what a machine promises a skill" : "What a machine promises a skill"}
+      </button>
+      {open && (
+        <>
+          <p className="hint">
+            Appended under every skill a machine wears, on every spawn. A skill
+            cannot argue with it — it is said after the skill, and the last
+            thing said is the thing that cannot be waved away.
+          </p>
+          {problem && <div className="error">{problem}</div>}
+          {contract === null && !problem ? (
+            <p className="dim">Reading…</p>
+          ) : (
+            <pre className="machine-contract-text">{contract}</pre>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 function SkillLibrary() {
   const [skills, setSkills] = useState<SkillSummary[] | null>(null);
   const [importing, setImporting] = useState(false);
@@ -322,6 +420,10 @@ function SkillLibrary() {
   /** The skill whose document is open, by name. The card is the index; the
    *  window is the document. */
   const [editing, setEditing] = useState<string | null>(null);
+  /** The document just imported, kept only to show what the backend read in
+   *  it. The moment the operator can act on a note is the moment they are
+   *  still looking at the file they chose. */
+  const [imported, setImported] = useState<Skill | null>(null);
   const cancelDeleteButton = useRef<HTMLButtonElement | null>(null);
 
   useEffect(() => {
@@ -356,6 +458,7 @@ function SkillLibrary() {
     if (!file) return;
     setProblem(null);
     setConflict(null);
+    setImported(null);
     setReading(true);
     try {
       const contents = await file.text();
@@ -378,10 +481,8 @@ function SkillLibrary() {
     setProblem(null);
     try {
       const skill = await api.importSkill(text, filename ?? undefined, overwrite);
-      setSkills((current) => {
-        const rest = (current ?? []).filter((one) => one.name !== skill.name);
-        return [...rest, skill].sort((a, b) => a.name.localeCompare(b.name));
-      });
+      setSkills((current) => insert(current ?? [], skill));
+      setImported(skill);
       reset();
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : String(cause);
@@ -421,7 +522,31 @@ function SkillLibrary() {
         your workspace and are committed with the team, like factories.
       </p>
 
+      <MachineContract />
+
       {problem && !conflict && <div className="error">{problem}</div>}
+
+      {/* **Shown after the import, not instead of it.** The document is in,
+          and these are the lines of it that a line will not honour — read
+          beside the file the operator just chose rather than discovered later
+          in a run that went strangely. */}
+      {imported && (
+        <div className="skill-imported panel">
+          <span className="skill-imported-head">
+            <span className="mono">{imported.name}</span> imported
+            {imported.notes.length === 0 && " — nothing in it reads as written for a chat."}
+          </span>
+          <SkillNotes notes={imported.notes} />
+          <span className="card-actions">
+            <button type="button" className="link-button" onClick={() => setImported(null)}>
+              Dismiss
+            </button>
+            <button type="button" className="link-button" onClick={() => setEditing(imported.name)}>
+              Open it
+            </button>
+          </span>
+        </div>
+      )}
 
       {importing ? (
         <div className="skill-import panel">
@@ -635,12 +760,7 @@ function SkillLibrary() {
         <SkillEditor
           name={editing}
           onClose={() => setEditing(null)}
-          onSaved={(saved) =>
-            setSkills((current) => {
-              const rest = (current ?? []).filter((one) => one.name !== saved.name);
-              return [...rest, saved].sort((a, b) => a.name.localeCompare(b.name));
-            })
-          }
+          onSaved={(saved) => setSkills((current) => insert(current ?? [], saved))}
         />
       )}
     </section>
@@ -798,6 +918,9 @@ function SkillEditor({
               onChange={(event) => setText(event.target.value)}
             />
           )}
+          {/* Read from the saved document, so an unsaved edit says so rather
+              than pointing at line numbers that have moved. */}
+          {loaded && <SkillNotes notes={loaded.notes} stale={dirty} />}
         </div>
 
         <footer className="skill-editor-foot">

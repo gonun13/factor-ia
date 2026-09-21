@@ -410,6 +410,10 @@ def test_a_scope_session_may_read_and_ask_and_do_nothing_else(
     # the other.
     assert "Scoping" in (scope_config.append_system_prompt or "")
     assert "AskUserQuestion" in (scope_config.append_system_prompt or "")
+    # **Never the machine contract.** `questions.INTERVIEW_CONTRACT` plays that
+    # role here and says the opposite thing on purpose: a scope machine is the
+    # one that does have somebody to ask (`machine.py`).
+    assert "## The machine contract" not in (scope_config.append_system_prompt or "")
 
 
 def test_a_tool_that_is_not_a_question_is_denied_with_a_reason(

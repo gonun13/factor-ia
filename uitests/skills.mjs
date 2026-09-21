@@ -2,6 +2,11 @@
  * Skills, end to end in a real browser: imported on the main page, worn by an
  * agent node, saved into the factory file, and refused once the file is gone.
  *
+ * A document written for an assistant goes in too, because that is the case
+ * the library exists to survive: it imports, the lines that will not hold are
+ * named on the way in, and the contract that makes them survivable can be read
+ * from the page.
+ *
  * What this checks that the backend tests cannot: that the library renders
  * where it was put (below the projects, because a skill belongs to no project),
  * that the agent node's third plate writes `config.skill` into the graph the
@@ -29,6 +34,21 @@ description: Reads a repository and reports what it is, before touching anything
 # Recon
 
 Read the repository before changing a line of it.
+`;
+
+// The other half of the library's job: a document written for an assistant,
+// imported unchanged. It is not refused — the machine contract is what makes
+// it survivable — and the notes name the lines a line will read differently.
+const CHATTY = `uitest-chatty-${STAMP}`;
+const CHATTY_MD = `---
+name: ${CHATTY}
+description: Starts a project. Use when the user lands somewhere new.
+---
+
+# Kickoff
+
+Read the folder first.
+Ask the user which stack they want.
 `;
 
 let passed = 0;
@@ -99,6 +119,40 @@ try {
   check("the imported skill shows its description, not just its name",
     (await page.locator(".skill-card", { hasText: SKILL }).locator(".desc").innerText()).startsWith("Reads a repository"), true);
 
+  check("an import says so, and says nothing was read as written for a chat",
+    (await page.locator(".skill-imported-head").innerText()).includes("nothing in it reads as written for a chat"), true);
+  check("…with no notes under it", await page.locator(".skill-imported .skill-notes").count(), 0);
+  await page.locator(".skill-imported").getByRole("button", { name: "Dismiss" }).click();
+
+  // ---- a skill written for an assistant -----------------------------------
+  // Imported, never refused, and the lines that will not hold are named on the
+  // way in — beside the file the operator just chose.
+  await page.getByRole("button", { name: "Import a skill" }).click();
+  await page.getByRole("button", { name: "Paste markdown instead" }).click();
+  await page.locator('textarea[aria-label="Skill markdown"]').fill(CHATTY_MD);
+  await page.getByRole("button", { name: "Import", exact: true }).click();
+  await page.waitForSelector(`.skill-card .name:text-is("${CHATTY}")`);
+  check("it imports all the same", await page.locator(".skill-imported .error").count(), 0);
+  check("and one line is named", await page.locator(".skill-imported .skill-notes li").count(), 1);
+  check("…by its number in the document",
+    await page.locator(".skill-imported .skill-note-line").innerText(), "line 9");
+  check("…with what holds instead",
+    (await page.locator(".skill-imported .skill-note-what").innerText()).includes("nobody to ask"), true);
+
+  // The same notes on reopening: they belong to the document, not to the import.
+  await page.locator(".skill-imported").getByRole("button", { name: "Open it" }).click();
+  await page.waitForSelector(".skill-editor .skill-notes");
+  check("the editor shows them under the document",
+    await page.locator(".skill-editor .skill-notes li").count(), 1);
+  await page.locator(".skill-editor .node-log-close").click();
+
+  // What makes such a line survivable, in the words the agent actually gets.
+  await page.getByRole("button", { name: "What a machine promises a skill" }).click();
+  await page.waitForSelector(".machine-contract-text");
+  check("the library can show what every worn skill is told",
+    (await page.locator(".machine-contract-text").innerText()).includes("There is nobody to ask"), true);
+  await page.getByRole("button", { name: "Hide what a machine promises a skill" }).click();
+
   // A second import of the same document is a conflict, and the only place
   // Replace is reachable from.
   await page.getByRole("button", { name: "Import a skill" }).click();
@@ -117,7 +171,8 @@ try {
   check("a system skill is in the library",
     await page.locator(".skill-card", { hasText: SYSTEM }).count(), 1);
   check("it says so on the card",
-    await page.locator(".skill-card", { hasText: SYSTEM }).locator(".skill-badge").innerText(), "system");
+    (await page.locator(".skill-card", { hasText: SYSTEM }).locator(".skill-badge").innerText()).toLowerCase(),
+    "system");
   check("and carries the knowledge tone, not the ordinary one",
     await page.locator(".skill-card", { hasText: SYSTEM }).evaluate(
       (el) => el.classList.contains("is-system")), true);
@@ -133,8 +188,9 @@ try {
     order.slice(0, 3).every((name) => name.startsWith("knowledge-")) && systemRows >= 3, true);
   check("and the imported one is below them",
     order.indexOf(SKILL) >= 3, true);
+  const systemSlot = page.locator(".skill-slot").filter({ hasText: SYSTEM });
   check("and it offers no delete, because a node type is built on it",
-    await page.locator(`.skill-slot:has(.skill-card:text-matches("${SYSTEM}")) .card-delete`).count(), 0);
+    await systemSlot.locator(".card-delete").count(), 0);
 
   // Reverting is offered only once there is an edit to undo.
   const edited = await api("/api/skills", {
@@ -146,13 +202,13 @@ try {
     }),
   });
   check("a system skill is edited by the ordinary import", edited.status, 201);
-  const refused = await api(`/api/skills/${SYSTEM}`, { method: "DELETE" });
-  check("but it cannot be deleted", refused.status, 405);
   await page.reload({ waitUntil: "networkidle" });
   check("an overridden one offers Revert",
-    await page.locator(`.skill-slot:has(.skill-card:text-matches("${SYSTEM}")) .card-delete`).count(), 1);
+    await systemSlot.locator(".card-delete").count(), 1);
   const reverted = await api(`/api/skills/${SYSTEM}`, { method: "DELETE" });
   check("reverting succeeds", reverted.status, 204);
+  const refused = await api(`/api/skills/${SYSTEM}`, { method: "DELETE" });
+  check("but with nothing to revert it cannot be deleted", refused.status, 405);
   await page.reload({ waitUntil: "networkidle" });
   check("and the skill is still there afterwards",
     await page.locator(".skill-card", { hasText: SYSTEM }).count(), 1);
@@ -242,6 +298,7 @@ try {
 } finally {
   await browser.close();
   await api(`/api/skills/${SKILL}`, { method: "DELETE" });
+  await api(`/api/skills/${CHATTY}`, { method: "DELETE" });
   const removed = await api(`/api/projects/${PROJECT}`, { method: "DELETE" });
   check("the throwaway project deletes cleanly", removed.status, 204);
   console.log(`\n${passed} checks passed`);

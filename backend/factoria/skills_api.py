@@ -25,12 +25,20 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException, Response, status
 from pydantic import BaseModel, ConfigDict, Field
 
-from . import skills
+from . import machine, skills
 from .models import Skill, SkillSummary
 from .paths import PathEscape
 from .runs_api import label
 
 router = APIRouter(prefix="/api")
+
+
+class MachineContract(BaseModel):
+    """What every worn skill is told, as the product states it."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    contract: str
 
 
 class SkillImport(BaseModel):
@@ -69,6 +77,19 @@ def _translate(exc: Exception) -> HTTPException:
     if isinstance(exc, skills.SkillError):
         return HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, str(exc))
     raise exc
+
+
+@router.get("/machine/contract", response_model=MachineContract)
+def machine_contract() -> MachineContract:
+    """The condition a skill is worn under, served so the library can show it.
+
+    Not `/skills/contract`: that path would shadow a skill legitimately named
+    `contract`, and a route that quietly hides a document is worse than a
+    second noun. Served rather than copied into the browser bundle because the
+    text is the one the agent actually gets — a second copy in the frontend
+    would be a claim about the spawn that nothing keeps true.
+    """
+    return MachineContract(contract=machine.CONTRACT)
 
 
 @router.get("/skills", response_model=list[SkillSummary])

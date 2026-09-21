@@ -40,6 +40,7 @@ backend/     FastAPI app, uv-managed  (factoria.main:app)
              settings_api.py  account, sign-in, ssh key
              skills.py  the workspace's standing instructions, as files
              skills_api.py  import, list, delete/revert
+             machine.py  what a machine promises a skill, and the lint that reads one
              system_skills/  the ones a node type is hardwired to, shipped
              system_knowledge/  the base the product ships, seeded into _knowledge/
              agent/    the CLI subprocess layer — the one runtime dependency
@@ -75,8 +76,13 @@ with every reason if the graph cannot run, 409 if one is already in flight) ·
 `POST /api/runs/{id}/cancel` · `GET /api/runs`, `GET /api/runs/{id}` ·
 `GET /api/runs/{id}/events` (SSE).
 
-Skills: `GET`/`POST /api/skills` · `GET`/`DELETE /api/skills/{name}`. An
-import carries the document as text the browser already read — there is no
+Skills: `GET`/`POST /api/skills` · `GET`/`DELETE /api/skills/{name}` ·
+`GET /api/machine/contract` (what every worn skill is told, served rather than
+copied into the bundle, and not under `/api/skills/` where it would shadow a
+skill named `contract`). A single skill read and an import both carry **notes**
+— the lines `machine.lint` found that will not hold on a line, numbered in the
+document the editor shows. The listing does not: a library is a directory walk.
+An import carries the document as text the browser already read — there is no
 upload endpoint and nothing here fetches a URL. No `PUT`: the file in
 `_skills/` is the editor, so a change is an import with `overwrite`.
 **A system skill** (`skills.SYSTEM_SKILLS`) is listed whether or not the

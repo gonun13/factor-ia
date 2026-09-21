@@ -212,7 +212,16 @@ thing that decides it:
 Three things reach an agent beyond the request:
 
 - **Its skill**, if it has one — the body of a `/workspace/_skills/<name>.md`
-  document, appended to the prompt on every spawn.
+  document, appended to the prompt on every spawn, and under it **the machine
+  contract** (`machine.CONTRACT`): the condition the skill is worn under. It
+  says the request is the whole request, that nothing triggered this machine,
+  that there is nobody to ask, that the final message is passed on verbatim
+  rather than into a conversation, and that the line commits what it finds in
+  the working tree rather than the machine committing for itself. It rides
+  **only when a skill is worn** — a machine with none spawns exactly as it did
+  before the contract existed — and **only on an agent node**: a scope
+  node gets the interview contract instead, and the knowledge filing pass's
+  skill is one the product ships.
 - **Its memories and knowledge bases**, over wires, with the direction of the
   wire deciding whether it may read or write. See
   [`memory.md`](memory.md) and [`knowledge.md`](knowledge.md).

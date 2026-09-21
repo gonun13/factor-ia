@@ -123,6 +123,11 @@ inverted, and the server stays the authoritative half — a scope session has no
 codebase and no worktree, so there is nothing for a write to be part of even if
 a rule here were spelled wrong.
 
+A scope node never gets the **machine contract** an agent node's worn skill
+gets (`machine.CONTRACT`, [`run-execution.md`](run-execution.md)): it says
+there is nobody to ask, and this is the one machine where that is false. The
+interview contract is what plays that role here.
+
 This holds **whatever its skill says**, and that is the point of stating it
 here: the skill is picked from a dropdown by whoever drew the node, and a
 machine whose instructions are chosen that easily should not also be able to

@@ -175,3 +175,51 @@ def test_the_single_skill_route_says_whether_it_is_a_system_one(
     client.post("/api/skills", json={"text": TEMPLATE, "filename": "repo-recon.md"})
     ordinary = client.get("/api/skills/repo-recon").json()
     assert ordinary["system"] is False and ordinary["overridden"] is False
+
+
+# ---- the machine contract, and what a document is told about it ------------
+
+
+def test_an_import_comes_back_with_the_lines_that_will_not_hold(
+    client: TestClient, workspace: Path
+) -> None:
+    """The moment the operator can act on it: the document is in front of them
+    and the notes name its lines. Never a refusal — the contract is what makes
+    such a line survivable (`machine.py`)."""
+    text = TEMPLATE.replace(
+        "One sentence: the concrete outcome this produces.",
+        "Ask the user which stack they want, then run `git commit`.",
+    )
+    created = client.post("/api/skills", json={"text": text, "filename": "repo-recon.md"})
+    assert created.status_code == 201
+    notes = created.json()["notes"]
+    assert [note["line"] for note in notes] == [10]
+    assert "nobody to ask" in notes[0]["note"]
+
+    # And again on the read the editor does, so reopening a skill shows them.
+    assert client.get("/api/skills/repo-recon").json()["notes"] == notes
+
+
+def test_the_listing_carries_no_notes(client: TestClient, workspace: Path) -> None:
+    """A library is a directory walk. Notes are per-document and belong to the
+    screen that shows the document."""
+    client.post("/api/skills", json={"text": TEMPLATE, "filename": "repo-recon.md"})
+    assert "notes" not in client.get("/api/skills").json()[0]
+
+
+def test_the_contract_is_served_so_the_library_can_show_it(client: TestClient) -> None:
+    """The text the agent actually gets. A copy in the browser bundle would be
+    a claim about the spawn that nothing keeps true."""
+    response = client.get("/api/machine/contract")
+    assert response.status_code == 200
+    assert "## The machine contract" in response.json()["contract"]
+
+
+def test_a_skill_named_contract_is_still_reachable(
+    client: TestClient, workspace: Path
+) -> None:
+    """Why the route is not `/api/skills/contract`: a path that quietly hid a
+    document would be worse than a second noun."""
+    text = TEMPLATE.replace("name: repo-recon", "name: contract")
+    assert client.post("/api/skills", json={"text": text}).status_code == 201
+    assert client.get("/api/skills/contract").json()["name"] == "contract"
