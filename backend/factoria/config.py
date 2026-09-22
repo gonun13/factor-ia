@@ -122,6 +122,43 @@ def adapter_name() -> str:
     return (os.environ.get("FACTOR_IA_ADAPTER") or "claude").strip().lower()
 
 
+def fake_delay_s() -> float:
+    """How long a fake adapter pretends to work, in seconds.
+
+    Read per call so tests can `monkeypatch.setenv` without freezing a value
+    captured at import. Default matches the dry-run cadence the UI expects.
+    """
+    try:
+        return max(0.0, float(os.environ.get("FACTOR_IA_FAKE_DELAY", "0.35")))
+    except ValueError:
+        return 0.35
+
+
+def fake_cost_usd() -> str | None:
+    """Optional override for what a fake turn reports as its cost.
+
+    `None` means the node config and the adapter's own default decide. Kept as
+    the raw string so the caller's parse-and-clamp stays the one place that
+    turns it into a float — two parsers would disagree on `"0.0x"`.
+    """
+    return os.environ.get("FACTOR_IA_FAKE_COST")
+
+
+def fake_script() -> str | None:
+    """Optional override for which fake script a dry-run node plays."""
+    return os.environ.get("FACTOR_IA_FAKE_SCRIPT")
+
+
+def allowed_origins() -> frozenset[str]:
+    """Origins permitted to mutate, beyond this server's own Host.
+
+    The Vite dev server is the usual entry: its page origin stays on `:5173`
+    while `/api` is proxied. Comma-separated, stripped, trailing slash dropped.
+    """
+    raw = os.environ.get("FACTOR_IA_ALLOWED_ORIGINS", "")
+    return frozenset(item.strip().rstrip("/") for item in raw.split(",") if item.strip())
+
+
 def dangerous_permissions_allowed() -> bool:
     """The server-side opt-in `DESIGN.md` §6 requires before anything
     `bypassPermissions`-shaped can be selected.

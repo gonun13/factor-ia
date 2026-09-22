@@ -80,7 +80,6 @@ import asyncio
 import contextlib
 import hashlib
 import json
-import os
 import sys
 import uuid
 from pathlib import Path
@@ -108,9 +107,15 @@ from .knowledge import store as knowledge_store
 # resolved at call time by whichever was defined last, is a bug that only
 # shows up in the branch that calls the loser.
 from .knowledge.markdown import adapter_for as knowledge_adapter_for
-from .agent.adapter import AgentAdapter, AgentRun, RunConfig
+from .agent.adapter import (
+    AgentAdapter,
+    AgentRun,
+    PermissionDenied,
+    RunConfig,
+    resolve_permission_mode,
+)
 from .agent.events import PermissionRequest
-from .agent.claude import ClaudeAdapter, PermissionDenied, resolve_permission_mode
+from .agent.claude import ClaudeAdapter
 from .agent.cursor import CursorAdapter
 from .agent.fake import FAKE_COST_USD, SCRIPT_NAMES as FAKE_SCRIPTS, FakeAdapter
 from .discovery import discover_codebases
@@ -253,13 +258,6 @@ class RunConflict(Exception):
     """The run is not in a state where that request means anything."""
 
 
-def _fake_delay() -> float:
-    try:
-        return max(0.0, float(os.environ.get("FACTOR_IA_FAKE_DELAY", "0.35")))
-    except ValueError:
-        return 0.35
-
-
 def _fake_cost(node: Node) -> float:
     """What a dry-run node reports its turns cost. Nothing, unless asked.
 
@@ -270,7 +268,7 @@ def _fake_cost(node: Node) -> float:
     """
     raw = node.definition.config.get("fake_cost")
     if raw is None:
-        raw = os.environ.get("FACTOR_IA_FAKE_COST")
+        raw = config.fake_cost_usd()
     try:
         return max(0.0, float(raw))  # type: ignore[arg-type]
     except (TypeError, ValueError):
@@ -335,7 +333,7 @@ def adapter_for(
             default = "scope" if _is_scope(node) else "success"
             script = str(
                 node.definition.config.get("fake_script")
-                or os.environ.get("FACTOR_IA_FAKE_SCRIPT")
+                or config.fake_script()
                 or default
             )
             if script not in FAKE_SCRIPTS:
@@ -343,7 +341,7 @@ def adapter_for(
         if script not in FAKE_SCRIPTS:
             script = "success"
         return FakeAdapter(  # type: ignore[arg-type]
-            script=script, delay_s=_fake_delay(), cost_usd=_fake_cost(node)
+            script=script, delay_s=config.fake_delay_s(), cost_usd=_fake_cost(node)
         )
     if name == "cursor":
         return CursorAdapter()
@@ -1074,7 +1072,7 @@ class Orchestrator:
                     )
                 )
 
-        outcome.detail = _tidy_detail(outcome)
+        outcome.detail = housekeeping.describe_outcome(outcome)
         return outcome
 
     async def _halt(self, run_id: str, *, discard: bool) -> Run:
@@ -3928,24 +3926,6 @@ class Orchestrator:
             summary.write(run)
             interrupted.append(run.id)
         return interrupted
-
-
-def _tidy_detail(outcome: "housekeeping.Outcome") -> str:
-    """What a tidy did, as one sentence. Always ends by saying what it did not
-    touch: "branches untouched" is the guarantee the whole feature is built
-    around, and an operator should read it every time rather than have to
-    remember it."""
-    parts: list[str] = []
-    if outcome.discarded:
-        count = len(outcome.discarded)
-        parts.append(f"discarded {count} run{'s' if count != 1 else ''}")
-    if outcome.swept:
-        count = len(outcome.swept)
-        parts.append(f"swept {count} empty run director{'ies' if count != 1 else 'y'}")
-    said = " · ".join(parts) if parts else "nothing to tidy"
-    if outcome.refused:
-        said += f" — {len(outcome.refused)} left alone"
-    return f"{said}. Branches untouched."
 
 
 def _waiting_detail(kind: str) -> str:

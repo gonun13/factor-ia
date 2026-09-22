@@ -100,8 +100,8 @@ from .normalize import StreamNormalizer
 # The permission-mode vocabulary lives on the seam (`agent/adapter.py`), not
 # here: it is one word every provider is handed, and a gate copied per adapter
 # is how two gates drift into one hole. Re-exported under the names this module
-# has always published them under, because `runcheck` and the orchestrator both
-# import them from here.
+# has always published them under, so older imports that named `claude` still
+# resolve; new call sites import from `agent.adapter` (or `factoria.agent`).
 DEFAULT_PERMISSION_MODE = adapter_mod.DEFAULT_PERMISSION_MODE
 DEFAULT_DANGEROUS_PERMISSION_MODE = adapter_mod.DEFAULT_DANGEROUS_PERMISSION_MODE
 default_permission_mode = adapter_mod.default_permission_mode

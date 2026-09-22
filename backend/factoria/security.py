@@ -30,18 +30,17 @@ show the attacker anyway, and SSE (stage 5) is a GET.
 
 from __future__ import annotations
 
-import os
-
 from fastapi import Request
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.responses import JSONResponse, Response
+
+from . import config
 
 MUTATING_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 
 
 def configured_allowed_origins() -> frozenset[str]:
-    raw = os.environ.get("FACTOR_IA_ALLOWED_ORIGINS", "")
-    return frozenset(item.strip().rstrip("/") for item in raw.split(",") if item.strip())
+    return config.allowed_origins()
 
 
 def origin_is_allowed(origin: str | None, host: str | None, allowed: frozenset[str]) -> bool:

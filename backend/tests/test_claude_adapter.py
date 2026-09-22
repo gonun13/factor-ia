@@ -473,3 +473,33 @@ def test_an_unknown_mode_names_what_this_container_would_accept() -> None:
     with pytest.raises(PermissionDenied) as opened:
         resolve_permission_mode("nonsense", dangerous_allowed=True)
     assert "auto" in str(opened.value)
+
+
+def test_the_permission_gate_is_imported_from_the_seam_not_a_provider() -> None:
+    """`agent/adapter.py` owns the vocabulary; a provider module only maps it.
+
+    `runcheck` and the orchestrator refuse and spawn through that gate, so they
+    must depend on the seam — not on `claude.py`'s historical re-export. A
+    second copy of the gate inside a provider is how two gates drift into one
+    hole (`decisions/0022`, `agent/adapter.py`).
+    """
+    import ast
+    from pathlib import Path
+
+    roots = Path(__file__).resolve().parents[1] / "factoria"
+    for rel in ("runcheck.py", "orchestrator.py"):
+        tree = ast.parse((roots / rel).read_text())
+        from_claude: set[str] = set()
+        from_adapter: set[str] = set()
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.ImportFrom) or node.module is None:
+                continue
+            names = {alias.name for alias in node.names}
+            if node.module.endswith("agent.claude"):
+                from_claude |= names
+            elif node.module.endswith("agent.adapter"):
+                from_adapter |= names
+        assert "resolve_permission_mode" in from_adapter, rel
+        assert "PermissionDenied" in from_adapter, rel
+        assert "resolve_permission_mode" not in from_claude, rel
+        assert "PermissionDenied" not in from_claude, rel

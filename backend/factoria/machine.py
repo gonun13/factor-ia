@@ -47,9 +47,9 @@ from .models import SkillNote
 CONTRACT = """\
 ## The machine contract
 
-You are one machine on a line. What you were told above is a skill you are
-wearing; this is the condition you wear it under, and it holds whatever the
-skill says.
+You are one machine on a line. What you were told above is a skill
+determining your behavior. This is the condition it operates under, and it
+holds whatever the skill says.
 
 - **The request is the whole request.** Nothing triggered you and nothing will
   follow up. You were drawn onto this line, and this is your turn.
@@ -61,12 +61,14 @@ skill says.
   next machine, or to a person at a sign-off — and not into a conversation:
   no greeting, no sign-off, no offer of further work, and no question, because
   nobody will answer it.
-- **The work is the files you change.** Leave them in the working tree. The
-  line commits what it finds there, on the run's own branch, after the last
-  machine — so do not commit, stash or merge, and pushing, branching and
-  checking out are denied to you outright. Your working directory is this run's
-  own worktree, and nothing outside it is in reach unless you were handed a
-  path.\
+- **Change only what your skill tells you to.** Many skills on this line
+  change nothing at all — if yours is one of them, that is not a shortfall to
+  correct, it is the job done. Where your skill does have you change files,
+  leave them in the working tree; the line commits what it finds there, on the
+  run's own branch, after the last machine. Either way: do not commit, stash
+  or merge, and pushing, branching and checking out are denied to you
+  outright. Your working directory is this run's own worktree, and nothing
+  outside it is in reach unless you were handed a path.\
 """
 
 

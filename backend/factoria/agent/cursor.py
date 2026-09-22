@@ -573,18 +573,29 @@ class CursorRun:
             tail = (reaped - turn_at) if turn_at is not None else 0.0
             logger.log(
                 logging.WARNING if tail > SLOW_HANDOVER_S or not drained else logging.INFO,
-                "cursor spawn %s handover %.1fs after the turn ended: "
-                "stdout EOF +%.1fs, stderr EOF +%.1fs, child reaped +%.1fs%s",
-                self.session_id[:8],
-                tail,
-                (stdout_done - turn_at) if (stdout_done is not None and turn_at is not None) else -1.0,
-                (stderr_done - turn_at) if (stderr_done is not None and turn_at is not None) else -1.0,
-                (reaped - turn_at) if turn_at is not None else -1.0,
-                # A `-1.0` above is now the ordinary reading of this line rather
-                # than a missing measurement: the stream never reached EOF, and
-                # the run went on without it. Said in words so nobody has to
-                # know that to read the log.
-                "" if drained else " — a descendant still holds a stream open; drained and moved on",
+                "cursor spawn handover",
+                extra={
+                    "event": "cursor.handover",
+                    "session_id": self.session_id[:8],
+                    "tail_s": round(tail, 1),
+                    "stdout_eof_s": round(
+                        (stdout_done - turn_at)
+                        if (stdout_done is not None and turn_at is not None)
+                        else -1.0,
+                        1,
+                    ),
+                    "stderr_eof_s": round(
+                        (stderr_done - turn_at)
+                        if (stderr_done is not None and turn_at is not None)
+                        else -1.0,
+                        1,
+                    ),
+                    "reaped_s": round(
+                        (reaped - turn_at) if turn_at is not None else -1.0,
+                        1,
+                    ),
+                    "drained": drained,
+                },
             )
         except asyncio.CancelledError:
             await proc.terminate_group(process)

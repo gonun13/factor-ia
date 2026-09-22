@@ -1,0 +1,162 @@
+#!/usr/bin/env sh
+# Reclaim what finished runs left behind under the workspace's `_runs/`.
+#
+#   bin/tidy                    preview — prints what would go, changes nothing
+#   bin/tidy --yes              act on what the preview just showed
+#   bin/tidy --days N           age floor for discarding a kept run (default 7)
+#   bin/tidy --project <id>     one project rather than the whole workspace
+#   bin/tidy --branches         with --yes, also remove the refs the server
+#                               named as safe, with `git branch -d`
+#
+# **Preview is the default, and that is not politeness.** Nothing is committed
+# until a run reaches its output node, so a kept worktree can be the only copy
+# of expensive work in the world. The server decides what is offered, spares
+# the most recent resumable run of every factory at any age, and says why for
+# everything it holds back; this script asks and prints.
+#
+# The two halves are deliberately in different places. Discarding a run and
+# sweeping a directory go through the app, which owns `_runs/` — so a discard
+# is the same Cancel the canvas offers and worktree removal keeps one
+# implementation. Deleting a ref never goes through the app (`gitwork` refuses
+# `-d`/`-D` outright); it happens here, on the host, with lowercase `-d` so git
+# itself refuses a branch whose work was never merged.
+set -eu
+
+REPO_ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+cd "$REPO_ROOT"
+
+BASE="${FACTOR_IA_BASE:-http://127.0.0.1:8000}"
+WORKSPACE_HOST="${FACTOR_IA_WORKSPACE_HOST:-$REPO_ROOT/../factor-ia-workspace}"
+
+# The container's view of the workspace, which is what the server reports paths
+# in. Translated to the host's before any git command runs, and never guessed
+# at: a path that does not start with this is skipped and said aloud.
+CONTAINER_WORKSPACE=/workspace
+
+DAYS=7
+PROJECT=""
+ACT=""
+BRANCHES=""
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --yes) ACT=1 ;;
+    --branches) BRANCHES=1 ;;
+    --days)
+      shift
+      [ $# -gt 0 ] || { echo "factor-ia: --days needs a number" >&2; exit 1; }
+      DAYS="$1"
+      ;;
+    --project)
+      shift
+      [ $# -gt 0 ] || { echo "factor-ia: --project needs a project id" >&2; exit 1; }
+      PROJECT="$1"
+      ;;
+    -h|--help)
+      sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'
+      exit 0
+      ;;
+    *)
+      echo "factor-ia: unknown option: $1" >&2
+      echo "  bin/tidy --help" >&2
+      exit 1
+      ;;
+  esac
+  shift
+done
+
+case "$DAYS" in
+  ''|*[!0-9]*) echo "factor-ia: --days must be a whole number of days: $DAYS" >&2; exit 1 ;;
+esac
+
+QUERY="older_than_days=$DAYS"
+[ -n "$PROJECT" ] && QUERY="$QUERY&project_id=$PROJECT"
+
+# jq is not assumed: this must run on a machine that only has curl. The server
+# renders the preview as text for exactly this reason, so the only thing parsed
+# here is a scalar off a known line.
+field() { sed -n "s/.*\"$2\"[[:space:]]*:[[:space:]]*\"\{0,1\}\([^\",}]*\)\"\{0,1\}.*/\1/p" <<EOF | head -n 1
+$1
+EOF
+}
+
+if ! PREVIEW=$(curl -sS --fail "$BASE/api/housekeeping?$QUERY&format=text" 2>/dev/null); then
+  echo "factor-ia: could not reach the app at $BASE" >&2
+  echo "  bin/up" >&2
+  exit 1
+fi
+
+printf '%s\n' "$PREVIEW"
+
+FINGERPRINT=$(printf '%s\n' "$PREVIEW" | sed -n 's/^fingerprint: //p' | head -n 1)
+if [ -z "$FINGERPRINT" ]; then
+  echo "factor-ia: the preview carried no fingerprint — refusing to act on it" >&2
+  exit 1
+fi
+
+if printf '%s\n' "$PREVIEW" | grep -q '^nothing to tidy\.$'; then
+  exit 0
+fi
+
+if [ -z "$ACT" ]; then
+  echo
+  echo "factor-ia: nothing was removed. Re-run with --yes to act on this list."
+  exit 0
+fi
+
+# Only when a human is there to answer; a non-interactive caller that asked for
+# --yes has already said what it wants (bin/down sets this pattern).
+if [ -t 0 ]; then
+  echo
+  echo "factor-ia: this discards the checkouts above. Their branches survive and"
+  echo "           those runs will read 'cancelled' from now on."
+  printf 'Type "discard" to confirm: '
+  read -r reply
+  if [ "$reply" != "discard" ]; then
+    echo "factor-ia: cancelled" >&2
+    exit 1
+  fi
+fi
+
+BODY="{\"older_than_days\":$DAYS,\"fingerprint\":\"$FINGERPRINT\""
+[ -n "$PROJECT" ] && BODY="$BODY,\"project_id\":\"$PROJECT\""
+BODY="$BODY}"
+
+if ! RESULT=$(curl -sS --fail -X POST -H 'Content-Type: application/json' \
+    -d "$BODY" "$BASE/api/housekeeping" 2>/dev/null); then
+  echo "factor-ia: the app refused the tidy" >&2
+  echo "  Most likely the list moved since the preview, or a run is in flight." >&2
+  echo "  Re-run bin/tidy to see the current one." >&2
+  exit 1
+fi
+
+echo
+echo "factor-ia: $(field "$RESULT" detail)"
+
+[ -n "$BRANCHES" ] || exit 0
+
+# ---- the refs, which the app is not allowed to touch ------------------------
+
+echo
+echo "factor-ia: removing the branches the server named as safe"
+printf '%s\n' "$PREVIEW" | sed -n 's/^  prune  //p' | while IFS= read -r line; do
+  repo=${line%% *}
+  rest=${line#* }
+  branch=${rest%% *}
+  case "$repo" in
+    "$CONTAINER_WORKSPACE"/*) host="$WORKSPACE_HOST/${repo#"$CONTAINER_WORKSPACE"/}" ;;
+    *) echo "  skipped $branch — $repo is not under $CONTAINER_WORKSPACE"; continue ;;
+  esac
+  if [ ! -d "$host/.git" ] && [ ! -f "$host/.git" ]; then
+    echo "  skipped $branch — no git repository at $host"
+    continue
+  fi
+  git -C "$host" worktree prune
+  # Lowercase -d on purpose: git refuses a branch whose work was never merged,
+  # which is a better guard than any rule this script could carry.
+  if git -C "$host" branch -d "$branch" >/dev/null 2>&1; then
+    echo "  removed $branch"
+  else
+    echo "  kept    $branch — git refused it, so something on it is unmerged"
+  fi
+done

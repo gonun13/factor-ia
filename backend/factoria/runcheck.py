@@ -38,7 +38,7 @@ spent tokens is the expensive way to be told.
 - **The commit identity must be usable**, checked here rather than discovered
   by a `git commit` at the end of the run (`gitwork.identity`).
 - **The permission mode must be one the server hands out**, including the
-  `bypassPermissions`-shaped gate (`agent/claude.resolve_permission_mode`).
+  `bypassPermissions`-shaped gate (`agent/adapter.resolve_permission_mode`).
 - **A named skill must still be readable.** A skill is unconditional once
   attached, so a node whose skill was deleted or hand-edited into something
   unparseable has to be refused rather than run without it — and the cheap
@@ -51,7 +51,7 @@ from __future__ import annotations
 from typing import Callable
 
 from . import config, gitwork, skills, worktree
-from .agent.claude import PermissionDenied, resolve_permission_mode
+from .agent.adapter import PermissionDenied, resolve_permission_mode
 from .api import validate_graph
 from .discovery import discover_codebases
 from .paths import PathEscape, is_safe_name

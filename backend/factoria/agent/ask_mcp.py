@@ -173,11 +173,14 @@ def request(payload: dict[str, Any], *, socket_path: str) -> dict[str, Any]:
     the same bargain `resolve_permission` strikes.
 
     The run always replies inside `WAIT_SECONDS`, with the answers or with a
-    ticket, so this blocks for a bounded time by construction and the socket
-    needs no timeout of its own.
+    ticket, so this blocks for a bounded time by construction. The socket still
+    carries an explicit timeout one beat longer than that budget: if the run
+    side wedges without closing the connection, an unbounded `readline` would
+    hang the MCP server — and therefore the agent — forever.
     """
     try:
         client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        client.settimeout(WAIT_SECONDS + 5.0)
         client.connect(socket_path)
     except OSError as error:
         raise AskUnavailable(f"could not reach the run: {error}") from error
@@ -188,6 +191,8 @@ def request(payload: dict[str, Any], *, socket_path: str) -> dict[str, Any]:
         # moment a questionnaire has more than a couple of answers in it.
         with client.makefile("rb") as stream:
             line = stream.readline()
+    except TimeoutError as error:
+        raise AskUnavailable(f"the run did not answer in time: {error}") from error
     finally:
         client.close()
     if not line:
