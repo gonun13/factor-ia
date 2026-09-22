@@ -779,6 +779,26 @@ export function useRun(projectId: string, factoryId: string) {
     }
   }, [state.run?.id]);
 
+  /** Halt the run, keeping everything it has done.
+   *
+   * Sibling of `cancel`, and the difference is entirely in what is left behind
+   * (`decisions/0024`): this one keeps the worktree and leaves the run
+   * resumable, so the canvas offers Resume beside Cancel afterwards. The
+   * transcript is kept for the same reason `resume` keeps it — one run is one
+   * story, and the gap in the timings is part of it.
+   */
+  const stop = useCallback(async () => {
+    const runId = state.run?.id;
+    if (!runId) return;
+    setState((previous) => ({ ...previous, busy: true, error: null }));
+    try {
+      const run = await api.stopRun(runId);
+      setState((previous) => ({ ...previous, run, status: run.status, busy: false }));
+    } catch (cause) {
+      setState((previous) => ({ ...previous, busy: false, error: message(cause) }));
+    }
+  }, [state.run?.id]);
+
   /** Pick this run back up where the provider's allowance ran out.
    *
    * Deliberately **not** folded into `start`, though the two do almost the same
@@ -817,15 +837,23 @@ export function useRun(projectId: string, factoryId: string) {
 
   /** Whether this run is one the operator may pick back up.
    *
-   * Read off the record rather than inferred from the status, because "failed"
-   * covers both the run that broke and the run that merely ran out of
-   * allowance, and only the second is resumable. The server decides the same
-   * question the same way and has the final say — this is what draws the
-   * button, not what authorises the act. */
+   * **Every run that halted without finishing** (`decisions/0024`). This used
+   * to read `blocked_node_id` as well, on the theory that only a spent
+   * allowance was worth resuming — which left a crash, and a container
+   * restart, offering the `Run` button instead. Runs are expensive; `Run` is
+   * the wrong answer to anything that already did most of the work.
+   *
+   * The server decides the same question the same way and has the final say —
+   * this is what draws the button, not what authorises the act. */
   const resumable = useMemo(
-    () => state.status === "failed" && Boolean(state.run?.blocked_node_id),
-    [state.status, state.run?.blocked_node_id],
+    () => state.status === "stopped" || state.status === "failed",
+    [state.status],
   );
+
+  /** Whether Cancel is on offer: while a run is moving, and while a halted one
+   * is still waiting to be picked up. Not after it succeeded — there is
+   * nothing to withdraw, and the server refuses it. */
+  const cancellable = useMemo(() => live || resumable, [live, resumable]);
 
   return {
     ...state,
@@ -838,8 +866,10 @@ export function useRun(projectId: string, factoryId: string) {
     decide,
     answer,
     cancel,
+    stop,
     resume,
     resumable,
+    cancellable,
     watch,
     subscribe,
     clear,

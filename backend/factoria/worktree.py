@@ -64,12 +64,19 @@ implementation detail:
 |---|---|---|---|
 | `succeeded` | removed | removed | **kept** — it is the deliverable, and the whole point of the run |
 | `failed` | **kept** at `_runs/<run-id>/…`, path reported in `summary.md` | **kept** | kept |
+| `stopped` | **kept**, same as `failed` — a pause has a Resume behind it | **kept** | kept |
 | `cancelled` | removed — an explicit discard is what cancel *means* | removed | kept |
 
 A run's memory (`memory.py`, `_runs/<run-id>/_memory/`) follows the worktree
 column exactly, and for the same reason: it is scratch for the run, it is worth
 nothing once the run succeeded, and it is worth everything when the run failed
 and somebody has to work out what the agents thought they knew.
+
+**`stopped` and `cancelled` are both an operator pressing a button**, and they
+are on opposite rows because they are opposite decisions (`decisions/0024`):
+one says *not now*, the other says *not at all*. A run interrupted by a restart
+is `stopped` for the same reason — nobody decided anything, so nothing should
+be thrown away.
 
 Branches are never deleted, by anything, ever: `gitwork` has no code path that
 deletes a ref (it refuses `-d`/`-D`/`--delete`). A cancelled run therefore
@@ -422,6 +429,55 @@ class RunWorkspaces:
             if worktree.path and Path(worktree.path).is_dir():
                 self._made[worktree.codebase_id] = worktree
 
+    def readopt(self, made: list[RunWorktree]) -> list[str]:
+        """`adopt`, plus rebuilding the ones the cleanup policy removed.
+
+        **The restart path** (`decisions/0023`), and the reason it is a second
+        method. `adopt` serves a *blocked* resume, where the run failed and the
+        policy therefore kept everything; it is right for that door to take only
+        what is still on disk. A restart reopens runs that were **cancelled or
+        that succeeded**, and for those the policy deleted the worktree while
+        leaving the branch — `cleanup` keeps only on `failed`. So the second
+        walk finds no directory to adopt and a branch name already taken, and
+        `ensure` refuses, correctly, on both counts.
+
+        What this does is re-attach a checkout of the run's own branch at the
+        path the record names (`gitwork.attach_worktree`). The branch is where
+        the first walk's commits are, which is exactly where a restart must go
+        on writing — a restart that branched afresh would throw away the work
+        the operator kept.
+
+        Returns the ids of the codebases whose worktrees could not be rebuilt,
+        so the caller can refuse the restart with a sentence rather than let a
+        node discover it later. A repo the operator deleted, or a branch they
+        deleted, lands there.
+        """
+        unavailable: list[str] = []
+        for worktree in made:
+            if worktree.path and Path(worktree.path).is_dir():
+                self._made[worktree.codebase_id] = worktree
+                continue
+            repo, path, branch = (
+                Path(worktree.repo_path),
+                Path(worktree.path),
+                worktree.branch or self.branch,
+            )
+            if not repo.is_dir() or not branch or not gitwork.branch_exists(repo, branch):
+                unavailable.append(worktree.codebase_id)
+                continue
+            try:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                # Same reason as `ensure`: a stale admin entry from the removed
+                # worktree would make the add fail.
+                gitwork.prune_worktrees(repo)
+                gitwork.attach_worktree(repo, path, branch)
+            except Exception:  # noqa: BLE001 — reported, never raised into the walk
+                unavailable.append(worktree.codebase_id)
+                continue
+            worktree.kept = True
+            self._made[worktree.codebase_id] = worktree
+        return unavailable
+
     def ensure(self, codebase: Codebase) -> RunWorktree:
         """The worktree for this codebase in this run, creating it if needed.
 
@@ -553,7 +609,12 @@ class RunWorkspaces:
         Never raises: this runs in a run's `finally`, and a cleanup that throws
         would replace a run's real outcome with a tidying error.
         """
-        keep = status == "failed"
+        # **Stopped keeps, exactly as failed does** (`decisions/0024`). A stop
+        # is a pause with a Resume behind it, and a pause that deleted the
+        # checkout would make resuming cost a re-attach at best and the whole
+        # run at worst. A *cancel* still clears up: that one is a decision that
+        # the work is not wanted.
+        keep = status in ("failed", "stopped")
         kept: list[RunWorktree] = []
         for made in self._made.values():
             if keep:

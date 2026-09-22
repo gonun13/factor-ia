@@ -73,7 +73,11 @@ per-edge endpoints under it.
 Runs: `POST /api/projects/{id}/factories/{factory}/runs` (start — refused 422
 with every reason if the graph cannot run, 409 if one is already in flight) ·
 `POST /api/runs/{id}/input` (the one-shot request) ·
-`POST /api/runs/{id}/cancel` · `GET /api/runs`, `GET /api/runs/{id}` ·
+`POST /api/runs/{id}/cancel` ·
+`POST /api/runs/{id}/resume` (a blocked run, or — with an optional
+`{"from_node_id": …}` body — one node of a stopped run and everything below it,
+[`decisions/0023`](decisions/0023-a-run-can-be-restarted-from-a-node.md)) ·
+`GET /api/runs`, `GET /api/runs/{id}` ·
 `GET /api/runs/{id}/events` (SSE).
 
 Skills: `GET`/`POST /api/skills` · `GET`/`DELETE /api/skills/{name}` ·
@@ -428,11 +432,11 @@ seam.** `RunConfig.permission_mode` is one word every provider is handed, and
 than handed to a CLI to reject.
 
 **The opt-in also chooses the default a node that names nothing is given**
-(`adapter.default_permission_mode`): `auto` with it, `acceptEdits` without it.
+(`adapter.default_permission_mode`): `bypassPermissions` with it, `acceptEdits` without it.
 So on a container started with the flag, every agent node runs its commands
 without asking unless it names a quieter mode itself, and every run is recorded
 `dangerous` — see
-[`decisions/0022`](decisions/0022-auto-is-the-default-inside-the-container.md),
+[`decisions/0022`](decisions/0022-commands-do-not-ask-inside-the-container.md),
 which amends the blast-radius requirement in [`PROJECT.md`](PROJECT.md). It lives on the seam rather than in an adapter
 because a gate copied per provider is how two gates drift into one hole — each
 adapter maps the word it is given onto its own CLI (`--permission-mode`;

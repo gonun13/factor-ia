@@ -389,6 +389,24 @@ def add_worktree(repo: Path | str, path: Path | str, branch: str, base: str) -> 
     _git(["worktree", "add", "-b", branch, str(path), base], cwd=repo)
 
 
+def attach_worktree(repo: Path | str, path: Path | str, branch: str) -> None:
+    """`git worktree add <path> <branch>` — a checkout of a branch that already
+    exists, with no `-b`.
+
+    The restart path's counterpart to `add_worktree` (`decisions/0023`). A run
+    that was cancelled or that succeeded has had its worktree removed by the
+    cleanup policy while its **branch survives**, holding whatever it committed.
+    Restarting a node of that run must go on writing to that branch, so this
+    re-attaches a checkout of it rather than branching again — which is what
+    `add_worktree` would do, and what fails with "branch already exists".
+
+    Deliberately **not** a fallback inside `add_worktree`. Outside a restart, a
+    branch name already taken is a run that should not start, and a helper that
+    silently attached instead of refusing would erase that distinction.
+    """
+    _git(["worktree", "add", str(path), branch], cwd=repo)
+
+
 def remove_worktree(repo: Path | str, path: Path | str) -> None:
     """Discard a worktree and the admin entry and lock that go with it.
 

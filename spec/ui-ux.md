@@ -143,8 +143,8 @@ happening — each with one job:
   never over it: the run panel carries Cancel, and covering the one control that
   stops a run would be the worst thing on this screen to hide.
 
-Top-right is the **run panel**: the run as a whole — Run and Cancel, the branch
-it owns, what it cost, what is stopping it. It floats too, and it is as small as
+Top-right is the **run panel**: the run as a whole — the controls below, the
+branch it owns, what it cost, what is stopping it. It floats too, and it is as small as
 its contents; nothing here takes a permanent column, so the line is drawn across
 the whole sheet. A floating panel does cover what is under it — the chat has a
 **hide** for exactly that, and it is the way to a node the question is about.
@@ -161,11 +161,35 @@ Flow credit pushed clear of them on the same line; the **minimap** takes the
 bottom-right, which is the sheet's own corner again now that the run panel keeps
 the top edge and the timeline keeps the bottom centre.
 
-### Cancel means cancel
+### Stop is not Cancel
 
-**Cancel** stops it for real: the adapter run is interrupted, the nodes after it
-never start, and the run ends `cancelled`. Closing the tab does *not* cancel
-anything; that is what the button is for.
+Two controls, never one, and the panel shows exactly which two
+([`decisions/0024`](decisions/0024-stop-is-not-cancel.md)):
+
+| the run is | the panel offers |
+|---|---|
+| running | **■ Stop** · **✕ Cancel** |
+| stopped, or failed | **▶ Resume** · **✕ Cancel** |
+| succeeded, or cancelled | **▶ Run** |
+
+**Stop** halts it for real — the adapter run is interrupted and the nodes after
+it never start — and keeps everything: the worktree stays, and Resume picks the
+run back up rather than paying for it again.
+
+**Cancel** discards it, and asks first. The confirmation replaces the controls
+in the panel rather than covering them, and *Keep it* holds the focus, because
+the default answer to "are you sure" is no. Confirmed, the run ends `cancelled`:
+its branch and commits survive — nothing in this product deletes a branch — and
+its worktree does not.
+
+**`Run` is reachable only after an explicit Cancel, or once a run has
+succeeded.** That is the rule the whole panel exists to enforce: runs are
+expensive, and starting fresh re-pays for every node that already finished, so
+the expensive button is never one misclick from a run that stopped at its last
+node.
+
+Closing the tab does *not* stop or cancel anything; that is what the buttons are
+for.
 
 ### Late joiners see the whole run
 
@@ -173,8 +197,11 @@ Open a second tab mid-run and it catches up from the log — the run from its
 beginning, not from the moment you arrived. A reconnect resumes exactly where it
 left off, with no gap and no repeat.
 
-Restart the container mid-run and that run is marked `failed` on the way back
-up, never silently resumed.
+Restart the container mid-run and that run is marked `stopped` on the way back
+up, never silently resumed — the panel offers Resume and Cancel, and nothing
+moves until one of them is pressed. It is `stopped` rather than `failed`
+because nothing about the work went wrong, and the word is what decides which
+buttons the operator is given.
 
 ## Settings
 

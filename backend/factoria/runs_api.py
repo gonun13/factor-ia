@@ -2,8 +2,8 @@
 
 Two halves with deliberately different transports (`DESIGN.md`, Stack):
 
-- **Control is ordinary POST.** Start, submit the request, cancel. Mutating, so
-  the Origin check in `security.py` covers all three — starting a run is the
+- **Control is ordinary POST.** Start, submit the request, stop, resume, cancel.
+  Mutating, so the Origin check in `security.py` covers them all — starting a run is the
   most dangerous thing this server does, and it must not be reachable from
   another page in the operator's browser.
 - **State is SSE, one-way.** `GET /api/runs/{id}/events`. Stage 2 left GETs out
@@ -43,6 +43,7 @@ from typing import Any, AsyncIterator
 
 from fastapi import APIRouter, Header, HTTPException, Query, Request, status
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, ConfigDict
 
 from .models import Run, RunAnswer, RunDecision, RunInput
 from .orchestrator import Orchestrator, RunBusy, RunConflict, get_orchestrator
@@ -188,17 +189,49 @@ def label(filename: str | None) -> str | None:
 
 @router.post("/runs/{run_id}/cancel", response_model=Run)
 async def cancel_run(run_id: str) -> Run:
-    """Stop the run. The design names this as SSE's missing half: a client that
-    closes its tab has *not* cancelled anything, and this is how it says so."""
+    """Discard the run. The design names this as SSE's missing half: a client
+    that closes its tab has *not* cancelled anything, and this is how it says so.
+
+    **`/stop` is the one that keeps the work.** This one ends the run for good,
+    and it accepts a run that has already stopped — that is how an operator says
+    a halted run is not worth resuming (`decisions/0024`).
+    """
     try:
         return await orchestrator().cancel(run_id)
     except RunConflict as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
 
 
+class ResumeRequest(BaseModel):
+    """Optional body for a resume. Absent, or with a null node, means the
+    original form: pick the run back up where the provider's allowance stopped
+    it. Named, it restarts that node and everything below it
+    (`decisions/0023`)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    from_node_id: str | None = None
+
+
+@router.post("/runs/{run_id}/stop", response_model=Run)
+async def stop_run(run_id: str) -> Run:
+    """Halt the run without discarding it.
+
+    The other half of `cancel`, and the difference is entirely in what is left
+    behind: a stopped run keeps its worktrees and its place, and the canvas
+    offers Resume beside Cancel (`decisions/0024`). POST, and therefore behind
+    the Origin check, like every control verb here.
+    """
+    try:
+        return await orchestrator().stop(run_id)
+    except RunConflict as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+
+
 @router.post("/runs/{run_id}/resume", response_model=Run)
-async def resume_run(run_id: str) -> Run:
-    """Pick a run back up after the provider's allowance cut it short.
+async def resume_run(run_id: str, body: ResumeRequest | None = None) -> Run:
+    """Pick a run back up after the provider's allowance cut it short, or
+    restart it from a named node.
 
     POST, and therefore behind the Origin check, for the reason every other
     control verb here is: this spends money and moves a repository. It is also
@@ -206,9 +239,12 @@ async def resume_run(run_id: str) -> Run:
     and not this function decides whether a given run may be — see
     `Orchestrator.resume` for the rule and for why it does not contradict the
     durability promise about never resuming silently.
+
+    **The body is optional and defaults to the old behaviour**, so every caller
+    written before `decisions/0023` keeps working unchanged.
     """
     try:
-        return await orchestrator().resume(run_id)
+        return await orchestrator().resume(run_id, body.from_node_id if body else None)
     except RunBusy as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
     except RunConflict as exc:

@@ -113,6 +113,7 @@ surface, not over the places you thought of.**
 | the ask round-trip, or anything it touches | `test_cursor_ask.py` — the adapter's socket server and the real MCP server module driven against each other, with no CLI in the middle. **Assert on the seam's shapes** (`permission.request`, `resolve_permission`), never on anything spelled `ask_operator`: the claim under test is that the orchestrator cannot tell the providers apart |
 | a new exit for text | `test_scrub.py` — a new exit should be hard to add without noticing |
 | an API shape | `test_api.py`, `test_runs_api.py`, `test_settings_api.py` |
+| a run control, or what a halted run may do next | `test_orchestrator.py` for what stop, cancel and resume leave on disk and in the record, plus `uitests/run-controls.mjs` for which **two** buttons the panel offers — the state machine is the product rule here, and a backend test cannot see a button |
 | a rung of the system prompt, or a rule that reads a skill against one | `test_machine.py` for the ladder's order and the lint's sentences, `test_execution.py` for what actually reached the spawn — a contract nobody proved arrived is a contract that is not in force |
 
 ---

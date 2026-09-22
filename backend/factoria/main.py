@@ -44,7 +44,11 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     knowledge_store.ensure_system_bases()
     interrupted = get_orchestrator().sweep_interrupted()
     if interrupted:
-        log.warning("marked %d interrupted run(s) failed: %s", len(interrupted), ", ".join(interrupted))
+        log.warning(
+            "marked %d interrupted run(s) stopped — resume or cancel them: %s",
+            len(interrupted),
+            ", ".join(interrupted),
+        )
     yield
 
 

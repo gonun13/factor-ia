@@ -37,7 +37,15 @@ DEFAULT_PERMISSION_MODE = "acceptEdits"
 #: The operator's position (`decisions/0022`): the container is the boundary, so
 #: inside it an agent runs commands without asking rather than having every
 #: `Bash` call denied by a prompt nobody is there to answer.
-DEFAULT_DANGEROUS_PERMISSION_MODE = "auto"
+#:
+#: **`bypassPermissions`, not `auto`.** `auto` is a classifier — it approves
+#: what it judges safe and *asks* for the rest, which under an unattended spawn
+#: is a denial. Measured: a run spawned with `auto` (`session.init` confirmed
+#: the mode) still failed `uv run pytest` with "This Bash command contains
+#: multiple operations. The following part requires approval". A mode that
+#: decides per command can always refuse some command; this one is defined as
+#: never asking, which is the property an unattended factory needs.
+DEFAULT_DANGEROUS_PERMISSION_MODE = "bypassPermissions"
 
 #: Modes a node may select without an opt-in.
 SAFE_PERMISSION_MODES: frozenset[str] = frozenset({"default", "acceptEdits", "plan"})

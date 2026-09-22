@@ -619,19 +619,36 @@ def edge_outcome(edge: "Edge") -> str:
 NodeStatus = Literal["pending", "waiting_input", "running", "succeeded", "failed"]
 """The per-node state machine, unchanged since stage 2 wrote it down.
 
-Deliberately **no `cancelled`**: a cancelled node did not succeed, and giving
-the canvas a sixth colour for "failed because a human said stop" splits a state
-that behaves identically everywhere it is read. Cancellation shows up as
-`failed` with `detail` saying who stopped it, and at the *run* level — where it
-is genuinely a different outcome — as `RunStatus.cancelled`.
+Deliberately **no `cancelled`** and **no `stopped`**: a node that was halted did
+not succeed, and giving the canvas a sixth colour for "failed because a human
+said stop" splits a state that behaves identically everywhere it is read. Both
+show up as `failed` with `detail` saying what stopped it — which is also what
+lets `resume` tell a halted node from one that reached a verdict, since the
+detail is the only thing that differs. At the *run* level, where they are
+genuinely different outcomes, they are `RunStatus.cancelled` and
+`RunStatus.stopped`.
 """
 
 RunStatus = Literal[
-    "pending", "waiting_input", "running", "succeeded", "failed", "cancelled"
+    "pending", "waiting_input", "running", "succeeded", "failed", "cancelled", "stopped"
 ]
-"""A whole run's state. One member more than a node's, for the reason above."""
+"""A whole run's state. Two members more than a node's, for the reason above.
 
-TERMINAL_RUN_STATUSES: frozenset[str] = frozenset({"succeeded", "failed", "cancelled"})
+`stopped` and `cancelled` are both an operator pressing a button, and the
+difference between them is the whole of `decisions/0024`: a **stopped** run kept
+its worktree and may be resumed; a **cancelled** run was discarded and may not.
+A run interrupted by a restart is `stopped` as well — nobody decided it should
+end, so nothing about it should read as an ending.
+"""
+
+TERMINAL_RUN_STATUSES: frozenset[str] = frozenset(
+    {"succeeded", "failed", "cancelled", "stopped"}
+)
+"""Statuses at which no walk is running. **Terminal is not the same as
+finished**: `failed` and `stopped` are both terminal *and* resumable. What this
+set decides is that the run slot is free and the event stream may close, not
+that the run has nothing left to do.
+"""
 
 
 class NodeRuntime(Base):
@@ -1073,6 +1090,20 @@ class Run(Base):
     #: empty, which reads as "this run was never blocked", and is right.
     blocked_node_id: str | None = None
     blocked_reason: str = ""
+    #: The node whose failure ended the walk, when one did.
+    #:
+    #: **Not the same question as `blocked_node_id`**, which means "the provider
+    #: stopped us here". This one means "the line said no here", and `resume`
+    #: needs it for a reason that only shows up once any failed run is
+    #: resumable (`decisions/0024`): the replay keeps a node that failed on its
+    #: own terms as a `fail` verdict, so a resume that replayed *this* node
+    #: would re-derive the same failure and end again immediately, having spent
+    #: nothing and changed nothing. Named, it is re-run instead.
+    #:
+    #: Additive, like the two above: an older `run.json` loads with it empty,
+    #: which reads as "nothing here failed the run", and for a cancelled or
+    #: succeeded run that is right.
+    failed_node_id: str | None = None
     #: How many times this run has been resumed. Kept because a run record has
     #: to describe the run that actually happened, and "this one was picked up
     #: again the next morning" is part of that — the timings alone imply a gap

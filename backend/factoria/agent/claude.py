@@ -28,10 +28,12 @@ file is a node that hangs until the watchdog kills it. An unattended factory
 wants a *policy*, not a prompt with no human behind it, so:
 
 - **The opt-in chooses the default** (`default_permission_mode`, on the seam).
-  With `FACTOR_IA_DANGEROUS_PERMISSIONS=1` it is `auto`: this is automation
-  software, the container is the boundary, and an agent inside it runs its own
-  commands rather than having each one denied by a prompt with nobody behind
-  it (`decisions/0022`).
+  With `FACTOR_IA_DANGEROUS_PERMISSIONS=1` it is `bypassPermissions`: this is
+  automation software, the container is the boundary, and an agent inside it
+  runs its own commands rather than having each one denied by a prompt with
+  nobody behind it (`decisions/0022`). **Not `auto`**, which classifies per
+  command and asks for whatever it does not judge safe — measurably including
+  `uv run pytest`, which is the command a node most needs.
 - **Without the opt-in it is `acceptEdits`**, unchanged: file edits
   pre-approved, commands asking and an ask with nobody home denied rather than
   hung. A container with the gate closed behaves exactly as it did before that

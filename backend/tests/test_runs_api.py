@@ -774,12 +774,36 @@ def test_resume_carries_a_blocked_run_to_the_end(runnable: TestClient) -> None:
     assert any("resumed at" in (event.get("detail") or "") for event in events)
 
 
-def test_resume_refuses_a_run_that_merely_crashed(runnable: TestClient) -> None:
-    """409, not 200: a crash is not a thing you retry your way out of."""
+def test_resume_accepts_a_run_that_crashed(runnable: TestClient) -> None:
+    """200, not 409 — **reversed by `decisions/0024`**.
+
+    A crash used to be refused on the grounds that retrying a CLI that dies is
+    not a fix. The operator's answer is that it is their call and their money:
+    the node is re-run, and a second crash costs one node rather than a run.
+    """
     record = _blocked(runnable, script="failure")
     assert record["status"] == "failed"
     assert record["blocked_node_id"] is None
+    assert record["failed_node_id"] == "n-agent"
+    assert runnable.post(f"/api/runs/{record['id']}/resume").status_code == 200
+
+
+def test_a_succeeded_run_is_neither_resumable_nor_cancellable(
+    runnable: TestClient,
+) -> None:
+    """The other end of the same rule: Run is what a finished run offers.
+
+    Cancelling one would rewrite the record of work that actually landed, and
+    resuming one has nothing to do."""
+    started = runnable.post(
+        "/api/projects/demo/factories/main/runs"
+    ).json()
+    runnable.post(f"/api/runs/{started['id']}/input", json={"text": "go"})
+    record = runnable.get(f"/api/runs/{started['id']}").json()
+    if record["status"] != "succeeded":  # pragma: no cover - guard, not the claim
+        pytest.skip(f"run ended {record['status']}")
     assert runnable.post(f"/api/runs/{record['id']}/resume").status_code == 409
+    assert runnable.post(f"/api/runs/{record['id']}/cancel").status_code == 409
 
 
 def test_resume_of_an_unknown_run_is_a_conflict_not_a_crash(

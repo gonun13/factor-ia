@@ -264,11 +264,16 @@ def test_cancelling_a_finished_run_is_a_conflict(orch: Orchestrator, factory: Fa
 # ---- durability ------------------------------------------------------------
 
 
-def test_a_run_interrupted_by_a_restart_is_marked_failed(
+def test_a_run_interrupted_by_a_restart_is_marked_stopped(
     orch: Orchestrator, factory: Factory, data_dir: Path, tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """`DESIGN.md`: never silently resumed.
+    """`DESIGN.md`: never silently resumed — and **stopped**, not failed.
+
+    `decisions/0024`: nothing about the work went wrong, a container was
+    restarted, and the word decides what the operator is offered. Marked
+    `failed` this left the canvas showing Run, which is the most expensive
+    possible answer to an interruption that cost nothing.
 
     The restart is simulated the way a restart actually happens — by copying
     `/data` while a run is genuinely mid-agent and booting a new orchestrator
@@ -292,20 +297,22 @@ def test_a_run_interrupted_by_a_restart_is_marked_failed(
     assert RunStore().read(run_id).status == "running", "must look live before the sweep"
     partial = RunLog(run_id).replay()
     assert partial[-1].type != "run.status" or partial[-1].status not in (
-        "succeeded", "failed", "cancelled"
+        "succeeded", "failed", "cancelled", "stopped"
     ), "the log should stop mid-sentence"
 
     fresh = Orchestrator(store=orch.store)
     assert fresh.sweep_interrupted() == [run_id]
 
     swept = RunStore().read(run_id)
-    assert swept.status == "failed"
+    assert swept.status == "stopped"
     assert "restart" in (swept.detail or "")
+    # The *node* is still `failed` — `NodeStatus` has no `stopped`, on purpose
+    # (`models.NodeStatus`), and the detail is what says which kind it was.
     assert swept.node_run("n-agent").status == "failed"
     # The log ends with the same terminal event a live finish would have
     # written, continuing the same seq sequence rather than restarting it.
     tail = RunLog(run_id).replay()
-    assert tail[-1].type == "run.status" and tail[-1].status == "failed"
+    assert tail[-1].type == "run.status" and tail[-1].status == "stopped"
     assert [event.seq for event in tail] == list(range(1, len(tail) + 1))
     # Idempotent: a second boot has nothing left to sweep.
     assert Orchestrator(store=orch.store).sweep_interrupted() == []
@@ -598,11 +605,18 @@ def test_resume_replays_a_finished_node_instead_of_paying_for_it_again(
     assert replayed.lap == 1
 
 
-def test_only_a_blocked_run_may_be_resumed(
+def test_a_crashed_run_may_be_resumed_and_re_runs_the_node_that_broke(
     orch: Orchestrator, factory: Factory, test_store: Store
 ) -> None:
-    """A crash is still not resumable — you cannot retry your way out of a CLI
-    that dies, which is the rule `_run_agent` has always stated."""
+    """**Reverses the old rule** (`decisions/0024`). A crash used to be the one
+    thing no door would take, on the grounds that you cannot retry your way out
+    of a CLI that dies. You can: the agent is re-run, and if it dies again the
+    run fails again having spent one node.
+
+    What the reversal drags in is the assertion below it. The failed node must
+    be **re-run**, not replayed — replaying the verdict that ended the walk
+    would end the second walk in the same place, having achieved nothing.
+    """
     factory.nodes[1].definition.config = {"fake_script": "failure"}
     test_store.save_factory(factory)
 
@@ -613,10 +627,23 @@ def test_only_a_blocked_run_may_be_resumed(
         crashed = orch.get(run.id)
         assert crashed.status == "failed"
         assert crashed.blocked_node_id is None
-        with pytest.raises(RunConflict):
-            await orch.resume(crashed.id)
+        # Recorded by the walk, and the whole reason a plain resume can work.
+        assert crashed.failed_node_id == "n-agent"
+        session = crashed.node_run("n-agent").session_id
 
-    asyncio.run(go())
+        # The fix the operator went away and made.
+        factory.nodes[1].definition.config = {"fake_script": "success"}
+        test_store.save_factory(factory)
+
+        resumed = await orch.resume(crashed.id)
+        await asyncio.wait_for(orch._active[resumed.id].task, 10)
+        return orch.get(run.id), session
+
+    run, before = asyncio.run(go())
+    assert run.resumed_count == 1
+    # It ran again rather than answering out of the record.
+    assert run.node_run("n-agent").session_id != before
+    assert run.node_run("n-agent").status == "succeeded"
 
 
 def test_resume_refuses_a_run_whose_node_is_gone(
@@ -637,12 +664,415 @@ def test_resume_refuses_a_run_whose_node_is_gone(
 def test_a_cancelled_run_withdraws_its_offer_to_resume(
     orch: Orchestrator, factory: Factory, test_store: Store
 ) -> None:
-    """A cancel is a decision to stop, and it outranks the block."""
+    """A cancel is a decision to stop, and it outranks the block.
+
+    **Cancel now accepts a halted run** (`decisions/0024`) — that is how an
+    operator says a stopped run is not worth resuming — so what this pins is
+    the consequence rather than a refusal to act: after the cancel, neither
+    door will take it.
+    """
     run = _blocked_run(orch, factory, test_store)
     assert run.blocked_node_id == "n-agent"
 
     async def go():
+        cancelled = await orch.cancel(run.id)
+        assert cancelled.status == "cancelled"
+        # The offer is gone from the record, not merely refused at the door.
+        assert cancelled.blocked_node_id is None
+        assert cancelled.blocked_reason == ""
+        assert cancelled.failed_node_id is None
         with pytest.raises(RunConflict):
-            await orch.cancel(run.id)  # already terminal
+            await orch.resume(run.id)
+        # And the worktree went with it, which is what cancel means.
+        assert all(not worktree.kept for worktree in cancelled.worktrees)
 
     asyncio.run(go())
+
+
+# ---- restarting from a node (decisions/0023) -------------------------------
+
+
+def _line_of_two(test_store: Store, orch: Orchestrator) -> Factory:
+    """in → first → second → out. `second` is the one that edits a file, so the
+    first walk has something to commit."""
+    loaded = test_store.get_factory("demo", "main")
+    loaded.nodes = [
+        Node(id="n-in", definition=NodeDefinition(type="input", label="Request")),
+        Node(
+            id="n-first",
+            definition=NodeDefinition(
+                type="agent",
+                label="First",
+                codebase_id="project-a",
+                config={"fake_script": "echo", "fake_cost": 0.5},
+            ),
+        ),
+        Node(
+            id="n-second",
+            definition=NodeDefinition(
+                type="agent",
+                label="Second",
+                codebase_id="project-a",
+                config={"fake_script": "success", "fake_cost": 0.25},
+            ),
+        ),
+        Node(id="n-out", definition=NodeDefinition(type="output", label="Commit")),
+    ]
+    loaded.edges = [
+        Edge(id="e1", source="n-in", target="n-first"),
+        Edge(id="e2", source="n-first", target="n-second"),
+        Edge(id="e3", source="n-second", target="n-out"),
+    ]
+    return test_store.save_factory(loaded)
+
+
+def test_downstream_of_is_everything_a_node_could_reach() -> None:
+    from factoria.runcheck import downstream_of
+
+    nodes = [
+        Node(id=n, definition=NodeDefinition(type="agent", label=n))
+        for n in ("a", "b", "c", "d")
+    ]
+    edges = [
+        Edge(id="e1", source="a", target="b"),
+        Edge(id="e2", source="b", target="c"),
+        Edge(id="e3", source="a", target="d"),
+    ]
+    assert downstream_of("a", nodes, edges) == {"b", "c", "d"}
+    assert downstream_of("b", nodes, edges) == {"c"}
+    assert downstream_of("c", nodes, edges) == set()
+
+
+def test_a_restart_re_runs_the_named_node_and_everything_below_it(
+    orch: Orchestrator, factory: Factory, test_store: Store
+) -> None:
+    """The point of the feature, and the one thing a blocked resume does not do:
+    a fresh answer invalidates every verdict under it."""
+    _line_of_two(test_store, orch)
+
+    async def first():
+        run = await orch.start("demo", "main")
+        await orch.submit_input(run.id, "tidy the readme")
+        await asyncio.wait_for(orch._active[run.id].task, 10)
+        return orch.get(run.id)
+
+    done = asyncio.run(first())
+    assert done.status == "succeeded", done.detail
+    before = {
+        node_id: done.node_run(node_id).session_id
+        for node_id in ("n-first", "n-second")
+    }
+
+    async def again():
+        run = await orch.resume(done.id, "n-first")
+        await asyncio.wait_for(orch._active[run.id].task, 10)
+        return orch.get(run.id)
+
+    run = asyncio.run(again())
+    assert run.resumed_count == 1
+    # Both ran again — the named node because it was named, the one below it
+    # because its predecessor's answer is new.
+    assert run.node_run("n-first").session_id != before["n-first"]
+    assert run.node_run("n-second").session_id != before["n-second"]
+    # **Not asserted: that the run succeeded.** The output node is downstream
+    # too, so it runs again and finds the same tree it already committed —
+    # which the product deliberately fails rather than tick over an empty
+    # branch (`orchestrator`, `_run_output`). Restarting a line that ends in a
+    # commit is an honest failure at the commit, and `decisions/0023` says so
+    # rather than pretending otherwise.
+    assert run.node_run("n-out").status in ("succeeded", "failed")
+
+
+def test_a_restart_replays_what_sits_above_the_named_node(
+    orch: Orchestrator, factory: Factory, test_store: Store
+) -> None:
+    """The economic half, unchanged from the blocked door: nothing above the
+    restart point is paid for twice."""
+    _line_of_two(test_store, orch)
+
+    async def first():
+        run = await orch.start("demo", "main")
+        await orch.submit_input(run.id, "tidy the readme")
+        await asyncio.wait_for(orch._active[run.id].task, 10)
+        return orch.get(run.id)
+
+    done = asyncio.run(first())
+    kept = done.node_run("n-first")
+    cost, session, text = kept.cost_usd, kept.session_id, kept.output_text
+
+    async def again():
+        run = await orch.resume(done.id, "n-second")
+        await asyncio.wait_for(orch._active[run.id].task, 10)
+        return orch.get(run.id)
+
+    run = asyncio.run(again())
+    replayed = run.node_run("n-first")
+    assert (replayed.cost_usd, replayed.session_id, replayed.output_text) == (
+        cost,
+        session,
+        text,
+    )
+
+
+def test_a_cancelled_run_can_be_restarted_from_a_node(
+    orch: Orchestrator, factory: Factory, test_store: Store
+) -> None:
+    """The case the blocked door refuses by name, and the reason this one
+    exists: an operator stopped the run, fixed something, and wants one machine
+    to go again."""
+
+    async def go():
+        run = await orch.start("demo", "main")
+        cancelled = await orch.cancel(run.id)
+        assert cancelled.status == "cancelled"
+        # The old door still refuses it, untouched.
+        with pytest.raises(RunConflict):
+            await orch.resume(run.id)
+        # The new one does not.
+        resumed = await orch.resume(run.id, "n-agent")
+        # This run was stopped before its request was ever submitted, so the
+        # resume parks on the form again rather than running a worker with no
+        # instructions — see
+        # `test_a_run_stopped_at_its_request_asks_again_instead_of_running_empty`.
+        assert resumed.status == "waiting_input"
+        await orch.submit_input(run.id, "tidy the readme")
+        await asyncio.wait_for(orch._active[run.id].task, 10)
+        return orch.get(run.id)
+
+    run = asyncio.run(go())
+    assert run.resumed_count == 1
+    assert run.node_run("n-agent").status in ("succeeded", "failed")
+
+
+def test_a_restart_refuses_a_node_that_is_not_on_the_canvas(
+    orch: Orchestrator, factory: Factory, test_store: Store
+) -> None:
+    async def go():
+        run = await orch.start("demo", "main")
+        await orch.cancel(run.id)
+        with pytest.raises(RunConflict) as refused:
+            await orch.resume(run.id, "n-nonexistent")
+        assert "n-nonexistent" in str(refused.value)
+
+    asyncio.run(go())
+
+
+def test_a_loop_does_not_drag_the_whole_factory_into_a_restart() -> None:
+    """A reviewer's `fail` belt points back up the line. Following it made
+    "restart the tester" mean "re-run the scoping interview", which is the bug
+    this exclusion fixes — measured on the factory the feature was built for.
+    """
+    from factoria.runcheck import downstream_of
+
+    nodes = [
+        Node(id="n-in", definition=NodeDefinition(type="input", label="Request")),
+        Node(
+            id="n-dev",
+            definition=NodeDefinition(type="agent", label="Dev", config={"kind": "worker"}),
+        ),
+        Node(
+            id="n-test",
+            definition=NodeDefinition(
+                type="agent", label="Tester", config={"kind": "reviewer"}
+            ),
+        ),
+        Node(id="n-out", definition=NodeDefinition(type="output", label="Commit")),
+    ]
+    edges = [
+        Edge(id="e1", source="n-in", target="n-dev"),
+        Edge(id="e2", source="n-dev", target="n-test"),
+        Edge(id="e3", source="n-test", target="n-out", source_handle="success"),
+        # The loop: the tester sends the work back to the developer.
+        Edge(id="e4", source="n-test", target="n-dev", source_handle="fail"),
+    ]
+    # Forward only. The developer is *above* the tester even though a belt runs
+    # from one to the other, so its record is replayed rather than cleared.
+    assert downstream_of("n-test", nodes, edges) == {"n-out"}
+
+
+def test_a_cancelled_node_is_not_replayed_as_a_verdict(
+    orch: Orchestrator, factory: Factory, test_store: Store
+) -> None:
+    """A cancel is an operator pressing stop, not a machine reaching an answer.
+
+    Replaying one as `fail` told a second walk that a reviewer had said no when
+    nobody had — found by cancelling a restart mid-interview and watching the
+    next restart fail at a node that had never failed.
+    """
+    from factoria.orchestrator import CANCELLED, UNFINISHED
+
+    assert CANCELLED in UNFINISHED
+
+    async def go():
+        run = await orch.start("demo", "main")
+        await orch.cancel(run.id)
+        stopped = orch.get(run.id)
+        # The shape the bug needed: `failed`, with a detail that is not a verdict.
+        marked = [n for n in stopped.node_runs if n.detail == CANCELLED]
+        for node_run in marked:
+            assert node_run.status == "failed"
+        resumed = await orch.resume(run.id, "n-agent")
+        # Parked on the request again, for the same reason as above.
+        assert resumed.status == "waiting_input"
+        await orch.submit_input(run.id, "tidy the readme")
+        await asyncio.wait_for(orch._active[run.id].task, 10)
+        return orch.get(run.id)
+
+    run = asyncio.run(go())
+    # Nothing was carried forward as a "no" that nobody said.
+    assert run.detail != "cancelled" or run.status != "failed"
+
+
+# ---- stop is not cancel (decisions/0024) -----------------------------------
+
+
+def test_a_stop_keeps_the_worktree_and_a_cancel_does_not(
+    orch: Orchestrator, factory: Factory, test_store: Store, monkeypatch
+) -> None:
+    """The change that makes Resume cheap. A stop that deleted the checkout
+    would make picking the run back up cost a re-attach at best."""
+    monkeypatch.setenv("FACTOR_IA_FAKE_DELAY", "0.05")
+
+    async def go(halt):
+        run = await orch.start("demo", "main")
+        await orch.submit_input(run.id, "tidy the readme")
+        await asyncio.sleep(0.08)
+        await halt(run.id)
+        return orch.get(run.id)
+
+    stopped = asyncio.run(go(orch.stop))
+    assert stopped.status == "stopped"
+    assert stopped.worktrees and all(w.kept for w in stopped.worktrees)
+    assert all(Path(w.path).is_dir() for w in stopped.worktrees)
+
+    cancelled = asyncio.run(go(orch.cancel))
+    assert cancelled.status == "cancelled"
+    assert all(not w.kept for w in cancelled.worktrees)
+
+
+def test_a_stopped_run_resumes_and_re_runs_what_was_in_flight(
+    orch: Orchestrator, factory: Factory, test_store: Store, monkeypatch
+) -> None:
+    """Stop, then Resume: the node that was mid-turn runs again, because a node
+    nobody let finish reached no outcome to replay (`UNFINISHED`)."""
+    monkeypatch.setenv("FACTOR_IA_FAKE_DELAY", "0.05")
+
+    async def go():
+        run = await orch.start("demo", "main")
+        await orch.submit_input(run.id, "tidy the readme")
+        await asyncio.sleep(0.08)
+        await orch.stop(run.id)
+        halted = orch.get(run.id)
+        assert halted.status == "stopped"
+        assert halted.node_run("n-agent").detail == "stopped"
+
+        monkeypatch.delenv("FACTOR_IA_FAKE_DELAY", raising=False)
+        resumed = await orch.resume(run.id)
+        await asyncio.wait_for(orch._active[resumed.id].task, 10)
+        return orch.get(run.id)
+
+    run = asyncio.run(go())
+    assert run.resumed_count == 1
+    assert run.node_run("n-agent").status == "succeeded"
+
+
+def test_a_stopped_node_is_not_replayed_as_a_verdict(
+    orch: Orchestrator, factory: Factory, test_store: Store
+) -> None:
+    """The sibling of the cancelled-node rule. `NodeStatus` has no `stopped`,
+    so the detail is the only thing separating "nobody let it finish" from "it
+    said no" — and replaying the second when it was the first tells a second
+    walk a reviewer rejected work nobody ever judged."""
+    from factoria.orchestrator import STOPPED, UNFINISHED
+
+    assert STOPPED in UNFINISHED
+
+
+def test_cancel_takes_a_run_that_has_already_stopped(
+    orch: Orchestrator, factory: Factory, test_store: Store, monkeypatch
+) -> None:
+    """How an operator says a halted run is not worth resuming. Refusing this
+    because no walk is in flight left the canvas with no way to say it."""
+    monkeypatch.setenv("FACTOR_IA_FAKE_DELAY", "0.05")
+
+    async def go():
+        run = await orch.start("demo", "main")
+        await orch.submit_input(run.id, "tidy the readme")
+        await asyncio.sleep(0.08)
+        await orch.stop(run.id)
+        assert orch.get(run.id).status == "stopped"
+        cancelled = await orch.cancel(run.id)
+        # And now neither door takes it.
+        with pytest.raises(RunConflict):
+            await orch.resume(run.id)
+        return cancelled
+
+    cancelled = asyncio.run(go())
+    assert cancelled.status == "cancelled"
+    assert all(not w.kept for w in cancelled.worktrees)
+    assert all(not Path(w.path).is_dir() for w in cancelled.worktrees)
+
+
+def test_an_interrupted_run_is_resumable_rather_than_a_dead_end(
+    orch: Orchestrator, factory: Factory, data_dir: Path, tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A restart cost nothing, so it must not cost the run. Marked `failed`
+    this left the canvas offering Run — the most expensive possible answer."""
+    monkeypatch.setenv("FACTOR_IA_FAKE_DELAY", "0.05")
+
+    async def go():
+        run = await orch.start("demo", "main")
+        await orch.submit_input(run.id, "x")
+        await asyncio.sleep(0.12)
+        shutil.copytree(data_dir, tmp_path / "after-restart")
+        await orch.cancel(run.id)
+        return run.id
+
+    run_id = asyncio.run(go())
+    monkeypatch.setattr(config, "DATA_DIR", tmp_path / "after-restart")
+    fresh = Orchestrator(store=orch.store)
+    assert fresh.sweep_interrupted() == [run_id]
+
+    swept = RunStore().read(run_id)
+    assert swept.status == "stopped"
+    # Terminal — no walk is running — and resumable all the same. The two are
+    # not the same question (`models.TERMINAL_RUN_STATUSES`).
+    assert swept.is_terminal is True
+
+
+def test_a_run_stopped_at_its_request_asks_again_instead_of_running_empty(
+    orch: Orchestrator, factory: Factory, test_store: Store
+) -> None:
+    """**The bug this closes.** A run stopped while its request form was open
+    came back with the walk started and `input_text` never submitted, so the
+    first worker ran with no instructions — an agent spending money on nothing,
+    which is the one thing a factory must never do.
+
+    A node nobody answered reached no outcome, so it is asked again.
+    """
+
+    async def go():
+        run = await orch.start("demo", "main")
+        assert run.status == "waiting_input"
+        # Stopped *before* the request is submitted: nothing is walking yet.
+        await orch.stop(run.id)
+        assert orch.get(run.id).status == "stopped"
+
+        resumed = await orch.resume(run.id)
+        # Not running: parked on the form again, with no walk in flight.
+        assert resumed.status == "waiting_input"
+        assert resumed.input_text is None
+        assert orch._active[run.id].task is None
+        assert resumed.node_run("n-in").status == "waiting_input"
+
+        # And answering it starts the walk, through the same door a fresh run
+        # goes through.
+        await orch.submit_input(run.id, "tidy the readme")
+        await asyncio.wait_for(orch._active[run.id].task, 10)
+        return orch.get(run.id)
+
+    run = asyncio.run(go())
+    assert run.input_text == "tidy the readme"
+    # The worker was told what to do, which is the whole point.
+    assert run.node_run("n-agent").status == "succeeded"

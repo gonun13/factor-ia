@@ -47,4 +47,6 @@ original keeps its number.
 | [0019](0019-a-person-may-close-a-loop.md) | A person may close a loop, and is their own cap | supersedes part of `0009` |
 | [0020](0020-what-arrived-is-recorded-with-the-text.md) | What arrived is recorded, with the text | stands |
 | [0021](0021-the-machine-contract.md) | The machine contract, stated at spawn time | stands |
-| [0022](0022-auto-is-the-default-inside-the-container.md) | `auto` is the default inside the container | amends `PROJECT.md` blast radius |
+| [0022](0022-commands-do-not-ask-inside-the-container.md) | Commands do not ask inside the container | amends `PROJECT.md` blast radius |
+| [0023](0023-a-run-can-be-restarted-from-a-node.md) | A run can be restarted from a node | stands |
+| [0024](0024-stop-is-not-cancel.md) | Stop is not Cancel | amends `PROJECT.md` durability |

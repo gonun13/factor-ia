@@ -205,6 +205,31 @@ DID_NOT_FINISH = "did not finish"
 broke under it. Named because `resume` has to tell it apart from a node that
 reached a real outcome: one gets replayed, the other gets run again."""
 
+CANCELLED = "cancelled"
+"""What a node that was interrupted by a cancel is marked `failed` with.
+
+Its own name for the same reason `DID_NOT_FINISH` has one, and it was missing:
+a cancelled node is `failed` like any other, so `resume` replayed it as a
+**verdict** — a second walk was told a reviewer had said no when in fact an
+operator had pressed stop. Found by cancelling a restart mid-interview and
+watching the next restart fail at a scope node that had never failed."""
+
+STOPPED = "stopped"
+"""What a node interrupted by the Stop button is marked `failed` with.
+
+Distinct from `CANCELLED` because the *run* statuses differ and a node's detail
+is what explains its run's: a stopped run is picked back up, a cancelled one is
+not (`decisions/0024`)."""
+
+UNFINISHED = frozenset({DID_NOT_FINISH, CANCELLED, STOPPED})
+"""The details that mean *no outcome was reached*, whatever wrote them. A node
+carrying one is run again rather than replayed.
+
+This is the whole mechanism behind Stop and Resume: `NodeStatus` has no
+`stopped`, deliberately (`models.NodeStatus`), so a halted node is `failed` like
+any other and its **detail** is the only thing separating "nobody asked it yet"
+from "it said no"."""
+
 
 class RunBusy(Exception):
     """One run at a time. Carries the id of the run holding the slot."""
@@ -440,7 +465,12 @@ class ActiveRun:
     workspaces: RunWorkspaces | None = None
     task: asyncio.Task[None] | None = None
     agent_run: AgentRun | None = None
+    #: Halted by an operator. `cancelled` discards the run; `stopped` keeps it
+    #: for a resume. Two flags rather than one enum because `_walk` sets
+    #: `cancelled` from its own `CancelledError` handler, where the distinction
+    #: does not exist and the safe reading is the destructive one.
     cancelled: bool = False
+    stopped: bool = False
     input_ready: asyncio.Event = field(default_factory=asyncio.Event)
     #: The walk's own bookkeeping, by id. A belt is `taken` when its source ran
     #: and its outcome matched the belt's port, and `dead` when it did not — or
@@ -909,12 +939,85 @@ class Orchestrator:
         pending.future.set_result(cleaned)
         return state.run
 
+    async def stop(self, run_id: str) -> Run:
+        """Halt the run, keeping everything it has done so far.
+
+        **The difference from `cancel` is what happens afterwards**, not what
+        happens to the process: both interrupt the same way, and `_halt` is the
+        one place that does it. A stopped run keeps its worktrees
+        (`RunWorkspaces.cleanup`), keeps any block it was carrying, and is
+        offered a Resume; a cancelled run is discarded (`decisions/0024`).
+        """
+        return await self._halt(run_id, discard=False)
+
     async def cancel(self, run_id: str) -> Run:
-        """Stop the run and everything it spawned.
+        """Discard the run and everything it spawned.
+
+        Unlike `stop`, this also accepts a run that is **already finished** —
+        stopped by the button, or left behind by a restart. That is the Cancel
+        the operator reaches for when they have decided a halted run is not
+        worth resuming, and refusing it because no walk is in flight would leave
+        the canvas with no way to say so.
+        """
+        if run_id not in self._active:
+            return await self._discard_finished(run_id)
+        return await self._halt(run_id, discard=True)
+
+    async def _discard_finished(self, run_id: str) -> Run:
+        """Cancel a run that has already stopped: bookkeeping and a cleanup.
+
+        No task to interrupt and no state to unwind — what is left is to say the
+        run will not be picked up again, and to apply the cleanup policy a
+        cancel has always applied. The branch survives, as every branch in this
+        codebase does; the worktree does not.
+        """
+        run = self._runs.read(run_id)
+        if run is None:
+            raise RunConflict(f"no such run: {run_id}")
+        if not run.is_terminal:
+            # A run the registry thinks is live but nothing is walking: the
+            # sweeper's job, not this one's, and guessing here would race it.
+            raise RunConflict(
+                f"run {run_id} is {run.status} but nothing is running it — "
+                "restart the server to have it swept"
+            )
+        if run.status not in ("failed", "stopped"):
+            # **Only a run that could still be resumed can be cancelled.** A
+            # succeeded run has nothing to withdraw and rewriting it
+            # `cancelled` would destroy the record of work that landed; an
+            # already-cancelled one is being asked twice.
+            raise RunConflict(
+                f"run {run_id} already finished as {run.status}"
+            )
+
+        workspaces = RunWorkspaces(run_id=run.id, branch=run.branch or "")
+        workspaces.adopt(run.worktrees)
+        kept = workspaces.cleanup("cancelled")
+        run.worktrees = workspaces.all or run.worktrees
+        for worktree in run.worktrees:
+            worktree.kept = any(other.path == worktree.path for other in kept)
+        run.status = "cancelled"
+        run.detail = "cancelled"
+        # The offer is withdrawn, both kinds of it: this run will not be
+        # resumed and the record should not keep implying it might.
+        run.blocked_node_id = None
+        run.blocked_reason = ""
+        run.failed_node_id = None
+        run.ended_at = run.ended_at or utcnow()
+        self._runs.write(run)
+        channel = self._channels.get(run.id) or RunChannel(run.id)
+        self._channels[run.id] = channel
+        await channel.emit(
+            RunStatusEvent(run_id=run.id, status="cancelled", detail="cancelled")
+        )
+        return run
+
+    async def _halt(self, run_id: str, *, discard: bool) -> Run:
+        """Stop the run and everything it spawned. Shared by `stop` and `cancel`.
 
         Returns as soon as the run is terminal or `CANCEL_SETTLE_S` has passed —
-        whichever is first — so a wedged provider cannot make the cancel button
-        itself hang. The terminal transition always arrives on the stream.
+        whichever is first — so a wedged provider cannot make the button itself
+        hang. The terminal transition always arrives on the stream.
         """
         state = self._active.get(run_id)
         if state is None:
@@ -923,7 +1026,11 @@ class Orchestrator:
                 raise RunConflict(f"no such run: {run_id}")
             raise RunConflict(f"run {run_id} already finished as {run.status}")
 
+        # Both flags, because `_walk`'s `CancelledError` handler sets
+        # `cancelled` unconditionally and `_finalize` has to be able to tell
+        # which button was pressed after it has.
         state.cancelled = True
+        state.stopped = not discard
         for pending in list(state.questions.values()):
             # Parked on a question, for `decisions`' reason and with one extra:
             # the *agent* is parked too, holding a permission request open on a
@@ -960,8 +1067,10 @@ class Orchestrator:
             pass
         return state.run
 
-    async def resume(self, run_id: str) -> Run:
-        """Pick a blocked run back up where the provider's allowance ran out.
+    async def resume(self, run_id: str, from_node_id: str | None = None) -> Run:
+        """Pick a blocked run back up where the provider's allowance ran out,
+        or — with `from_node_id` — re-run one node of a stopped run and
+        everything below it.
 
         **The narrow door.** `DESIGN.md`'s durability rule — *"a run interrupted
         mid-flight is marked failed on restart, never silently resumed"* — is
@@ -970,8 +1079,24 @@ class Orchestrator:
         a button, at a time they chose, having read the sentence the provider
         wrote about when the allowance comes back. And the run this reopens was
         not interrupted; it stopped, deliberately, at a node the walk marked in
-        the record (`_blocked`). A crash is still not resumable, a cancel is
-        still not resumable, and a restart still is not.
+        the record (`_blocked`).
+
+        **The second door, and why it is a different one**
+        (`decisions/0023`). Named a node, this reopens a run the operator
+        stopped — `cancelled` as well as `failed` — and re-runs that node plus
+        every node `runcheck.downstream_of` can reach from it. It is still not
+        silent and still not automatic; what it drops is the requirement that
+        the provider chose the stopping point. A **crash** is still not
+        resumable by either door, because `DID_NOT_FINISH` marks a node whose
+        outcome nobody knows, and a **restart** of the server still is not.
+
+        The two doors differ in exactly one respect, and it is the important
+        one: a blocked resume replays every node that already succeeded,
+        because none of their verdicts are in question. A restart-from-node puts
+        a *new* answer where an old one stood, so every verdict below it is
+        stale by construction and is cleared rather than replayed — see
+        `downstream_of` for why that set is built over all belts and not only
+        the ones the first walk took.
 
         **What it does not do is re-run anything that already ran.** The walk is
         the same `_walk` — there is no second traversal to keep in step with
@@ -1005,10 +1130,30 @@ class Orchestrator:
             run = self._runs.read(run_id)
             if run is None:
                 raise RunConflict(f"no such run: {run_id}")
-            if run.status != "failed" or not run.blocked_node_id:
+            if from_node_id is None:
+                # **Any run that halted without finishing** (`decisions/0024`):
+                # stopped by the button, stopped by a restart, or failed. What
+                # it is not is a run that succeeded or was cancelled — the first
+                # has nothing left to do, the second was a decision that it
+                # should not.
+                if run.status not in ("failed", "stopped"):
+                    raise RunConflict(
+                        f"run {run_id} is {run.status} — only a run that stopped or "
+                        "failed can be picked back up. Name a node to restart from "
+                        "if you meant to re-run part of it"
+                    )
+            elif run.status not in ("succeeded", "failed", "cancelled"):
+                # **Any run that has stopped, however it stopped.** The blocked
+                # door asks *why* the run ended because it is picking up an
+                # interrupted walk; this one is not — the operator has read the
+                # result and decided one machine should do its job again, and
+                # "the run succeeded" is no argument against that. What it
+                # refuses is a run still moving, where a second walk would be
+                # two walks on one worktree (`RunBusy` catches most of those
+                # first).
                 raise RunConflict(
-                    f"run {run_id} is {run.status} and was not stopped by a usage "
-                    "limit — only a run the provider cut short can be resumed"
+                    f"run {run_id} is {run.status} — only a run that has stopped "
+                    "can be restarted from a node"
                 )
             try:
                 factory = await asyncio.to_thread(
@@ -1019,10 +1164,15 @@ class Orchestrator:
                     f"the factory {run.factory_id} this run came from is gone"
                 ) from exc
             live = {node.id: node for node in factory.nodes}
-            if run.blocked_node_id not in live:
+            if from_node_id is None and run.blocked_node_id and run.blocked_node_id not in live:
                 raise RunConflict(
                     "the node this run stopped at is no longer in the factory — "
                     "start a fresh run instead"
+                )
+            if from_node_id is not None and from_node_id not in live:
+                raise RunConflict(
+                    f"no node {from_node_id} in factory {run.factory_id} — "
+                    "the node to restart from must still be on the canvas"
                 )
             missing = [
                 node_run.node_id
@@ -1041,22 +1191,49 @@ class Orchestrator:
             except NotFound:
                 settings = ProjectSettings()  # see `start` for why this is not fatal
 
-            blocked_id = run.blocked_node_id
+            # What this resume puts back on the line. For a blocked resume it is
+            # the one node the provider stopped at; for a restart it is the
+            # named node and everything its result could reach, because a fresh
+            # verdict makes every verdict below it stale (`downstream_of`).
+            if from_node_id is not None:
+                restarting = {from_node_id} | runcheck.downstream_of(
+                    from_node_id, factory.nodes, factory.edges
+                )
+                blocked_id = from_node_id
+            else:
+                # **Both kinds of stopping point**, and a run can carry either.
+                # `blocked_node_id` is where the provider's allowance ran out;
+                # `failed_node_id` is where the line said no. Each must run
+                # again rather than be replayed — a replayed verdict would end
+                # the second walk exactly where the first one ended. Nodes
+                # *below* them were never reached, so they are already
+                # `pending` and there is nothing downstream to clear.
+                restarting = {
+                    node_id
+                    for node_id in (run.blocked_node_id, run.failed_node_id)
+                    if node_id and node_id in live
+                }
+                blocked_id = run.blocked_node_id or run.failed_node_id
+
             replay: dict[str, str] = {}
             reopened: list[str] = []
             for node_run in run.node_runs:
-                if node_run.node_id == blocked_id:
+                if node_run.node_id in restarting:
+                    # Cleared below rather than replayed. A downstream node on a
+                    # restart lands here even when it succeeded, which is the
+                    # whole difference between the two doors.
+                    if node_run.node_id != blocked_id:
+                        reopened.append(node_run.node_id)
                     continue
                 if node_run.status == "succeeded":
                     replay[node_run.node_id] = "success"
-                elif node_run.status == "failed" and node_run.detail != DID_NOT_FINISH:
+                elif node_run.status == "failed" and node_run.detail not in UNFINISHED:
                     # A node that failed *on its own terms* — a reviewer that
                     # said no, a push that was refused — is an outcome the first
                     # walk already routed on, and replaying it is what makes the
-                    # second walk take the same belts. `DID_NOT_FINISH` is the
-                    # opposite case: the finalizer wrote it over a node that was
-                    # still working when the walk broke, and that node never
-                    # reached an outcome at all.
+                    # second walk take the same belts. `UNFINISHED` is the
+                    # opposite case: a node that never reached an outcome at
+                    # all, whatever wrote the record over it.
                     replay[node_run.node_id] = "fail"
                 elif node_run.status in ("failed", "running", "waiting_input"):
                     reopened.append(node_run.node_id)
@@ -1083,12 +1260,30 @@ class Orchestrator:
             run.ended_at = None
             run.blocked_node_id = None
             run.blocked_reason = ""
+            # Cleared with the block, and for the same reason: this walk is the
+            # answer to it. If it fails again, `_walk` writes it again.
+            run.failed_node_id = None
             run.resumed_count += 1
             for record in run.memory:
                 record.kept = False  # in flight again; the policy decides at the end
 
             workspaces = RunWorkspaces(run_id=run.id, branch=run.branch or "")
-            workspaces.adopt(run.worktrees)
+            # `readopt` rather than `adopt`, on **both** doors. A stopped or
+            # failed run kept its worktrees, so the two are usually the same
+            # thing; where the cleanup policy removed them it re-attaches a
+            # checkout of the run's own branch instead of refusing. Refused here
+            # rather than left for a node to trip over: "the branch this run
+            # worked on is gone" is a sentence an operator can act on, and a
+            # `WorktreeError` three nodes later is not.
+            lost = workspaces.readopt(run.worktrees)
+            if lost:
+                raise RunConflict(
+                    "cannot pick this run back up: the work it left behind is gone "
+                    "for "
+                    + ", ".join(sorted(lost))
+                    + " — its branch or its repository no longer exists, so start a "
+                    "fresh run instead"
+                )
             # The same channel and therefore the same `events.jsonl`, appended
             # to rather than restarted. One run is one log: a viewer replaying
             # from seq 0 sees the first walk, the wall, and the second walk in
@@ -1111,19 +1306,81 @@ class Orchestrator:
         # filed a memory section without this would render a fresh document
         # over the one the first walk built. See `_rehydrate_memories`.
         self._rehydrate_memories(state)
+
+        # **An input node that never finished is asked again, and the walk does
+        # not start until it is answered.**
+        #
+        # The bug this closes: a run stopped while its request form was still
+        # open came back with the input node reopened like any other, the walk
+        # started immediately, and the node handed its worker *nothing* —
+        # `input_text` was never submitted. A machine then ran with no
+        # instructions, which is the one thing a factory must never do with an
+        # operator's money.
+        #
+        # A node nobody answered reached no outcome, so the only honest thing to
+        # do is ask again — the same rule `UNFINISHED` applies to every other
+        # halted node, applied to the one node whose "run" is a person typing.
+        reopened_inputs = [
+            node_id
+            for node_id in [blocked_id, *reopened]
+            if node_id is not None
+            and (record := run.node_run(node_id)) is not None
+            and record.type == "input"
+        ]
+
         await self._persist(state)
-        await state.channel.emit(
-            RunStatusEvent(
-                run_id=run.id,
-                status="running",
-                detail=f"resumed at “{live[blocked_id].definition.label or blocked_id}”",
+        if reopened_inputs:
+            run.status = "waiting_input"
+            # Recomputed from the submissions when the last one lands
+            # (`submit_input`), so a stale request line cannot survive a resume
+            # that is about to be given a new one.
+            run.input_text = None
+            await self._persist(state)
+            await state.channel.emit(
+                RunStatusEvent(
+                    run_id=run.id,
+                    status="waiting_input",
+                    detail="resumed — waiting for the request again",
+                )
             )
-        )
+        else:
+            await state.channel.emit(
+                RunStatusEvent(
+                    run_id=run.id,
+                    status="running",
+                    # A run stopped mid-flight need not have a stopping *node* —
+                    # the button does not pick one — so the sentence adapts
+                    # rather than indexing into a dict that has no key for
+                    # `None`.
+                    detail=(
+                        f"resumed at “{live[blocked_id].definition.label or blocked_id}”"
+                        if blocked_id in live
+                        else "resumed"
+                    ),
+                )
+            )
+
         # The reopened nodes go back to `pending` on the stream too, so a canvas
         # watching this log does not keep showing yesterday's red pip over a
         # node that is about to run.
         for node_id in [blocked_id, *reopened]:
+            if node_id is None:
+                continue
             await self._set_node(state, node_id, "pending")
+
+        if reopened_inputs:
+            # The form again, one per node, exactly as `start` raises it — and
+            # **no walk**. `submit_input` starts that when the last answer is
+            # in, which is the same door a fresh run goes through.
+            for node_id in reopened_inputs:
+                await self._set_node(
+                    state,
+                    node_id,
+                    "waiting_input",
+                    _waiting_detail(node_kind(live[node_id])),
+                )
+            return run
+
         state.input_ready.set()
         state.task = asyncio.create_task(self._walk(state), name=f"run:{run.id}")
         return run
@@ -1250,6 +1507,11 @@ class Orchestrator:
                     _carries(node, edge, outcome) for edge in outgoing[node.id]
                 ):
                     failure = node.definition.label or node.id
+                    # The **id** as well as the label, because `resume` needs to
+                    # re-run this node rather than replay its verdict — replaying
+                    # it would re-derive the same failure and end the second walk
+                    # where the first one ended (`Run.failed_node_id`).
+                    state.run.failed_node_id = node.id
                     break
         except asyncio.CancelledError:
             state.cancelled = True
@@ -1384,21 +1646,29 @@ class Orchestrator:
         return "fail" if current.status == "failed" else "success"
 
     async def _finalize(self, state: ActiveRun, failure: str | None) -> None:
+        halted = STOPPED if state.stopped else CANCELLED
         for node_run in state.run.node_runs:
             if node_run.status in ("running", "waiting_input"):
                 await self._set_node(
                     state,
                     node_run.node_id,
                     "failed",
-                    "cancelled" if state.cancelled else DID_NOT_FINISH,
+                    halted if state.cancelled else DID_NOT_FINISH,
                 )
-        if state.cancelled:
+        if state.stopped:
+            # **A stop keeps every offer the record was carrying.** It is not a
+            # decision about the work, only about now — so the block stays, the
+            # failed node stays, and `resume` has everything it had a moment
+            # ago (`decisions/0024`).
+            status, detail = "stopped", "stopped"
+        elif state.cancelled:
             status, detail = "cancelled", "cancelled"
             # A cancel is a decision to stop, so it withdraws the offer to
             # carry on. Clearing it here rather than refusing in `resume()`
             # keeps "is this resumable" a property of the record.
             state.run.blocked_node_id = None
             state.run.blocked_reason = ""
+            state.run.failed_node_id = None
         elif failure and state.run.blocked_node_id:
             # Worded as a pause, not a fault, and it carries the provider's own
             # sentence because the reset time in it is the actionable part.
@@ -2098,7 +2368,14 @@ class Orchestrator:
                 await self._blocked(state, node, detail)
                 return
             if cause == "user":
-                await self._set_node(state, node.id, "failed", "cancelled")
+                # Which button it was, not the word "cancelled" always: the
+                # detail is what `resume` reads to tell a halted node from one
+                # that reached a verdict (`UNFINISHED`), and a stopped run whose
+                # nodes say "cancelled" still resumes — but the record would be
+                # describing a decision the operator did not make.
+                await self._set_node(
+                    state, node.id, "failed", STOPPED if state.stopped else CANCELLED
+                )
             else:
                 await self._set_node(
                     state, node.id, "failed", detail or f"the session ended: {cause}"
@@ -2710,7 +2987,14 @@ class Orchestrator:
                 await self._blocked(state, node, detail)
                 return
             if cause == "user":
-                await self._set_node(state, node.id, "failed", "cancelled")
+                # Which button it was, not the word "cancelled" always: the
+                # detail is what `resume` reads to tell a halted node from one
+                # that reached a verdict (`UNFINISHED`), and a stopped run whose
+                # nodes say "cancelled" still resumes — but the record would be
+                # describing a decision the operator did not make.
+                await self._set_node(
+                    state, node.id, "failed", STOPPED if state.stopped else CANCELLED
+                )
             else:
                 await self._set_node(
                     state, node.id, "failed", detail or f"agent exited: {cause}"
@@ -3528,15 +3812,21 @@ class Orchestrator:
     # ---- durability -------------------------------------------------------
 
     def sweep_interrupted(self) -> list[str]:
-        """Mark every run left mid-flight by a restart as **failed**.
+        """Mark every run left mid-flight by a restart as **stopped**.
 
-        `DESIGN.md`, Durability: *"a run interrupted mid-flight is marked failed
-        on restart, never silently resumed."* Called from the app's lifespan, so
-        it runs before the first request can read a run that claims to be
-        running inside a process that has never heard of it. The log gets the
-        same terminal events a live finish would have written, which is what
-        keeps `events.jsonl` a complete story rather than one that stops
-        mid-sentence.
+        `DESIGN.md`, Durability: *"a run interrupted mid-flight is marked … on
+        restart, never silently resumed."* The half that matters is
+        **silently**, and it is untouched: the run ends, its nodes end, the log
+        gets the same terminal events a live finish would have written, and
+        nothing starts again on its own. Called from the app's lifespan, so it
+        runs before the first request can read a run that claims to be running
+        inside a process that has never heard of it.
+
+        **`stopped` rather than `failed`** (`decisions/0024`). Nothing about the
+        work went wrong — a container was restarted — and the word decides what
+        the operator is offered: `failed` left the canvas showing **Run**, which
+        is the most expensive possible answer to an interruption that cost
+        nothing. Stopped keeps the worktrees and offers Resume beside Cancel.
         """
         interrupted: list[str] = []
         for run in self._runs.list():
@@ -3544,7 +3834,7 @@ class Orchestrator:
                 continue
             log = RunChannel(run.id).log
             seq = log.last_seq()
-            detail = "interrupted by a restart — runs are never silently resumed"
+            detail = "interrupted by a restart — resume it or cancel it"
             for node_run in run.node_runs:
                 if node_run.status in ("running", "waiting_input"):
                     node_run.status = "failed"
@@ -3560,15 +3850,16 @@ class Orchestrator:
                             detail=detail,
                         )
                     )
-            run.status = "failed"
+            run.status = "stopped"
             run.detail = detail
             run.ended_at = run.ended_at or utcnow()
             seq += 1
-            log.append(RunStatusEvent(seq=seq, run_id=run.id, status="failed", detail=detail))
+            log.append(RunStatusEvent(seq=seq, run_id=run.id, status="stopped", detail=detail))
             self._runs.write(run)
-            # A restart-failed run keeps its worktree, like any other failure:
-            # the process that owned it is gone, and the directory it left is
-            # the only account of how far it got. `summary.md` says where.
+            # An interrupted run keeps its worktree, like any other stop: the
+            # process that owned it is gone, and the directory it left is both
+            # the account of how far it got and what a Resume goes on writing
+            # to. `summary.md` says where.
             summary.write(run)
             interrupted.append(run.id)
         return interrupted

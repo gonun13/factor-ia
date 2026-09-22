@@ -316,7 +316,7 @@ generalizes: it already drives `claude`, `cursor`, `codex`, `copilot` and
   **Amended twice by the implementation.**
   [`decisions/0010`](decisions/0010-commit-merge-amends-blast-radius.md) narrows
   "no writes to the default branch" to an exception the operator draws.
-  [`decisions/0022`](decisions/0022-auto-is-the-default-inside-the-container.md)
+  [`decisions/0022`](decisions/0022-commands-do-not-ask-inside-the-container.md)
   replaces "only inside a git worktree" on a container started with
   `FACTOR_IA_DANGEROUS_PERMISSIONS=1`: this is automation software, agents run
   unattended, and the boundary that holds there is the container rather than the
@@ -365,7 +365,12 @@ generalizes: it already drives `claude`, `cursor`, `codex`, `copilot` and
   Document this; a mystery OOM on first run would be a miserable introduction.
 - **Durability.** Factory definitions live in the project repo and are backed up
   by git. Run history lives in a named volume and is discarded by a reset. A run
-  interrupted mid-flight is marked failed on restart, never silently resumed.
+  interrupted mid-flight is marked **stopped** on restart, never silently
+  resumed. *(`failed` until
+  [`decisions/0024`](decisions/0024-stop-is-not-cancel.md); the*
+  *never-silently-resumed half is unchanged — the run still ends and still waits*
+  *for a deliberate click. What changed is which buttons that click has to*
+  *choose from.)*
 - **Offline / i18n.** Neither. Requires network for agent calls; English only.
 
 ---

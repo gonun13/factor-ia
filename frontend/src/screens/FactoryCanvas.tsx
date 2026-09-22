@@ -18,7 +18,8 @@
  * `definition`/`runtime` split on the node object from the first render.
  *
  * **Four surfaces, one job each, and all of them float.** The *run panel*
- * (`RunBox`) sits top-right: the run as a whole — start it, cancel it, the
+ * (`RunBox`) sits top-right: the run as a whole — start it, stop it, resume
+ * it, discard it, the
  * branch it owns, what it cost, what is stopping it. The *chat* (`RunChat`)
  * sits just inboard of it, and only while the run has stopped to ask something.
  * Along the bottom runs the *timeline* (`Timeline`), one small card per machine
@@ -978,11 +979,29 @@ function RunBox({
       answers: Record<string, string>,
     ) => Promise<void>;
     cancel: () => Promise<void>;
+    stop: () => Promise<void>;
     resume: () => Promise<void>;
     resumable: boolean;
+    cancellable: boolean;
     clear: () => void;
   };
 }) {
+  /** The run panel's one piece of local state: whether Cancel has been pressed
+   * once and is waiting to be meant.
+   *
+   * Inline rather than a modal, like deleting a project (`ProjectList`), and
+   * for the reason `ui-ux.md` gives about this corner of the screen: nothing
+   * covers the run panel. */
+  const [confirmingCancel, setConfirmingCancel] = useState(false);
+  const keepItButton = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (confirmingCancel) keepItButton.current?.focus();
+  }, [confirmingCancel]);
+  // A run that ends while the confirmation is open leaves it open over a
+  // question that no longer applies; drop it when there is nothing to cancel.
+  useEffect(() => {
+    if (!run.cancellable) setConfirmingCancel(false);
+  }, [run.cancellable]);
   /** What this run has written to each knowledge base, by node.
    *
    * Counted, not listed: a base written to six times is one base, and the strip
@@ -1040,50 +1059,106 @@ function RunBox({
     >
       {stageNote.popup}
       <div className="runbox-head">
-        {run.live ? (
-          <button className="run cancel" onClick={() => void run.cancel()} disabled={run.busy}>
-            ■ Cancel
-          </button>
-        ) : run.resumable ? (
-          // **Instead of Run, not beside it.** A blocked run is the run on this
-          // canvas, and offering both would put the cheap answer and the
-          // expensive one under the same thumb — starting fresh re-pays for
-          // every node that already finished. `clear` is still how an operator
-          // says they want a new one, and it is a deliberate act.
-          //
-          // The provider's own sentence is the tooltip, reset time and all,
-          // because "can I resume yet" is a question only that sentence
-          // answers.
-          <button
-            className="run resume"
-            onClick={() => void run.resume()}
-            disabled={run.busy}
-            title={[
-              "Pick this run back up where it stopped",
-              run.run?.blocked_reason ?? "",
-              "Nothing that already finished runs again.",
-            ]
-              .filter(Boolean)
-              .join("\n")}
+        {/* **`Run` is never beside `Resume`, and never reachable while a run
+            exists.** Starting fresh re-pays for every node that already
+            finished, so the expensive button is one deliberate Cancel away
+            rather than one misclick (`decisions/0024`). The three states are
+            running, halted, and neither. */}
+        {confirmingCancel ? (
+          // Inline, replacing the controls rather than covering them: this
+          // panel is the one thing on the screen that must never be hidden.
+          <span
+            className="run-confirm"
+            onKeyDown={(event) => {
+              if (event.key === "Escape" && !run.busy) setConfirmingCancel(false);
+            }}
           >
-            ▶ Resume
-          </button>
+            <span className="run-confirm-question">Cancel this run?</span>
+            <button
+              type="button"
+              className="run destructive"
+              disabled={run.busy}
+              onClick={() => {
+                setConfirmingCancel(false);
+                void run.cancel();
+              }}
+              title={
+                "Discards the run. The branch and its commits survive; the " +
+                "worktree under _runs/ does not, and it cannot be resumed after."
+              }
+            >
+              Cancel run
+            </button>
+            <button
+              type="button"
+              className="run keep"
+              ref={keepItButton}
+              disabled={run.busy}
+              onClick={() => setConfirmingCancel(false)}
+            >
+              Keep it
+            </button>
+          </span>
         ) : (
-          <button
-            className="run"
-            disabled={!runnable || run.busy}
-            onClick={() => void run.start()}
-            title={
-              runnable
-                ? [
-                    "Run this factory",
-                    ...notices.map((notice) => notice.message),
-                  ].join("\n")
-                : stopping.map((problem) => problem.message).join("\n")
-            }
-          >
-            ▶ Run
-          </button>
+          <>
+            {run.live ? (
+              <button
+                className="run stop"
+                onClick={() => void run.stop()}
+                disabled={run.busy}
+                title={
+                  "Halt this run and keep everything it has done. Its worktree " +
+                  "stays, and Resume picks it back up."
+                }
+              >
+                ■ Stop
+              </button>
+            ) : run.resumable ? (
+              // The provider's own sentence is in the tooltip, reset time and
+              // all, because "can I resume yet" is a question only that
+              // sentence answers — when there is one.
+              <button
+                className="run resume"
+                onClick={() => void run.resume()}
+                disabled={run.busy}
+                title={[
+                  "Pick this run back up where it stopped",
+                  run.run?.blocked_reason ?? "",
+                  "Nothing that already finished runs again.",
+                ]
+                  .filter(Boolean)
+                  .join("\n")}
+              >
+                ▶ Resume
+              </button>
+            ) : (
+              <button
+                className="run"
+                disabled={!runnable || run.busy}
+                onClick={() => void run.start()}
+                title={
+                  runnable
+                    ? [
+                        "Run this factory",
+                        ...notices.map((notice) => notice.message),
+                      ].join("\n")
+                    : stopping.map((problem) => problem.message).join("\n")
+                }
+              >
+                ▶ Run
+              </button>
+            )}
+            {run.cancellable && (
+              <button
+                className="run cancel"
+                onClick={() => setConfirmingCancel(true)}
+                disabled={run.busy}
+                title="Discard this run. Asks first."
+              >
+                ✕ Cancel
+              </button>
+            )}
+          </>
         )}
         <span className="state">
           {run.status

@@ -89,12 +89,18 @@ export type RunStatus =
 
 /** A whole run's state — one member more than a node's, where cancelling is
  * genuinely a different outcome rather than a different reason for failing. */
-export type OverallRunStatus = RunStatus | "cancelled";
+export type OverallRunStatus = RunStatus | "cancelled" | "stopped";
 
+/** Statuses at which no walk is running, so the `EventSource` may close.
+ *
+ * **Terminal is not the same as finished.** `failed` and `stopped` are both
+ * terminal *and* resumable — what this list decides is that nothing is moving,
+ * not that there is nothing left to do (`decisions/0024`). */
 export const TERMINAL_RUN_STATUSES: OverallRunStatus[] = [
   "succeeded",
   "failed",
   "cancelled",
+  "stopped",
 ];
 
 export type Position = { x: number; y: number };
@@ -664,12 +670,21 @@ export type Run = {
    * provider's own sentence about it — reset time included, which is the part
    * that tells an operator whether resuming now is worth trying.
    *
-   * **Set only for a usage limit**, never for a crash or a cancel. Together
-   * they are the whole of what makes the Resume button appear: a failed run
-   * with a `blocked_node_id` is one the provider cut short, and nothing about
-   * the work it had done is in doubt. `models.Run` has the rest. */
+   * **Set only for a usage limit**, never for a crash or a cancel — for which
+   * `failed_node_id` is the equivalent. Neither decides whether Resume appears
+   * any more (`decisions/0024`: every stopped or failed run is resumable); what
+   * they decide is *where* a resume picks up, and the reason sentence is still
+   * the part that tells an operator whether resuming now is worth trying.
+   * `models.Run` has the rest. */
   blocked_node_id: string | null;
   blocked_reason: string;
+  /** The node whose failure ended the walk, when one did.
+   *
+   * A different question from `blocked_node_id`: that one means "the provider
+   * stopped us here", this one means "the line said no here". A resume re-runs
+   * it rather than replaying its verdict, which would end the second walk
+   * exactly where the first one ended. */
+  failed_node_id: string | null;
   /** How many times this run was picked back up. Shown so the gap in the
    * timings has an explanation on the record. */
   resumed_count: number;

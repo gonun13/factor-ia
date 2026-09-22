@@ -98,10 +98,14 @@ through the single function that moves a belt out of one set as it puts it in
 the other.
 
 Per node the state machine is `pending → waiting_input → running →
-succeeded | failed`. There is **no `cancelled` node status**: a cancelled node
-did not succeed, and cancellation surfaces as `failed` with a `detail` naming
-who stopped it. At the run level it is genuinely a different outcome, and there
-`RunStatus.cancelled` exists.
+succeeded | failed`. There is **no `cancelled` node status and no `stopped`
+one**: a node that was halted did not succeed, and both surface as `failed`
+with a `detail` naming what stopped it. That detail is not decoration — it is
+the only thing that tells a resume "nobody let this finish" from "this said
+no", and replaying the second when it was the first tells a second walk a
+reviewer rejected work nobody ever judged. At the run level they are genuinely
+different outcomes, and there `RunStatus.cancelled` and `RunStatus.stopped`
+both exist.
 
 A **halt** is different from a failure: a crash, a cancel, a spent lap cap or a
 missing verdict. No belt carries a halt, so none of them can retry their way
@@ -139,6 +143,7 @@ what makes a second lap mean anything; see [`review-loops.md`](review-loops.md).
 |---|---|---|
 | succeeded | removed | **kept** — it is the deliverable |
 | failed | **kept** for inspection, path in `summary.md` | kept |
+| stopped | **kept** — a pause has a Resume behind it | kept |
 | cancelled | removed (an explicit discard) | kept, empty |
 
 **Branches are never deleted by Factor-ia, not even its own.** `gitwork.py` has
@@ -147,11 +152,14 @@ operator's to type.
 
 ---
 
-## Cancel, and the process tree
+## Stopping, cancelling, and the process tree
 
-**Cancel means cancel.** The adapter run is interrupted, the nodes after it
-never start, and the run ends `cancelled`. Closing the tab cancels nothing;
-that is what the button is for.
+**Two buttons, one interrupt.** Stop and Cancel halt a run the same way — the
+adapter run is interrupted and the nodes after it never start — and differ
+entirely in what is left behind. **Stop** ends the run `stopped`, keeps its
+worktree and leaves it resumable. **Cancel** ends it `cancelled`, drops the
+worktree, keeps the branch, and withdraws the offer to resume. Closing the tab
+does neither; that is what the buttons are for.
 
 `interrupt()` **kills the process group. It is not a control request.** Every
 spawn is `start_new_session=True` and every kill is `killpg(SIGTERM)` → grace →
@@ -182,8 +190,60 @@ cancellation an explicit endpoint rather than an inferred one.
 - **A late joiner sees the whole run**, from its beginning, replayed out of the
   log.
 - **A reconnect resumes exactly where it left off**, with no gap and no repeat.
-- **A restart mid-run marks that run `failed` on the way back up**, never
-  silently resumes it (`sweep_interrupted`).
+- **A restart mid-run marks that run `stopped` on the way back up**, never
+  silently resumes it (`sweep_interrupted`). `stopped` rather than `failed`
+  because nothing about the work went wrong, and the word is what decides what
+  the operator is offered — marked `failed` this left the canvas showing
+  **Run**, the most expensive possible answer to an interruption that cost
+  nothing ([`decisions/0024`](../decisions/0024-stop-is-not-cancel.md)).
+
+### Picking a stopped run back up
+
+`POST /api/runs/{id}/resume` has two forms, and they answer different
+questions ([`decisions/0023`](../decisions/0023-a-run-can-be-restarted-from-a-node.md)).
+
+- **With no body**, it picks a run back up where it halted. Any `stopped` or
+  `failed` run qualifies — the button, a restart, a crash, or a spent
+  allowance. Every node that already finished is replayed out of the record
+  rather than paid for again; the node that *ended* the walk is re-run, because
+  replaying the verdict that stopped the first walk would stop the second one
+  in the same place.
+- **With `{"from_node_id": "..."}`**, it restarts that node on a run that has
+  stopped for any reason — `succeeded`, `failed` or `cancelled` — along with
+  every node **forward** of it. What sits above the named node is still
+  replayed; what sits below is cleared and runs again, because a fresh answer
+  makes every verdict under it stale. A reviewer's `fail` belt loops back up
+  the line and is deliberately not followed here — otherwise restarting a
+  tester re-runs the scoping interview.
+
+**A node nobody answered is asked again.** A run stopped while an input form
+was still open comes back **parked on that form**, not walking: the run returns
+to `waiting_input`, its request line is cleared, and the walk starts only when
+the last answer is in — the same door a fresh run goes through. Without this a
+resume started the line with nothing submitted and the first worker ran with no
+instructions, which is the one thing a factory must never do with an operator's
+money. The same rule covers a human node or a scope interview that was halted
+mid-question: it reached no outcome, so it is put again from scratch.
+
+A run still moving is refused by both, and so is one that succeeded or was
+cancelled — the first has nothing left to do, and the second was a decision
+that it should not.
+
+**Stopping.** `POST /api/runs/{id}/stop` halts a run and keeps everything it
+did: its worktrees stay (`RunWorkspaces.cleanup` keeps on `failed` and
+`stopped`), any block it was carrying stays, and it is resumable. `/cancel` is
+the opposite decision — it discards the run, drops the worktree, keeps the
+branch, and withdraws the offer to resume. Cancel also accepts a run that has
+already stopped, which is how an operator says a halted run is not worth
+picking up.
+
+Two consequences worth stating, because neither is worked around:
+
+- a **restart re-runs any output node below it**, and an output node with
+  nothing new to commit fails rather than tick green over an empty branch;
+- a restart of a cancelled or successful run **re-attaches a checkout of the
+  run's own branch**, since the cleanup policy removed the worktree and kept
+  the branch. Where that branch is gone, the restart is refused by name.
 
 ---
 

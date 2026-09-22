@@ -1056,6 +1056,55 @@ def back_edges(nodes: list[Node], edges: list[Edge]) -> dict[str, list[str]]:
     return found
 
 
+def downstream_of(start: str, nodes: list[Node], edges: list[Edge]) -> set[str]:
+    """Every node **forward** of `start` on the line, not counting `start`.
+
+    **Over every outcome but not over a loop.** Both halves were learned the
+    hard way, and each rules out an answer that looks right.
+
+    *Every outcome*, because this asks "what could this node's result reach?"
+    and not "what did it reach?". A `fail` belt nobody took on the first walk
+    may well be taken on the second — that is the entire reason for re-running
+    a node — so a set built from the belts that happened to carry last time
+    would leave a stale verdict standing exactly where the new one disagrees.
+
+    *Not over a loop*, because a reviewer's `fail` belt points back **up** the
+    line it came down (`back_edges`). Following it makes almost every node in a
+    factory with review loops reachable from almost every other, and
+    "restart the tester" then means "re-run the scoping interview and
+    everything after it" — measured, on the factory this feature was built for.
+    A back edge is where the walk may *return* at runtime, not where this node's
+    answer sits in the order of work, and clearing a record is a statement about
+    the latter.
+
+    So a restart clears what follows the named node and leaves what precedes it
+    replayed, even where a belt exists from one to the other. If the re-run node
+    fails, the walk takes that fail belt at runtime exactly as it always did —
+    nothing here constrains where the second walk may go, only which records
+    start it out stale.
+
+    Used by `Orchestrator.resume`, always as `{start} | downstream_of(start)`.
+    """
+    looping = set(back_edges(nodes, edges))
+    successors: dict[str, list[str]] = {node.id: [] for node in nodes}
+    for edge in edges:
+        if edge.id in looping:
+            continue
+        if edge.source in successors and edge.target in successors:
+            successors[edge.source].append(edge.target)
+
+    seen: set[str] = set()
+    stack = list(successors.get(start, []))
+    while stack:
+        current = stack.pop()
+        if current in seen:
+            continue
+        seen.add(current)
+        stack.extend(successors.get(current, []))
+    seen.discard(start)
+    return seen
+
+
 def _loop_problems(
     nodes: list[Node],
     edges: list[Edge],

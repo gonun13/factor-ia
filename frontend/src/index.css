@@ -1437,9 +1437,49 @@ button.skill-card.is-system:hover {
   border-color: color-mix(in srgb, var(--danger) 60%, transparent);
 }
 
+/* **Cancel is the quiet one now.** It no longer stops a run — Stop does — and
+   what it does instead is discard one, which is a second click away behind a
+   confirmation. A red button that only ever opens a question should not shout
+   louder than the button that acts. */
 .runbox button.run.cancel {
+  background: linear-gradient(180deg, #4a2630, #38202a);
+  border-color: #6d3a44;
+  font-weight: 600;
+}
+
+/* Red, and the loudest thing in the panel, because this is the control that
+   actually halts work. It took Cancel's old colour along with Cancel's old
+   job. */
+.runbox button.run.stop {
   background: linear-gradient(180deg, #8f3030, #6b2222);
   border-color: #a94141;
+}
+
+/* The confirmation, in the row the controls were in rather than over it: this
+   panel is the one thing on the screen `ui-ux.md` says must never be covered. */
+.run-confirm {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.run-confirm-question {
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.runbox button.run.destructive {
+  background: linear-gradient(180deg, #8f3030, #6b2222);
+  border-color: #a94141;
+}
+
+/* The way out, and deliberately the plain one: the default answer to "are you
+   sure" is no, and it holds the focus. */
+.runbox button.run.keep {
+  background: #1b2230;
+  border-color: var(--edge-strong);
+  font-weight: 600;
 }
 
 /* Amber, sitting between the green that starts fresh work and the red that

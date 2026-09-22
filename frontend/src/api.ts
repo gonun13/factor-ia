@@ -270,15 +270,31 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ node_id: nodeId, request_id: requestId, answers }),
     }),
-  /** Explicit cancel — closing the tab is not a decision to stop work. */
+  /** Explicit cancel — closing the tab is not a decision to stop work.
+   *
+   * Discards the run: the branch survives, the worktree does not, and neither
+   * door will pick it up again. Accepts a run that has already stopped, which
+   * is how an operator says a halted run is not worth resuming. */
   cancelRun: (runId: string) =>
     request<Run>(`/api/runs/${runId}/cancel`, { method: "POST" }),
-  /** Pick a run back up after the provider's allowance cut it short.
+  /** Halt a run, keeping everything it has done.
    *
-   * The only call that reopens a finished run, and the server decides whether
-   * a given one may be — a crash and a cancel are both refused with a 409. */
-  resumeRun: (runId: string) =>
-    request<Run>(`/api/runs/${runId}/resume`, { method: "POST" }),
+   * The other half of `cancelRun` (`decisions/0024`): same interrupt, opposite
+   * intent. A stopped run keeps its worktree and is offered a Resume. */
+  stopRun: (runId: string) =>
+    request<Run>(`/api/runs/${runId}/stop`, { method: "POST" }),
+  /** Pick a run back up: where it stopped, or from a node you name.
+   *
+   * The only call that reopens a finished run. Every stopped or failed run may
+   * be; a succeeded or cancelled one is refused with a 409, the first because
+   * there is nothing to do and the second because somebody decided there was
+   * not. With `fromNodeId` it re-runs that node and everything forward of it
+   * (`decisions/0023`). */
+  resumeRun: (runId: string, fromNodeId?: string) =>
+    request<Run>(`/api/runs/${runId}/resume`, {
+      method: "POST",
+      ...(fromNodeId ? { body: JSON.stringify({ from_node_id: fromNodeId }) } : {}),
+    }),
   run: (runId: string) => request<Run>(`/api/runs/${runId}`),
   runs: () => request<Run[]>("/api/runs"),
   /** Everything one machine did, straight out of the run's log.

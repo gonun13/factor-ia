@@ -186,15 +186,25 @@ change with a test behind it, not an incidental one.
 | `KnowledgeType` | `principles` `project` `codebase` `general` |
 | `KnowledgeHandle` | `read` (source) `write` (target) |
 | `NodeStatus` | `pending` `waiting_input` `running` `succeeded` `failed` |
-| `RunStatus` | the five above, plus `cancelled` |
+| `RunStatus` | the five above, plus `cancelled` and `stopped` |
 | `PayloadKind` | `text` — a one-member union, so adding a type is an added field rather than a changed one |
 
-**`NodeStatus` has no `cancelled`, and that is deliberate.** A cancelled node
-did not succeed, and giving the canvas a sixth colour for *failed because a
-human said stop* would split a state that behaves identically everywhere it is
-read. Cancellation shows up as `failed` with a `detail` naming who stopped it,
-and at the **run** level — where it genuinely is a different outcome — as
-`RunStatus.cancelled`.
+**`NodeStatus` has no `cancelled` and no `stopped`, and that is deliberate.** A
+node that was halted did not succeed, and giving the canvas a sixth colour for
+*failed because a human said stop* would split a state that behaves identically
+everywhere it is read. Both show up as `failed` with a `detail` naming what
+stopped it, and at the **run** level — where they genuinely are different
+outcomes — as `RunStatus.cancelled` and `RunStatus.stopped`.
+
+**The detail is load-bearing, not decoration.** It is the only thing separating
+a node nobody let finish from one that reached a verdict, and a resume that
+confuses the two tells a second walk that a reviewer rejected work nobody ever
+judged ([`decisions/0024`](decisions/0024-stop-is-not-cancel.md)).
+
+**`stopped` and `cancelled` are opposite decisions**, not shades of one: *not
+now* against *not at all*. A stopped run keeps its worktree and is resumable; a
+cancelled one is discarded. A run interrupted by a restart is `stopped`, since
+nobody decided anything.
 
 ---
 

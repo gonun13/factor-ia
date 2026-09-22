@@ -653,7 +653,7 @@ The handles on the canvas are a claim about what a machine may do. The thing tha
 Where the container carries no dangerous-permissions opt-in the default mode is
 `acceptEdits`, and under it a tool that asks is denied, because nobody is home
 to answer (`backend/factoria/agent/claude.py`). With the opt-in the default is
-`auto` and nothing asks at all ([`decisions/0022`](../decisions/0022-auto-is-the-default-inside-the-container.md)),
+`bypassPermissions` and nothing asks at all ([`decisions/0022`](../decisions/0022-commands-do-not-ask-inside-the-container.md)),
 which makes the grant below redundant but never wrong — it is passed either
 way, so a base's permissions do not depend on how the container was started.
 So:

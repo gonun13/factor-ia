@@ -428,21 +428,27 @@ def test_resolving_an_unknown_request_is_a_no_op(stub, workspace) -> None:
 # ---- the default the opt-in chooses (decisions/0022) -----------------------
 
 
-def test_the_opt_in_makes_auto_the_default_for_a_node_that_names_nothing() -> None:
+def test_the_opt_in_makes_the_default_a_mode_that_never_asks() -> None:
     """`decisions/0022`: this is automation software and the container is the
     boundary, so inside one started with the flag a node runs its own commands.
+
+    **Asserted as `bypassPermissions` by name, not merely "something dangerous".**
+    `auto` is also in `DANGEROUS_PERMISSION_MODES` and it was tried first: it
+    classifies per command and asks for what it does not judge safe, which under
+    an unattended spawn is a denial of `uv run pytest`. A test that accepted any
+    dangerous mode would have passed while the product was still broken.
     """
     from factoria import config
     from factoria.agent.adapter import default_permission_mode, resolve_permission_mode
 
-    assert default_permission_mode(dangerous_allowed=True) == "auto"
-    assert resolve_permission_mode(None, dangerous_allowed=True) == ("auto", True)
+    assert default_permission_mode(dangerous_allowed=True) == "bypassPermissions"
+    assert resolve_permission_mode(None, dangerous_allowed=True) == ("bypassPermissions", True)
 
     argv = build_argv("s-1", RunConfig())
     # `build_argv` reads the gate from the environment, so assert on the pure
     # resolution above and on the flag only when the gate is actually open.
     if config.dangerous_permissions_allowed():
-        assert argv[argv.index("--permission-mode") + 1] == "auto"
+        assert argv[argv.index("--permission-mode") + 1] == "bypassPermissions"
 
 
 def test_without_the_opt_in_the_default_is_unchanged() -> None:

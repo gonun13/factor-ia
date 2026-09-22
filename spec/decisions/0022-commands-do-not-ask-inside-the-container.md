@@ -1,4 +1,4 @@
-# 0022 — `auto` is the default inside the container
+# 0022 — commands do not ask inside the container
 
 **Status:** stands. Amends the blast-radius requirement in
 [`../PROJECT.md`](../PROJECT.md), and supersedes the fail-closed `Bash` policy
@@ -7,8 +7,17 @@ recorded in `agent/claude.py` since stage 4.
 ## Decision
 
 On a container started with `FACTOR_IA_DANGEROUS_PERMISSIONS=1`, an agent node
-that names no permission mode is given **`auto`**. It runs its own commands —
-interpreters, test runners, package managers — without asking.
+that names no permission mode is given **`bypassPermissions`**. It runs its own
+commands — interpreters, test runners, package managers — without asking.
+
+**Not `auto`, and the difference is the whole record.** `auto` is a classifier:
+it approves what it judges safe and asks for the rest. Under an unattended
+spawn an ask is a denial, so `auto` produces exactly the failure this record
+exists to remove — measured, with `session.init` confirming the mode, a node
+still refused `uv run pytest` with *"This Bash command contains multiple
+operations. The following part requires approval"*. Any mode that decides per
+command can refuse some command. `bypassPermissions` is defined as never
+asking, and never asking is the property an unattended factory needs.
 
 Without that opt-in the default stays `acceptEdits`, exactly as before, so a
 fresh clone is unchanged. The opt-in therefore does two jobs: it unlocks the
@@ -31,7 +40,7 @@ the whole time.
 
 ## What it costs, stated rather than discovered
 
-The worktree stops being the boundary; the container becomes it. Under `auto`
+The worktree stops being the boundary; the container becomes it. Under `bypassPermissions`
 an agent can reach `/workspace` — a bind mount of the operator's real projects,
 not just the run's `_runs/<id>/` worktree — and `/home/factoria`, which holds a
 live subscription credential. Neither is discarded when a worktree is.
