@@ -810,3 +810,111 @@ def test_resume_of_an_unknown_run_is_a_conflict_not_a_crash(
     runnable: TestClient,
 ) -> None:
     assert runnable.post("/api/runs/run-nope/resume").status_code == 409
+
+
+# ---- housekeeping ------------------------------------------------------------
+
+
+def _stored_run(run_id: str, *, status: str, days_ago: int) -> None:
+    """A finished run on disk, with no walk behind it. The survey reads records,
+    so a record is all a route test needs."""
+    from datetime import timedelta
+
+    from factoria.models import Run, utcnow
+    from factoria.runlog import RunStore
+
+    when = utcnow() - timedelta(days=days_ago)
+    RunStore().write(
+        Run(
+            id=run_id,
+            project_id="demo",
+            factory_id="main",
+            factory_name="main",
+            status=status,
+            created_at=when,
+            ended_at=when,
+        )
+    )
+
+
+def test_the_housekeeping_preview_removes_nothing(client: TestClient) -> None:
+    _stored_run("run-keeper", status="failed", days_ago=400)
+    _stored_run("run-doomed", status="failed", days_ago=500)
+
+    first = client.get("/api/housekeeping")
+    second = client.get("/api/housekeeping")
+
+    assert first.status_code == 200
+    offered = [item["run_id"] for item in first.json()["discardable"]]
+    assert offered == ["run-doomed"]
+    # Looking twice offers the same thing: a GET decided nothing.
+    assert [item["run_id"] for item in second.json()["discardable"]] == offered
+
+
+def test_the_text_format_carries_the_same_fingerprint_as_the_json(
+    client: TestClient,
+) -> None:
+    _stored_run("run-keeper", status="failed", days_ago=400)
+    _stored_run("run-doomed", status="failed", days_ago=500)
+
+    as_json = client.get("/api/housekeeping").json()
+    as_text = client.get("/api/housekeeping?format=text").text
+
+    assert as_text.splitlines()[0] == f"fingerprint: {as_json['fingerprint']}"
+
+
+def test_housekeeping_refuses_a_stale_fingerprint_with_a_sentence(
+    client: TestClient,
+) -> None:
+    """The operator is looking at a list that no longer exists. The honest
+    answer is the new one, not an act on the overlap."""
+    _stored_run("run-keeper", status="failed", days_ago=400)
+    _stored_run("run-doomed", status="failed", days_ago=500)
+
+    refused = client.post("/api/housekeeping", json={"fingerprint": "nope00000000"})
+
+    assert refused.status_code == 409
+    assert "run the preview again" in refused.json()["detail"]
+
+
+def test_housekeeping_discards_only_what_the_preview_offered(
+    client: TestClient,
+) -> None:
+    _stored_run("run-keeper", status="failed", days_ago=400)
+    _stored_run("run-doomed", status="failed", days_ago=500)
+    report = client.get("/api/housekeeping").json()
+
+    done = client.post(
+        "/api/housekeeping", json={"fingerprint": report["fingerprint"]}
+    )
+
+    assert done.status_code == 200
+    assert done.json()["discarded"] == ["run-doomed"]
+    assert "Branches untouched." in done.json()["detail"]
+    # The spared run is untouched, and still says it failed.
+    assert client.get("/api/runs/run-keeper").json()["status"] == "failed"
+    assert client.get("/api/runs/run-doomed").json()["status"] == "cancelled"
+
+
+def test_housekeeping_is_not_reachable_cross_origin(client: TestClient) -> None:
+    refused = client.post(
+        "/api/housekeeping",
+        json={"fingerprint": "whatever0000"},
+        headers={"origin": "https://evil.example"},
+    )
+    assert refused.status_code == 403
+
+
+def test_tidying_is_refused_while_a_run_is_in_flight(runnable: TestClient) -> None:
+    """A run owns the only worktree slot this design has. Sweeping directories
+    alongside a live walk is a class of bug worth not having at all."""
+    live = start(runnable)
+    report = runnable.get("/api/housekeeping").json()
+
+    refused = runnable.post(
+        "/api/housekeeping", json={"fingerprint": report["fingerprint"]}
+    )
+
+    assert refused.status_code == 409
+    assert live["id"] in refused.json()["detail"]
+    assert "tidy when it finishes" in refused.json()["detail"]

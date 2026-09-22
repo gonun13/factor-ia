@@ -26,7 +26,12 @@ import { useEffect, useRef, useState, type ReactElement } from "react";
 import { api } from "../api";
 import { SettingsGlyph } from "../nodes/Glyphs";
 import { NO_OFFER, type ProviderName } from "../canvasContext";
-import type { ModelOffer, Project, ProjectSettings } from "../types";
+import type {
+  HousekeepingReport,
+  ModelOffer,
+  Project,
+  ProjectSettings,
+} from "../types";
 
 /** The adapters that exist. */
 const PROVIDERS: Record<"claude" | "cursor" | "fake", { label: string; hint: string }> = {
@@ -54,6 +59,14 @@ const PROVIDERS: Record<"claude" | "cursor" | "fake", { label: string; hint: str
  */
 const inheritLabel = (name: string) => `${name} (default)`;
 
+/** Bytes as a human reads them. Approximate on purpose: this number exists to
+ * help somebody decide, never to be reconciled against `du`. */
+function megabytes(size: number): string {
+  if (size >= 1024 * 1024) return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+  if (size >= 1024) return `${Math.round(size / 1024)} kB`;
+  return `${size} B`;
+}
+
 export function ProjectSettingsPanel({
   project,
   providers,
@@ -75,6 +88,16 @@ export function ProjectSettingsPanel({
   const [error, setError] = useState<string | null>(null);
   const panel = useRef<HTMLElement>(null);
   const firstField = useRef<HTMLSelectElement>(null);
+  // Housekeeping. Fetched on open so the numbers are there before anything is
+  // clicked — an operator deciding whether to give up a run's work should not
+  // have to press something to find out what it is.
+  const [report, setReport] = useState<HousekeepingReport | null>(null);
+  const [reportFailed, setReportFailed] = useState(false);
+  const [confirmingTidy, setConfirmingTidy] = useState(false);
+  const [tidying, setTidying] = useState(false);
+  const [tidied, setTidied] = useState<string | null>(null);
+  const [tidyError, setTidyError] = useState<string | null>(null);
+  const keepThem = useRef<HTMLButtonElement>(null);
 
   const dirty =
     provider !== (project.settings.default_provider ?? "") ||
@@ -105,6 +128,48 @@ export function ProjectSettingsPanel({
   const inheritedModel = offer.default_model ?? "chosen by the provider";
 
   useEffect(() => firstField.current?.focus(), []);
+
+  useEffect(() => {
+    let live = true;
+    void api
+      .housekeeping(project.id)
+      .then((next) => live && setReport(next))
+      // A survey that cannot be read is a muted sentence, never a blocked
+      // panel: the provider and model controls are why most people opened this.
+      .catch(() => live && setReportFailed(true));
+    return () => {
+      live = false;
+    };
+  }, [project.id]);
+
+  useEffect(() => {
+    if (confirmingTidy) keepThem.current?.focus();
+  }, [confirmingTidy]);
+
+  const discards = report?.discardable.length ?? 0;
+  const husks = report?.residue.length ?? 0;
+  const neverCommitted = report?.discardable.filter((item) => !item.committed).length ?? 0;
+
+  async function tidy() {
+    if (!report) return;
+    setTidying(true);
+    setTidyError(null);
+    try {
+      const outcome = await api.tidy({
+        fingerprint: report.fingerprint,
+        projectId: project.id,
+      });
+      setTidied(outcome.detail);
+      setConfirmingTidy(false);
+      // Re-read rather than patch: the server decided what went, and a second
+      // survey is the only honest account of what is left.
+      setReport(await api.housekeeping(project.id));
+    } catch (cause) {
+      setTidyError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setTidying(false);
+    }
+  }
 
   async function save() {
     setSaving(true);
@@ -250,6 +315,105 @@ export function ProjectSettingsPanel({
                 will be refused at run time rather than quietly replaced.
               </span>
             )}
+          </section>
+
+          <section className="setting">
+            <div className="setting-head">
+              <span className="eyebrow">Disk</span>
+            </div>
+            <label className="muted" id="project-tidy-hint">
+              What this project&rsquo;s finished runs left under <code>_runs/</code>.
+              Branches always survive; only the checkouts go.
+            </label>
+            {report === null && reportFailed && (
+              <span className="muted">This could not be read just now.</span>
+            )}
+            {report !== null && discards === 0 && husks === 0 && (
+              <span className="muted">Nothing to tidy.</span>
+            )}
+            {report !== null && (discards > 0 || husks > 0) && (
+              <>
+                {discards > 0 && (
+                  <ul className="tidy-list" aria-describedby="project-tidy-hint">
+                    {report.discardable.map((item) => (
+                      <li key={item.run_id}>
+                        <span>{item.detail}</span>
+                        <span className="muted">{megabytes(item.bytes)}</span>
+                        {!item.committed && (
+                          <span className="danger" title="Nothing on this run was ever committed, so its worktree is the only copy.">
+                            never committed
+                          </span>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                {husks > 0 && (
+                  <span className="muted">
+                    {husks} empty run director{husks === 1 ? "y" : "ies"} left behind
+                    by a fixed bug {husks === 1 ? "goes" : "go"} too.
+                  </span>
+                )}
+                {report.spared.length > 0 && (
+                  <span className="muted">
+                    The most recent resumable run of each factory is never offered.
+                  </span>
+                )}
+                {confirmingTidy ? (
+                  // Inline, replacing the button rather than covering the
+                  // panel, and copying the run panel's confirmation exactly:
+                  // one destructive control should not read two ways.
+                  <span
+                    className="run-confirm"
+                    onKeyDown={(event) => {
+                      if (event.key === "Escape" && !tidying) setConfirmingTidy(false);
+                    }}
+                  >
+                    <span className="run-confirm-question">
+                      {discards > 0
+                        ? `Discard ${discards} run${discards === 1 ? "" : "s"}?`
+                        : "Clear up the leftovers?"}
+                      {neverCommitted > 0 &&
+                        ` ${neverCommitted} hold work that was never committed.`}
+                    </span>
+                    <button
+                      type="button"
+                      className="destructive"
+                      disabled={tidying}
+                      onClick={() => void tidy()}
+                      title={
+                        "Their branches and commits survive; the worktrees under " +
+                        "_runs/ do not, and those runs read cancelled afterwards."
+                      }
+                    >
+                      {tidying ? "Clearing…" : "Clear up"}
+                    </button>
+                    <button
+                      type="button"
+                      className="keep"
+                      ref={keepThem}
+                      disabled={tidying}
+                      onClick={() => setConfirmingTidy(false)}
+                    >
+                      Keep them
+                    </button>
+                  </span>
+                ) : (
+                  <button
+                    type="button"
+                    className="destructive"
+                    onClick={() => setConfirmingTidy(true)}
+                  >
+                    {discards > 0
+                      ? `Discard ${discards} run${discards === 1 ? "" : "s"}`
+                      : `Clear up ${husks} leftover${husks === 1 ? "" : "s"}`}
+                    {report.bytes > 0 ? ` · ${megabytes(report.bytes)}` : ""}&hellip;
+                  </button>
+                )}
+              </>
+            )}
+            {tidied && <span className="muted">{tidied}</span>}
+            {tidyError && <span className="bad">{tidyError}</span>}
           </section>
         </div>
 

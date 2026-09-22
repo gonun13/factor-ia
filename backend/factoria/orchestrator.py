@@ -88,7 +88,17 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
-from . import config, gitwork, machine, memory, runcheck, skills, summary, worktree
+from . import (
+    config,
+    gitwork,
+    housekeeping,
+    machine,
+    memory,
+    runcheck,
+    skills,
+    summary,
+    worktree,
+)
 from .knowledge import filing as knowledge_filing
 from .knowledge import index as knowledge_index
 from .knowledge import mcp as knowledge_mcp
@@ -960,10 +970,10 @@ class Orchestrator:
         the canvas with no way to say so.
         """
         if run_id not in self._active:
-            return await self._discard_finished(run_id)
+            return await self.discard_finished(run_id)
         return await self._halt(run_id, discard=True)
 
-    async def _discard_finished(self, run_id: str) -> Run:
+    async def discard_finished(self, run_id: str) -> Run:
         """Cancel a run that has already stopped: bookkeeping and a cleanup.
 
         No task to interrupt and no state to unwind — what is left is to say the
@@ -1011,6 +1021,61 @@ class Orchestrator:
             RunStatusEvent(run_id=run.id, status="cancelled", detail="cancelled")
         )
         return run
+
+    async def tidy(self, report: housekeeping.Report) -> housekeeping.Outcome:
+        """Apply a survey: discard what it offers, sweep what a fixed bug left.
+
+        **The two piles are applied by two different means**, which is the whole
+        reason `housekeeping` keeps them apart. A discard goes through
+        `discard_finished` — the same Cancel the operator presses on one run —
+        so worktree removal keeps exactly one implementation and those runs end
+        up reading `cancelled` like any other withdrawn run. A sweep is a
+        directory removal and nothing else: the run it belonged to was
+        discarded when it ended, and its record is not touched.
+
+        **Refused outright while anything is in flight.** A run owns the only
+        worktree slot this design has, and a sweep racing a walk is a class of
+        bug worth not having at all.
+
+        Per-run failures are collected rather than raised. A tidy that stopped
+        at the first stubborn directory would leave the operator to work out how
+        far it got, which is the state this whole feature exists to get them out
+        of.
+        """
+        if self._active_run_id is not None:
+            raise RunBusy(self._active_run_id)
+
+        outcome = housekeeping.Outcome()
+        for item in report.discardable:
+            try:
+                await self.discard_finished(item.run_id)
+            except RunConflict as error:
+                outcome.refused.append(
+                    housekeeping.Spared(run_id=item.run_id, why=str(error))
+                )
+                continue
+            # The cancel emptied it; this takes the directory itself, including
+            # the case `cleanup`'s own `rmdir` cannot — a `.DS_Store` the bind
+            # mount left where nobody wrote.
+            await asyncio.to_thread(worktree.sweep_run_dir, item.run_id)
+            outcome.discarded.append(item.run_id)
+            outcome.bytes_reclaimed += item.bytes
+
+        for item in report.residue:
+            went = await asyncio.to_thread(worktree.sweep_run_dir, item.run_id)
+            if went:
+                outcome.swept.append(item.run_id)
+                outcome.bytes_reclaimed += item.bytes
+            else:
+                outcome.refused.append(
+                    housekeeping.Spared(
+                        run_id=item.run_id,
+                        why="something appeared in it since the preview — left alone",
+                    )
+                )
+
+        outcome.detail = _tidy_detail(outcome)
+        return outcome
 
     async def _halt(self, run_id: str, *, discard: bool) -> Run:
         """Stop the run and everything it spawned. Shared by `stop` and `cancel`.
@@ -3863,6 +3928,24 @@ class Orchestrator:
             summary.write(run)
             interrupted.append(run.id)
         return interrupted
+
+
+def _tidy_detail(outcome: "housekeeping.Outcome") -> str:
+    """What a tidy did, as one sentence. Always ends by saying what it did not
+    touch: "branches untouched" is the guarantee the whole feature is built
+    around, and an operator should read it every time rather than have to
+    remember it."""
+    parts: list[str] = []
+    if outcome.discarded:
+        count = len(outcome.discarded)
+        parts.append(f"discarded {count} run{'s' if count != 1 else ''}")
+    if outcome.swept:
+        count = len(outcome.swept)
+        parts.append(f"swept {count} empty run director{'ies' if count != 1 else 'y'}")
+    said = " · ".join(parts) if parts else "nothing to tidy"
+    if outcome.refused:
+        said += f" — {len(outcome.refused)} left alone"
+    return f"{said}. Branches untouched."
 
 
 def _waiting_detail(kind: str) -> str:

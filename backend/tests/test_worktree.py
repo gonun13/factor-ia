@@ -311,6 +311,42 @@ def test_a_failed_run_keeps_its_memory_for_the_post_mortem(workspace):
     assert path.read_text() == "what research thought it knew"
 
 
+def test_cleanup_removes_the_scope_sessions_and_then_the_run_directory(workspace):
+    spaces = spaces_for(workspace)
+    spaces.ensure_scope_dir("scope-1")
+
+    spaces.cleanup("succeeded")
+
+    assert not worktree.scope_root(spaces.run_id, workspace).exists()
+    assert not worktree.run_dir(spaces.run_id, workspace).exists()
+
+
+def test_a_scope_session_no_longer_keeps_its_run_directory_alive(workspace):
+    """**The regression**, and the third of its kind. A scope session's cwd is
+    empty by design (`SCOPE_DIRNAME`), so it costs no disk and still held the
+    run directory open against the emptiness guard — which is why it went
+    unnoticed where `_memory/` did not. Found in the wild as a workspace of
+    0-byte husks, one per run that had ever scoped."""
+    spaces = spaces_for(workspace)
+    spaces.ensure_scope_dir("scope-1")
+    # A looped scope node gets one per lap, so the parent is what has to go.
+    spaces.ensure_scope_dir("scope-1-lap-2")
+
+    spaces.cleanup("succeeded")
+
+    assert not worktree.run_dir(spaces.run_id, workspace).exists()
+
+
+def test_a_stopped_run_keeps_its_scope_sessions(workspace):
+    """Scratch follows the worktree column, and `stopped` keeps (0024)."""
+    spaces = spaces_for(workspace)
+    path = spaces.ensure_scope_dir("scope-1")
+
+    spaces.cleanup("stopped")
+
+    assert path.is_dir()
+
+
 def test_an_unaccounted_for_leftover_is_left_where_it_can_be_seen(workspace):
     """The emptiness guard is a safety property, not an oversight: a directory
     this module did not create is an operator's, and deleting it silently is

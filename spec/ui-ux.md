@@ -81,6 +81,26 @@ A model the CLI has stopped offering is shown as such and kept, never silently
 swapped for one nobody chose. It is refused at run time by the CLI, in the CLI's
 own words.
 
+### Clearing up, from the panel that knows the project
+
+The same panel carries a **Disk** section: what this project's finished runs
+left under `_runs/`, and what is being held back. The survey is fetched when the
+panel opens, not when a button is pressed — somebody deciding whether to give up
+a run's work should not have to press something to find out what it is. It names
+each run on its own line with its size, and marks the ones that never reached a
+commit, because those are the ones whose checkout is the only copy.
+
+It states, always, that the most recent resumable run of each factory is never
+offered. The button is destructive-styled and asks a second time inline,
+replacing itself rather than covering the panel — the same confirmation shape
+the run panel's Cancel uses, because one destructive control should not read two
+ways. Escape backs out; focus lands on **Keep them**.
+
+Acting does **not** close the panel, unlike Save: the result is a sentence about
+what went and what did not, and closing the surface that reported it would take
+the answer away with it. `bin/tidy` is the same capability for the whole
+workspace (`decisions/0025`).
+
 While a node runs, it says what it **actually** ran on — read off the provider's
 own first event, not off what was requested. Those differ every time both rungs
 deferred and the CLI decided.

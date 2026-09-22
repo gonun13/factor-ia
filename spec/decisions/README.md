@@ -50,3 +50,4 @@ original keeps its number.
 | [0022](0022-commands-do-not-ask-inside-the-container.md) | Commands do not ask inside the container | amends `PROJECT.md` blast radius |
 | [0023](0023-a-run-can-be-restarted-from-a-node.md) | A run can be restarted from a node | stands |
 | [0024](0024-stop-is-not-cancel.md) | Stop is not Cancel | amends `PROJECT.md` durability |
+| [0025](0025-tidying-is-an-errand-not-a-policy.md) | Tidying is an errand, not a policy | extends `0024` |

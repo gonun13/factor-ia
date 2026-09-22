@@ -32,6 +32,7 @@ backend/     FastAPI app, uv-managed  (factoria.main:app)
              orchestrator.py  the walk, the state machine, cancel, the sweep
              gitwork.py  every git command, behind an allowlist
              worktree.py  one worktree per run, and its cleanup policy
+             housekeeping.py  that policy applied later, as a preview
              memory.py  run memory: the document, the contract, the pointer
              summary.py  /data/runs/<id>/summary.md
              runcheck.py  run preconditions · runevents.py  the event envelope
@@ -56,7 +57,7 @@ frontend/    Vite + React + TypeScript + React Flow v12, built at image build ti
              screens/  project list · canvas   nodes/  node + belt components
              run.ts  the EventSource client and the runtime reducer
              graph.ts  API graph <-> React Flow   validation.ts  run preconditions
-bin/         host-side setup
+bin/         host-side setup and housekeeping (bootstrap, up, down, tidy, walkthrough)
 Dockerfile   multi-stage: build the SPA, then a Python runtime with the claude CLI
 spec/        the authoritative specification — this file's home
 docs/        BUILD_STATE.md, SECURITY_PRD.md — operator-local, gitignored
@@ -78,6 +79,8 @@ with every reason if the graph cannot run, 409 if one is already in flight) ·
 `{"from_node_id": …}` body — one node of a stopped run and everything below it,
 [`decisions/0023`](decisions/0023-a-run-can-be-restarted-from-a-node.md)) ·
 `GET /api/runs`, `GET /api/runs/{id}` ·
+`GET /api/housekeeping` (the preview; `?format=text` for `bin/tidy`) ·
+`POST /api/housekeeping` (acts, on a fingerprint of that preview) ·
 `GET /api/runs/{id}/events` (SSE).
 
 Skills: `GET`/`POST /api/skills` · `GET`/`DELETE /api/skills/{name}` ·
@@ -332,17 +335,26 @@ A run with a codebase attached does this to it:
 4. `summary.md` is written: the request, the branch, the commit, the diffstat,
    and the two commands that review it.
 
-Cleanup policy:
+Cleanup policy — **scratch** is `_memory/`, `_knowledge/` and `_scope/`, which
+follow the worktree column exactly:
 
-| outcome | worktree | branch |
-|---|---|---|
-| succeeded | removed | **kept** — it is the deliverable |
-| failed | **kept** for inspection, path in `summary.md` | kept |
-| cancelled | removed (an explicit discard) | kept, empty |
+| outcome | worktree | scratch | branch |
+|---|---|---|---|
+| succeeded | removed | removed | **kept** — it is the deliverable |
+| failed | **kept** for inspection, path in `summary.md` | **kept** | kept |
+| stopped | **kept** — a pause has a Resume behind it (`decisions/0024`) | **kept** | kept |
+| cancelled | removed (an explicit discard) | removed | kept, empty |
 
 Branches are never deleted by Factor-ia, not even its own: `gitwork.py` has no
 code path that deletes a ref, and a test asserts it. A cancelled run leaves a
-branch at the commit it was cut from; `git branch -d` is the operator's to type.
+branch at the commit it was cut from; `git branch -d` is the operator's to type,
+or `bin/tidy --branches` — a host-side script, not the app, using lowercase `-d`
+so git refuses anything unmerged.
+
+**Housekeeping** (`housekeeping.py`) is the same policy applied retrospectively:
+a preview an operator acts on, never a retention rule that runs on its own
+(`decisions/0025`). The most recent resumable run of every factory is never
+offered, at any age. See `behaviour/run-execution.md`.
 
 One run at a time — a second one is refused with the id of the run holding the
 slot.

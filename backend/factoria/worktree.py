@@ -60,17 +60,20 @@ moves `refs/remotes/*` and nothing else.
 **Cleanup policy**, stated here because it is a policy and not an
 implementation detail:
 
-| run outcome | worktree | memory | branch |
+| run outcome | worktree | scratch | branch |
 |---|---|---|---|
 | `succeeded` | removed | removed | **kept** — it is the deliverable, and the whole point of the run |
 | `failed` | **kept** at `_runs/<run-id>/…`, path reported in `summary.md` | **kept** | kept |
 | `stopped` | **kept**, same as `failed` — a pause has a Resume behind it | **kept** | kept |
 | `cancelled` | removed — an explicit discard is what cancel *means* | removed | kept |
 
-A run's memory (`memory.py`, `_runs/<run-id>/_memory/`) follows the worktree
-column exactly, and for the same reason: it is scratch for the run, it is worth
-nothing once the run succeeded, and it is worth everything when the run failed
-and somebody has to work out what the agents thought they knew.
+**Scratch** is every other directory a run owns: `_memory/`, `_knowledge/` and
+`_scope/`. All three follow the worktree column exactly, and for the same
+reason a run's memory does — it is scratch for the run, it is worth nothing
+once the run succeeded, and it is worth everything when the run failed and
+somebody has to work out what the agents thought they knew. Naming the set
+rather than one member of it is deliberate: each was added to `cleanup`
+separately and the third was found only after it had been leaking for a while.
 
 **`stopped` and `cancelled` are both an operator pressing a button**, and they
 are on opposite rows because they are opposite decisions (`decisions/0024`):
@@ -184,13 +187,20 @@ def memory_dir(run_id: str, root: Path | None = None) -> Path:
     return run_dir(run_id, root) / MEMORY_DIRNAME
 
 
+def scope_root(run_id: str, root: Path | None = None) -> Path:
+    """`<workspace>/_runs/<run-id>/_scope/` — every scope session of one run.
+
+    Spelled here rather than composed at the call site for the reason
+    `memory_dir` and `knowledge_dir` are each spelled once: `cleanup` has to be
+    able to name the whole directory, and a path built in two places is how one
+    of them gets forgotten. This one *was* forgotten — see `cleanup`.
+    """
+    return run_dir(run_id, root) / SCOPE_DIRNAME
+
+
 def scope_dir(run_id: str, node_slug: str, root: Path | None = None) -> Path:
     """`<workspace>/_runs/<run-id>/_scope/<node>/`. See `SCOPE_DIRNAME`."""
-    return (
-        run_dir(run_id, root)
-        / SCOPE_DIRNAME
-        / safe_name(node_slug, "scope node")
-    )
+    return scope_root(run_id, root) / safe_name(node_slug, "scope node")
 
 
 def knowledge_dir(run_id: str, root: Path | None = None) -> Path:
@@ -202,6 +212,58 @@ def knowledge_dir(run_id: str, root: Path | None = None) -> Path:
     The MCP server reads it; the agent never sees it.
     """
     return run_dir(run_id, root) / KNOWLEDGE_DIRNAME
+
+
+#: The three directories a run owns that are not a checkout. `cleanup` removes
+#: all three together (the "scratch" column in this module's policy table), so
+#: a run directory holding nothing else is a run directory the policy has
+#: already finished with.
+RESIDUE_DIRNAMES: frozenset[str] = frozenset(
+    {MEMORY_DIRNAME, KNOWLEDGE_DIRNAME, SCOPE_DIRNAME}
+)
+
+#: What a macOS bind mount leaves in a directory nobody wrote to. Named rather
+#: than ignored by pattern: the residue check below is a safety predicate, and
+#: "any dotfile" would quietly cover a `.git` — the one child that means the
+#: opposite of residue.
+OS_LITTER: frozenset[str] = frozenset({".DS_Store"})
+
+
+def is_residue_only(run_id: str, root: Path | None = None) -> bool:
+    """Whether `_runs/<run-id>/` holds nothing but scratch the policy discards.
+
+    **The safety predicate for sweeping a run directory after the fact**, and
+    the same principle as `cleanup`'s emptiness guard one level down: a child
+    this module cannot name is an operator's, and a sweep that deleted it would
+    be the failure the guard exists to prevent. So this is a whitelist of the
+    three directories `cleanup` itself removes — never a blacklist, and never
+    "no checkout means empty".
+
+    False for a directory that does not exist, so a caller cannot read "nothing
+    to do" as "safe to remove".
+    """
+    path = run_dir(run_id, root)
+    if not path.is_dir():
+        return False
+    return all(
+        child.name in RESIDUE_DIRNAMES or child.name in OS_LITTER
+        for child in path.iterdir()
+    )
+
+
+def sweep_run_dir(run_id: str, root: Path | None = None) -> bool:
+    """Remove a run directory that `is_residue_only` vouches for. Returns
+    whether it went.
+
+    `rmtree` rather than the `rmdir` `cleanup` uses, and only *because* of that
+    predicate: nothing inside a residue-only directory is a registered git
+    worktree, so there is no admin entry to orphan and nothing an operator put
+    there. A directory that does not pass is left exactly where it is.
+    """
+    if not is_residue_only(run_id, root):
+        return False
+    shutil.rmtree(run_dir(run_id, root), ignore_errors=True)
+    return not run_dir(run_id, root).exists()
 
 
 #: Branch names we will never cut a new run from. A codebase left checked out
@@ -645,6 +707,16 @@ class RunWorkspaces:
                 shutil.rmtree(knowledge_dir(self.run_id, self.root), ignore_errors=True)
             except Exception:  # noqa: BLE001 — see docstring
                 pass
+            # The scope sessions' working directories, by the same policy.
+            # They are empty by design (`SCOPE_DIRNAME`), which is exactly how
+            # this one was missed: an empty directory costs no disk and still
+            # holds the run directory open against the guard below. It was
+            # found in the wild, keeping most of an operator's run directories
+            # alive as husks.
+            try:
+                shutil.rmtree(scope_root(self.run_id, self.root), ignore_errors=True)
+            except Exception:  # noqa: BLE001 — see docstring
+                pass
             # The per-run directory is ours and should now be empty; the `_runs`
             # root stays so its purpose is discoverable from the host.
             #
@@ -656,6 +728,8 @@ class RunWorkspaces:
             # for as long as it was not, one memory node kept every run
             # directory on the machine alive forever. `_knowledge/` is the
             # second entry in that list and was added with it in mind.
+            # `_scope/` is the third and was not: it had to be found the same
+            # way the first one was.
             try:
                 path = run_dir(self.run_id, self.root)
                 if path.is_dir() and not any(path.iterdir()):

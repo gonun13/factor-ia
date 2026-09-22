@@ -139,16 +139,55 @@ what makes a second lap mean anything; see [`review-loops.md`](review-loops.md).
 
 ### Cleanup
 
-| outcome | worktree | branch |
-|---|---|---|
-| succeeded | removed | **kept** — it is the deliverable |
-| failed | **kept** for inspection, path in `summary.md` | kept |
-| stopped | **kept** — a pause has a Resume behind it | kept |
-| cancelled | removed (an explicit discard) | kept, empty |
+| outcome | worktree | scratch | branch |
+|---|---|---|---|
+| succeeded | removed | removed | **kept** — it is the deliverable |
+| failed | **kept** for inspection, path in `summary.md` | **kept** | kept |
+| stopped | **kept** — a pause has a Resume behind it | **kept** | kept |
+| cancelled | removed (an explicit discard) | removed | kept, empty |
+
+**Scratch** is every directory a run owns that is not a checkout: `_memory/`,
+`_knowledge/` and `_scope/`. All three follow the worktree column exactly. Each
+was added to `RunWorkspaces.cleanup` separately, and each that was missed held
+its whole run directory open against the emptiness guard below it —
+`_scope/` was the third and was found only in the wild.
 
 **Branches are never deleted by Factor-ia, not even its own.** `gitwork.py` has
-no code path that deletes a ref, and a test asserts it. `git branch -d` is the
-operator's to type.
+no code path that deletes a ref, and a test asserts it. `bin/tidy --branches`
+is the single exception and it is not the app: it is a script the operator runs
+on the host, and it uses lowercase `git branch -d`, so git itself refuses a
+branch whose work was never merged.
+
+### Housekeeping
+
+The cleanup policy applied later, to runs that ended long ago, by an operator
+who has decided a pile is not worth keeping. `GET /api/housekeeping` previews
+and removes nothing; `POST /api/housekeeping` acts. Both doors — the project
+settings panel and `bin/tidy` — go through the same survey
+(`housekeeping.survey`), so neither can be more permissive than the other.
+
+**Two piles, and they are not the same question.**
+
+- **Discardable** — a `failed` or `stopped` run whose worktree the policy
+  *kept*. Giving one up is a decision, it is exactly the decision Cancel means,
+  and it is applied *by* Cancel (`Orchestrator.discard_finished`), so those runs
+  read `cancelled` afterwards and worktree removal keeps one implementation.
+- **Residue** — the run directory of a `succeeded` or `cancelled` run the policy
+  already discarded, standing only because a fixed bug left an empty `_scope/`
+  in it. Nothing is being decided, so residue has **no age floor and no spared
+  run**. It is removed only when `worktree.is_residue_only` vouches that the
+  directory holds nothing but scratch; anything else is reported and left.
+
+**The rule that is not negotiable: the most recent resumable run of every
+factory is never offered, at any age.** Nothing is committed until a run reaches
+its output node, so a kept worktree can be the only copy of expensive work
+there is. The age floor (7 days by default, never 0) is a convenience; this is
+the safety property. Everything held back is reported with the sentence saying
+why — a refusal to delete is a refusal, and refusals here are sentences.
+
+A tidy is refused outright while a run is in flight, and an act carries the
+fingerprint of the preview it was shown: if the list moved in between, the
+server refuses rather than acting on a set nobody saw.
 
 ---
 

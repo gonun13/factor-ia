@@ -11,6 +11,7 @@ import type {
   Factory,
   GraphWrite,
   Health,
+  HousekeepingReport,
   KnowledgeBase,
   KnowledgeEntryText,
   MemoryDocument,
@@ -22,6 +23,7 @@ import type {
   Skill,
   SkillSummary,
   SshKeyStatus,
+  TidyOutcome,
 } from "./types";
 
 export class ApiError extends Error {
@@ -294,6 +296,30 @@ export const api = {
     request<Run>(`/api/runs/${runId}/resume`, {
       method: "POST",
       ...(fromNodeId ? { body: JSON.stringify({ from_node_id: fromNodeId }) } : {}),
+    }),
+  /** What finished runs have left on disk, and what is being spared.
+   *
+   * A GET that decides nothing: it is the preview both doors show before
+   * anything is removed. `project_id` narrows what is *offered*, never what is
+   * safe — the newest resumable run of every factory is held back either way. */
+  housekeeping: (projectId?: string, olderThanDays?: number) =>
+    request<HousekeepingReport>(
+      `/api/housekeeping?${new URLSearchParams({
+        ...(projectId ? { project_id: projectId } : {}),
+        ...(olderThanDays ? { older_than_days: String(olderThanDays) } : {}),
+      })}`,
+    ),
+  /** Act on a preview. The fingerprint is what ties the two together: if the
+   * list moved in between, the server refuses rather than acting on a set the
+   * operator never saw. */
+  tidy: (body: { fingerprint: string; projectId?: string; olderThanDays?: number }) =>
+    request<TidyOutcome>("/api/housekeeping", {
+      method: "POST",
+      body: JSON.stringify({
+        fingerprint: body.fingerprint,
+        ...(body.projectId ? { project_id: body.projectId } : {}),
+        ...(body.olderThanDays ? { older_than_days: body.olderThanDays } : {}),
+      }),
     }),
   run: (runId: string) => request<Run>(`/api/runs/${runId}`),
   runs: () => request<Run[]>("/api/runs"),

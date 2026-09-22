@@ -861,3 +861,60 @@ export type NodeEventPage = {
   last_seq: number;
   events: RunEvent[];
 };
+
+/**
+ * What finished runs have left on disk, and what is being held back.
+ *
+ * Two piles, deliberately not one. `discardable` is a `failed` or `stopped`
+ * run whose checkout the cleanup policy *kept*, because Resume would still
+ * take it — giving one up is a decision, and it is the same decision Cancel
+ * means. `residue` is a run directory the policy already finished with,
+ * standing only because a bug left an empty `_scope/` in it; nothing is being
+ * decided there.
+ *
+ * `spared` always carries a sentence. The rule behind most of them is that the
+ * most recent resumable run of every factory is never offered, at any age.
+ */
+export type HousekeepingReport = {
+  older_than_days: number;
+  project_id: string | null;
+  discardable: {
+    run_id: string;
+    project_id: string;
+    factory_id: string;
+    factory_name: string;
+    status: string;
+    ended_at: string | null;
+    bytes: number;
+    /** Whether every worktree of the run reached a commit. Reported so the
+     * confirmation can say what is being given up — never gated on, since
+     * nothing commits until a run reaches its output node. */
+    committed: boolean;
+    pushed: boolean;
+    detail: string;
+  }[];
+  residue: { run_id: string; status: string; bytes: number; detail: string }[];
+  spared: { run_id: string; factory_id: string; why: string }[];
+  unknown: { run_id: string; why: string }[];
+  prune: { run_id: string; repo_path: string; branch: string; why: string }[];
+  spared_branches: {
+    run_id: string;
+    repo_path: string;
+    branch: string;
+    why: string;
+  }[];
+  prune_repos: string[];
+  bytes: number;
+  /** What the operator was shown. Carried back on the act, and refused if it
+   * has moved since. */
+  fingerprint: string;
+};
+
+/** What acting on a report actually did. `detail` is the sentence to show. */
+export type TidyOutcome = {
+  discarded: string[];
+  swept: string[];
+  refused: { run_id: string; factory_id: string; why: string }[];
+  bytes_reclaimed: number;
+  detail: string;
+};

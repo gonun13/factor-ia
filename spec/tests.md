@@ -16,6 +16,10 @@ their proof belongs in.
 | **UI tests** (`uitests/*.mjs`) | The half the backend cannot see: that a thing exists in the palette, draws the handles it should, and that what the operator drags lands in the saved file. Playwright, against the real bundle. | `docker compose --profile uitest run --rm uitest node tests/<name>.mjs` |
 | **Walkthrough** (`bin/walkthrough`) | That the stack an operator actually installs works end to end, across a container restart. | `./bin/walkthrough` |
 
+`bin/tidy` is an operator script rather than a test layer: it prints the
+server's own preview and removes nothing without `--yes`, so what it can do is
+proved by the routes it calls.
+
 ---
 
 ## The standing rules
@@ -114,6 +118,7 @@ surface, not over the places you thought of.**
 | a new exit for text | `test_scrub.py` — a new exit should be hard to add without noticing |
 | an API shape | `test_api.py`, `test_runs_api.py`, `test_settings_api.py` |
 | a run control, or what a halted run may do next | `test_orchestrator.py` for what stop, cancel and resume leave on disk and in the record, plus `uitests/run-controls.mjs` for which **two** buttons the panel offers — the state machine is the product rule here, and a backend test cannot see a button |
+| housekeeping — what may be reclaimed, and what is spared | `test_housekeeping.py` for the predicates, handed records and a clock rather than a store; `test_runs_api.py` for the routes, the fingerprint and the in-flight refusal; `test_worktree.py` for what `cleanup` removes. **The claim to keep proved is that the most recent resumable run of every factory is never offered** |
 | a rung of the system prompt, or a rule that reads a skill against one | `test_machine.py` for the ladder's order and the lint's sentences, `test_execution.py` for what actually reached the spawn — a contract nobody proved arrived is a contract that is not in force |
 
 ---

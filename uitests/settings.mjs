@@ -62,10 +62,12 @@ try {
 
   await page.goto(`${BASE}/#/p/${PROJECT}`, { waitUntil: "networkidle" });
   // A fresh project's factory is empty, so drop an agent from the palette —
-  // the model slot is what this file is about. Scoped to the open menu because
-  // the group's own trigger is called "Agents", which /^Agent/ also matches.
+  // the model slot is what this file is about. The agent kinds are named for
+  // what they do ("Worker", "Reviewer"), not for the group they sit in, and
+  // this is still scoped to the open menu so the group's own trigger cannot
+  // match instead.
   await (await openPalette(page, "agents"))
-    .getByRole("button", { name: /^Agent/ })
+    .getByRole("button", { name: /^Worker/ })
     .click();
   await page.waitForSelector(".slot.model");
 
@@ -88,6 +90,26 @@ try {
   await page.waitForSelector(".slideover");
   check("the panel focuses its first field", await page.evaluate(() => document.activeElement?.id), "project-provider");
   check("save is disabled until something changes", await saveSettings.isDisabled(), true);
+
+  // ---- the housekeeping section -------------------------------------------
+  // A throwaway project has no runs, so this is the empty state — and the
+  // empty state is the one worth pinning: a destructive control that offers
+  // itself when there is nothing to destroy is the bug to catch.
+  const disk = page.locator(".setting", { has: page.getByText("Disk", { exact: true }) });
+  check("the panel carries a Disk section", await disk.count(), 1);
+  // Fetched on open rather than on a click, so it is there to be read.
+  await disk.getByText("Nothing to tidy.").waitFor();
+  check("a project with no runs says so", await disk.getByText("Nothing to tidy.").count(), 1);
+  check(
+    "…and offers no destructive button",
+    await disk.getByRole("button", { name: /Clear up/ }).count(),
+    0,
+  );
+  check(
+    "the section says what it will never touch",
+    (await disk.innerText()).includes("Branches always survive"),
+    true,
+  );
   const container = (await api("/api/agent/status").then((r) => r.json())).default_provider;
   check("the inherit option names the container's real provider", await page.locator("#project-provider option").allInnerTexts(), [
     `${container === "fake" ? "Fake (dry run)" : "Claude"} (default)`,

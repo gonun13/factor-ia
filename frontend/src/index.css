@@ -2592,6 +2592,34 @@ ul.plain {
   flex-wrap: wrap;
 }
 
+/* **One line per run, and the run has to be identifiable from it.** A list of
+   sizes with no names is a number an operator cannot check, and this is the
+   one control in the panel that cannot be undone. */
+.tidy-list {
+  list-style: none;
+  margin: 0 0 0.9rem;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  font-size: 0.86rem;
+  max-height: 11rem;
+  overflow-y: auto;
+}
+
+.tidy-list li {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+
+.tidy-list li .danger {
+  font-size: 0.78rem;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
 .facts {
   display: grid;
   grid-template-columns: max-content 1fr;

@@ -42,10 +42,11 @@ from pathlib import Path
 from typing import Any, AsyncIterator
 
 from fastapi import APIRouter, Header, HTTPException, Query, Request, status
-from fastapi.responses import StreamingResponse
+from fastapi.responses import PlainTextResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict
 
-from .models import Run, RunAnswer, RunDecision, RunInput
+from . import housekeeping
+from .models import Run, RunAnswer, RunDecision, RunInput, utcnow
 from .orchestrator import Orchestrator, RunBusy, RunConflict, get_orchestrator
 from .runcheck import NotRunnable
 from .runlog import RunLog
@@ -249,6 +250,87 @@ async def resume_run(run_id: str, body: ResumeRequest | None = None) -> Run:
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
     except RunConflict as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+
+
+class TidyRequest(BaseModel):
+    """What an act carries back from the preview it was shown.
+
+    **The fingerprint, not a list of ids.** Between looking and acting a run can
+    finish, be resumed, or be cancelled by hand, and an act that named ids would
+    happily discard a run the operator never saw. One scalar recomputed on the
+    server catches an addition as readily as a removal, and `bin/tidy` can `sed`
+    it off the first line of the text preview without a JSON parser.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    older_than_days: int = housekeeping.DEFAULT_OLDER_THAN_DAYS
+    project_id: str | None = None
+    fingerprint: str
+
+
+def _survey(older_than_days: int, project_id: str | None) -> housekeeping.Report:
+    """One spelling of the survey, so the preview and the act cannot disagree
+    about what the rule is."""
+    orch = orchestrator()
+    return housekeeping.survey(
+        orch.list(),
+        now=utcnow(),
+        older_than_days=older_than_days,
+        project_id=project_id,
+        active_run_id=orch.active_run_id(),
+    )
+
+
+@router.get("/housekeeping")
+async def housekeeping_preview(
+    older_than_days: int = Query(
+        default=housekeeping.DEFAULT_OLDER_THAN_DAYS,
+        ge=housekeeping.MIN_OLDER_THAN_DAYS,
+        le=3650,
+    ),
+    project_id: str | None = Query(default=None),
+    format: str = Query(default="json", pattern="^(json|text)$"),
+) -> Any:
+    """What could be reclaimed, and what is being spared and why. Removes nothing.
+
+    A GET, and therefore outside the Origin check — which is deliberate twice
+    over: it reads and it is what makes the `curl` door work at all
+    (`security.py` allows a request with no Origin precisely so a script can).
+
+    **`?format=text` is not a convenience.** `bin/tidy` has to work on a machine
+    that only has `curl` (`bin/walkthrough` assumes the same), and `sed` over
+    JSON breaks on the first comma inside a factory name. The server renders;
+    the script prints.
+    """
+    report = await asyncio.to_thread(_survey, older_than_days, project_id)
+    if format == "text":
+        return PlainTextResponse(housekeeping.render(report))
+    return report
+
+
+@router.post("/housekeeping", response_model=housekeeping.Outcome)
+async def housekeeping_apply(body: TidyRequest) -> housekeeping.Outcome:
+    """Discard what the preview offered, and sweep what a fixed bug left behind.
+
+    Mutating, so the Origin check covers it. Refused with a sentence when the
+    fingerprint has moved — the operator is then looking at a list that no
+    longer exists, and the honest answer is to show them the new one rather
+    than to act on the overlap.
+    """
+    report = await asyncio.to_thread(_survey, body.older_than_days, body.project_id)
+    if report.fingerprint != body.fingerprint:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "the list changed since you looked — run the preview again",
+        )
+    try:
+        return await orchestrator().tidy(report)
+    except RunBusy as exc:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"a run is in flight ({exc.run_id}) — tidy when it finishes",
+        ) from exc
 
 
 def _frame(record: dict[str, Any]) -> str:
