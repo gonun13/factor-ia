@@ -126,6 +126,17 @@ validated against the CLI's list** — the list is a subprocess away and the CLI
 is the authority, so a stale id is stored, sent, and refused by the CLI in its
 own words rather than by a guess of ours.
 
+`ProjectSettings.default_effort` is the exception, and defaults to **`high`**
+([`decisions/0026`](decisions/0026-effort-defaults-to-high.md)). It is one of
+`low | medium | high | xhigh | max`, closed at the model, and anything else is a
+422. `None` is still allowed and means the same *ask nobody*: the flag is
+omitted. It is not sent to a model the Claude handshake leaves out of
+`supportsEffort` while reporting it for others; a handshake that reports it for
+no model is taken as a yes for all (`cli.takes_effort`). A node's
+`config.effort` overrides it; an agent spawn's effort reaches Claude as
+`--effort` and Cursor as `<model>[effort=…]`, and is dropped for Cursor when no
+model is named.
+
 ### The run record
 
 `/data/runs/<run-id>/run.json`, `schema_version: 1`.

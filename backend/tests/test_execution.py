@@ -27,8 +27,11 @@ from factoria.orchestrator import (
     Orchestrator,
     adapter_for,
     adapter_name_for,
+    effort_for,
     model_for,
 )
+from factoria.agent.adapter import RunConfig
+from factoria.agent.claude import build_argv
 from factoria.agent.fake import FakeAdapter
 from factoria.runcheck import NotRunnable, run_problems
 from factoria.runlog import RunLog, run_dir
@@ -166,6 +169,34 @@ def test_no_model_anywhere_resolves_to_nothing_at_all() -> None:
     node = Node(id="a", definition=NodeDefinition(type="agent"))
     assert model_for(node, ProjectSettings()) == ""
     assert model_for(node, None) == ""
+
+
+def test_a_project_effort_is_used_when_the_node_names_none() -> None:
+    node = Node(id="a", definition=NodeDefinition(type="agent"))
+    assert effort_for(node, ProjectSettings()) == "high"
+    assert effort_for(node, ProjectSettings(default_effort="max")) == "max"
+
+
+def test_a_node_effort_beats_the_project_default() -> None:
+    node = Node(
+        id="a", definition=NodeDefinition(type="agent", config={"effort": "low"})
+    )
+    assert effort_for(node, ProjectSettings(default_effort="max")) == "low"
+
+
+def test_no_effort_anywhere_omits_the_flag() -> None:
+    """`None` is *ask nobody*, and the argv says nothing about effort."""
+    node = Node(id="a", definition=NodeDefinition(type="agent"))
+    assert effort_for(node, ProjectSettings(default_effort=None)) is None
+    assert effort_for(node, None) is None
+    config = RunConfig.from_node_config({}, default_effort=None)
+    assert "--effort" not in build_argv("s-1", config)
+
+
+def test_the_project_effort_reaches_the_claude_argv() -> None:
+    config = RunConfig.from_node_config({}, default_effort=ProjectSettings().default_effort)
+    argv = build_argv("s-1", config)
+    assert argv[argv.index("--effort") + 1] == "high"
 
 
 def test_only_agent_nodes_resolve_a_model() -> None:

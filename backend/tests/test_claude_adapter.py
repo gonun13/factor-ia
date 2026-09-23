@@ -21,6 +21,7 @@ from pathlib import Path
 import pytest
 
 from factoria.agent.adapter import RunConfig
+from factoria.agent import cli
 from factoria.agent.claude import ClaudeAdapter, build_argv, prompt_frame
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -136,6 +137,38 @@ def test_argv_reaches_the_child_unmodified(stub, workspace, tmp_path) -> None:
     finally:
         del os.environ["STUB_ARGV_OUT"]
     assert seen.read_text().splitlines() == build_argv("s-9", RunConfig())[1:]
+
+
+def _spawned_argv(monkeypatch, workspace, tmp_path, config: RunConfig) -> list[str]:
+    """What the child was handed, with the handshake answering from the
+    captured fixture: Opus and Sonnet report effort, Haiku does not."""
+    payload = json.loads((Path(__file__).parent / "fixtures" / "initialize_handshake.json").read_text())
+    models = cli._models_from(payload["response"]["response"]["models"])
+
+    async def captured() -> cli.Handshake:
+        return cli.Handshake(models=models)
+
+    monkeypatch.setattr(cli, "handshake", captured)
+    seen = tmp_path / "argv.txt"
+    monkeypatch.setenv("STUB_ARGV_OUT", str(seen))
+    drain(ClaudeAdapter().create_run("hi", str(workspace), config))
+    return seen.read_text().splitlines()
+
+
+def test_a_model_the_handshake_says_takes_no_effort_is_sent_none(
+    stub, workspace, tmp_path, monkeypatch
+) -> None:
+    argv = _spawned_argv(
+        monkeypatch, workspace, tmp_path, RunConfig(model="haiku", effort="high")
+    )
+    assert "--effort" not in argv
+
+
+def test_a_model_that_takes_effort_is_sent_it(stub, workspace, tmp_path, monkeypatch) -> None:
+    argv = _spawned_argv(
+        monkeypatch, workspace, tmp_path, RunConfig(model="sonnet", effort="high")
+    )
+    assert argv[argv.index("--effort") + 1] == "high"
 
 
 # ---- the happy path --------------------------------------------------------

@@ -38,6 +38,12 @@ class Model(BaseModel):
     label: str = ""
     detail: str = ""
     resolved: str = ""
+    #: Whether this model takes an effort level (`decisions/0026`). `True`
+    #: unless the handshake says otherwise, and it only says otherwise when it
+    #: reports effort for *some* model and leaves this one out — a handshake
+    #: that reports effort for none says nothing either way, and is taken as
+    #: yes for all.
+    supports_effort: bool = True
 
 
 class AccountStatus(BaseModel):
@@ -165,7 +171,7 @@ async def auth_status() -> AccountStatus:
     )
 
 
-def _model_from(raw: Any) -> Model | None:
+def _model_from(raw: Any, *, effort_reported: bool = False) -> Model | None:
     if not isinstance(raw, dict) or not isinstance(raw.get("value"), str):
         return None
     return Model(
@@ -173,7 +179,33 @@ def _model_from(raw: Any) -> Model | None:
         label=raw.get("displayName") if isinstance(raw.get("displayName"), str) else raw["value"],
         detail=raw.get("description") if isinstance(raw.get("description"), str) else "",
         resolved=raw.get("resolvedModel") if isinstance(raw.get("resolvedModel"), str) else "",
+        supports_effort=raw.get("supportsEffort") is True if effort_reported else True,
     )
+
+
+def _models_from(items: Any) -> list[Model]:
+    """The handshake's model rows, with `supports_effort` decided across all of
+    them: a row's silence means *no* only when another row spoke."""
+    rows = items if isinstance(items, list) else []
+    reported = any(isinstance(row, dict) and "supportsEffort" in row for row in rows)
+    return [m for m in (_model_from(row, effort_reported=reported) for row in rows) if m]
+
+
+def takes_effort(handshake: Handshake, model: str | None) -> bool:
+    """Whether a run on `model` should be sent an effort level.
+
+    `None` is the CLI's default, which is the handshake's first row. A model the
+    handshake does not list — or a handshake that could not be read — is a yes:
+    the CLI is the authority, and a flag it does not want is its to refuse.
+    """
+    if not handshake.models:
+        return True
+    if not model:
+        return handshake.models[0].supports_effort
+    for entry in handshake.models:
+        if model in (entry.value, entry.resolved):
+            return entry.supports_effort
+    return True
 
 
 _handshake_lock = asyncio.Lock()
@@ -242,7 +274,7 @@ async def _handshake() -> Handshake:
         payload = response.get("response")
         if not isinstance(payload, dict):
             continue
-        models = [m for m in (_model_from(item) for item in payload.get("models") or []) if m]
+        models = _models_from(payload.get("models"))
         # The CLI's own first row is "Default (recommended)"; its `resolvedModel`
         # is the id a run will report. Falling back to the row's `value` covers a
         # build that stops resolving it, and `None` covers one that stops

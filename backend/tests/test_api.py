@@ -290,8 +290,29 @@ def test_patch_sets_project_settings(client: TestClient) -> None:
     assert response.json()["settings"] == {
         "default_provider": "fake",
         "default_model": "m-1",
+        "default_effort": "high",
     }
     assert client.get("/api/projects/demo").json()["settings"]["default_model"] == "m-1"
+
+
+def test_patch_sets_and_clears_the_project_effort(client: TestClient) -> None:
+    client.post("/api/projects", json={"name": "Demo"})
+    raised = client.patch("/api/projects/demo", json={"settings": {"default_effort": "max"}})
+    assert raised.json()["settings"]["default_effort"] == "max"
+    # `null` is "CLI default" — stored, and distinct from the `high` a new
+    # project starts on.
+    cleared = client.patch("/api/projects/demo", json={"settings": {"default_effort": None}})
+    assert cleared.json()["settings"]["default_effort"] is None
+    blank = client.patch("/api/projects/demo", json={"settings": {"default_effort": ""}})
+    assert blank.json()["settings"]["default_effort"] is None
+
+
+def test_an_unknown_effort_is_refused(client: TestClient) -> None:
+    client.post("/api/projects", json={"name": "Demo"})
+    response = client.patch(
+        "/api/projects/demo", json={"settings": {"default_effort": "turbo"}}
+    )
+    assert response.status_code == 422
 
 
 def test_patching_something_else_leaves_the_settings_alone(client: TestClient) -> None:

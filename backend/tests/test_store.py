@@ -254,17 +254,22 @@ def test_a_registry_written_before_settings_existed_still_loads(
     project = test_store.get_project("demo")
     assert project.settings.default_provider is None
     assert project.settings.default_model is None
+    # The one default that is not *ask nobody* (`decisions/0026`).
+    assert project.settings.default_effort == "high"
 
 
 def test_project_settings_round_trip_through_update(test_store: Store) -> None:
     test_store.create_project(Project(id="demo", name="Demo"))
     project = test_store.get_project("demo")
-    project.settings = ProjectSettings(default_provider="fake", default_model="m-1")
+    project.settings = ProjectSettings(
+        default_provider="fake", default_model="m-1", default_effort="low"
+    )
     test_store.update_project(project)
 
     reloaded = Store().get_project("demo")
     assert reloaded.settings.default_provider == "fake"
     assert reloaded.settings.default_model == "m-1"
+    assert reloaded.settings.default_effort == "low"
 
 
 def test_a_belt_drawn_before_ports_existed_still_loads_and_means_success(

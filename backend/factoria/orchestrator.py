@@ -377,6 +377,18 @@ def model_for(node: Node, settings: ProjectSettings | None = None) -> str:
     return resolved or ""
 
 
+def effort_for(node: Node, settings: ProjectSettings | None = None) -> str | None:
+    """The effort this node runs at, `None` when it defers to the CLI's own.
+
+    `model_for`'s ladder and `model_for`'s reason, for the one spawn that builds
+    its `RunConfig` by hand (the scope interview).
+    """
+    return RunConfig.from_node_config(
+        node.definition.config,
+        default_effort=settings.default_effort if settings else None,
+    ).effort
+
+
 def skill_for(node: Node) -> str:
     """The skill this node wears, `""` when it wears none.
 
@@ -2337,6 +2349,7 @@ class Orchestrator:
                 # The same ladder an agent node walks — node, then project, then
                 # the CLI's own — through the same one reader.
                 model=model_for(node, state.settings) or None,
+                effort=effort_for(node, state.settings),
                 # **Not `acceptEdits`.** The default mode is the one where
                 # everything asks, and everything asking is what puts this
                 # server's policy in front of every call the session makes.
@@ -2933,6 +2946,7 @@ class Orchestrator:
             RunConfig.from_node_config(
                 node.definition.config,
                 default_model=state.settings.default_model,
+                default_effort=state.settings.default_effort,
                 append_system_prompt=appended,
                 add_dirs=add_dirs,
                 mcp_servers=mcp_servers,
@@ -3482,6 +3496,7 @@ class Orchestrator:
             RunConfig.from_node_config(
                 shelf.definition.config,
                 default_model=state.settings.default_model,
+                default_effort=state.settings.default_effort,
                 append_system_prompt=verdict.compose_system_prompt(
                     instructions, reviewer=False
                 ),

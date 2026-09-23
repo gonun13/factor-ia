@@ -784,14 +784,22 @@ class FactorySummary(Base):
     updated_at: datetime
 
 
+#: The levels the Claude CLI's handshake reports in `supportedEffortLevels`.
+EffortLevel = Literal["low", "medium", "high", "xhigh", "max"]
+
+
 class ProjectSettings(Base):
     """Project-wide defaults an agent node inherits unless it overrides them.
 
-    Both fields are `None`, and `None` means *ask nobody*: the provider falls
-    through to the container's own, and the model to the CLI's — the only place
-    a model id is ever allowed to come from (`DESIGN.md`, Assumptions). That is
-    why neither default is a string here, and why nothing in this package ever
-    names one.
+    Provider and model are `None`, and `None` means *ask nobody*: the provider
+    falls through to the container's own, and the model to the CLI's — the only
+    place a model id is ever allowed to come from (`DESIGN.md`, Assumptions).
+    That is why neither default is a string here, and why nothing in this
+    package ever names one.
+
+    Effort is the exception, and deliberately (`decisions/0026`): it is a small
+    fixed vocabulary rather than an id, so choosing `high` guesses nothing the
+    CLI owns. `None` is still allowed, and still means *ask nobody*.
     """
 
     #: The adapter every agent in this project uses unless it names its own.
@@ -808,6 +816,17 @@ class ProjectSettings(Base):
     def _blank_is_unset(cls, value: object) -> object:
         # A `<select>` reset to "— CLI default —" posts `""`, and an empty
         # string as a model id would reach the CLI as `--model ""`.
+        return None if isinstance(value, str) and not value.strip() else value
+
+    #: How hard every agent in this project thinks, unless the node says
+    #: otherwise. `None` omits the flag and leaves it to the CLI.
+    default_effort: EffortLevel | None = "high"
+
+    @field_validator("default_effort", mode="before")
+    @classmethod
+    def _blank_effort_is_unset(cls, value: object) -> object:
+        # The same `<select>` reset as `default_model`'s: `--effort ""` is not
+        # a level.
         return None if isinstance(value, str) and not value.strip() else value
 
 

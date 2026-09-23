@@ -1,5 +1,5 @@
 /**
- * Project settings — the default provider and model, as a slide-over.
+ * Project settings — the default provider, model and effort, as a slide-over.
  *
  * **Why a panel here and not a route.** The machine-wide `Settings` screen is a
  * route because signing the container in is a once-per-machine errand you leave
@@ -27,6 +27,7 @@ import { api } from "../api";
 import { SettingsGlyph } from "../nodes/Glyphs";
 import { NO_OFFER, type ProviderName } from "../canvasContext";
 import type {
+  EffortLevel,
   HousekeepingReport,
   ModelOffer,
   Project,
@@ -48,6 +49,12 @@ const PROVIDERS: Record<"claude" | "cursor" | "fake", { label: string; hint: str
     hint: "Walks the graph and spends nothing. For debugging a factory.",
   },
 };
+
+/** Lowest to highest, as the CLI lists them. */
+const EFFORTS: EffortLevel[] = ["low", "medium", "high", "xhigh", "max"];
+
+/** What a new project starts on (`decisions/0026`). */
+const RECOMMENDED_EFFORT: EffortLevel = "high";
 
 /**
  * The label for "inherit".
@@ -84,6 +91,9 @@ export function ProjectSettingsPanel({
     project.settings.default_provider ?? "",
   );
   const [model, setModel] = useState(project.settings.default_model ?? "");
+  const [effort, setEffort] = useState<"" | EffortLevel>(
+    project.settings.default_effort ?? "",
+  );
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const panel = useRef<HTMLElement>(null);
@@ -101,7 +111,8 @@ export function ProjectSettingsPanel({
 
   const dirty =
     provider !== (project.settings.default_provider ?? "") ||
-    model !== (project.settings.default_model ?? "");
+    model !== (project.settings.default_model ?? "") ||
+    effort !== (project.settings.default_effort ?? "");
   // A model the CLI no longer offers. Kept and shown rather than reset — see
   // the module docstring. Only meaningful once we actually have a list to
   // check against; an unreachable CLI must not make a good id look broken.
@@ -117,6 +128,14 @@ export function ProjectSettingsPanel({
   // applies again the moment the provider changes, and a control that vanishes
   // looks like a lost setting.
   const modelIgnored = offer.fixed;
+  // The model a run will actually be on: the chosen one, or the provider's
+  // first row, which is its default. A model the handshake says takes no
+  // effort is sent none at spawn (`agent/claude.py`), so the select says so
+  // rather than implying a level it will not get. Unlisted is a yes, as it is
+  // on the server (`cli.takes_effort`).
+  const effectiveModel = model ? models.find((m) => m.value === model) : models[0];
+  const effortUnsupported = effectiveModel?.supports_effort === false;
+  const effortIgnored = modelIgnored || effortUnsupported;
   // What each select falls back to, named. The CLI's default model is reported
   // as a resolved id rather than a list entry, so it is shown as the id — that
   // is what `session.init` will say a run used.
@@ -178,6 +197,7 @@ export function ProjectSettingsPanel({
       const settings: ProjectSettings = {
         default_provider: provider || null,
         default_model: model || null,
+        default_effort: effort || null,
       };
       onSaved(await api.updateProject(project.id, { settings }));
       onClose();
@@ -315,6 +335,35 @@ export function ProjectSettingsPanel({
                 will be refused at run time rather than quietly replaced.
               </span>
             )}
+          </section>
+
+          <section className="setting">
+            <div className="setting-head">
+              <span className="eyebrow">Effort</span>
+            </div>
+            <label htmlFor="project-effort" className="muted" id="project-effort-hint">
+              {modelIgnored
+                ? "Not used — this provider makes no model calls."
+                : effortUnsupported
+                  ? `Not used — ${effectiveModel?.label} does not take an effort level.`
+                  : "How hard the agent thinks before answering. Higher is slower and spends more."}
+            </label>
+            <select
+              id="project-effort"
+              aria-describedby="project-effort-hint"
+              value={effort}
+              // Greyed for the model select's reason: a stored level stays
+              // stored and applies again when the provider or model changes.
+              disabled={effortIgnored}
+              onChange={(event) => setEffort(event.target.value as "" | EffortLevel)}
+            >
+              <option value="">CLI default</option>
+              {EFFORTS.map((level) => (
+                <option key={level} value={level}>
+                  {level === RECOMMENDED_EFFORT ? `${level} (recommended)` : level}
+                </option>
+              ))}
+            </select>
           </section>
 
           <section className="setting">

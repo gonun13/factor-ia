@@ -172,7 +172,7 @@ export const CanvasContext = createContext<CanvasContextValue>({
   patch: () => {},
   providers: {},
   containerProvider: "claude",
-  projectSettings: { default_provider: null, default_model: null },
+  projectSettings: { default_provider: null, default_model: null, default_effort: "high" },
   skills: [],
   memories: {},
   storage: {},

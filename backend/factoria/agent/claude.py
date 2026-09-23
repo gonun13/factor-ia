@@ -93,6 +93,7 @@ from ..scrub import scrub_text
 from . import events as ev
 from . import proc
 from . import adapter as adapter_mod
+from . import cli
 from .adapter import RunConfig
 from .events import AgentEvent
 from .normalize import StreamNormalizer
@@ -350,6 +351,14 @@ class ClaudeRun:
             )
             self._exit("spawn-failed")
             return
+
+        # Asked only when there is an effort to send, and free (`cli.handshake`).
+        # A model the handshake says takes none gets none, rather than a flag
+        # it was never offered (`decisions/0026`).
+        if self._config.effort and not cli.takes_effort(
+            await cli.handshake(), self._config.model
+        ):
+            self._config = self._config.model_copy(update={"effort": None})
 
         try:
             argv = build_argv(self.session_id, self._config)

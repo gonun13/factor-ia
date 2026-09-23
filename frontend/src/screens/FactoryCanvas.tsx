@@ -637,6 +637,7 @@ function CanvasInner({ projectId, onBack }: { projectId: string; onBack: () => v
       projectSettings: project?.settings ?? {
         default_provider: null,
         default_model: null,
+        default_effort: "high",
       },
       skills,
       memories: run.memories,

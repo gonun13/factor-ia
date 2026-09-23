@@ -86,6 +86,36 @@ def test_the_default_model_is_read_from_the_captured_handshake() -> None:
     assert inner["current_permission_mode"] == "default"
 
 
+def _captured_models() -> list[cli.Model]:
+    payload = json.loads((FIXTURES / "initialize_handshake.json").read_text())
+    return cli._models_from(payload["response"]["response"]["models"])
+
+
+def test_a_model_the_handshake_leaves_out_of_effort_takes_none() -> None:
+    """The captured handshake reports `supportsEffort` for Opus and Sonnet and
+    says nothing for Haiku — which, beside rows that did speak, is a no."""
+    support = {m.value: m.supports_effort for m in _captured_models()}
+    assert support == {"default": True, "opus[1m]": True, "sonnet": True, "haiku": False}
+
+
+def test_a_handshake_silent_about_effort_is_a_yes_for_every_model() -> None:
+    models = cli._models_from([{"value": "a"}, {"value": "b", "resolvedModel": "b-1"}])
+    assert [m.supports_effort for m in models] == [True, True]
+
+
+def test_takes_effort_matches_a_value_or_a_resolved_id() -> None:
+    handshake = cli.Handshake(models=_captured_models())
+    haiku = next(m for m in handshake.models if m.value == "haiku")
+    assert cli.takes_effort(handshake, "haiku") is False
+    assert cli.takes_effort(handshake, haiku.resolved) is False
+    assert cli.takes_effort(handshake, "sonnet") is True
+    # `None` is the CLI's default, which is the first row.
+    assert cli.takes_effort(handshake, None) is True
+    # Unlisted, or nothing to ask: the CLI is the authority, so send it.
+    assert cli.takes_effort(handshake, "some-future-model") is True
+    assert cli.takes_effort(cli.Handshake(), "haiku") is True
+
+
 def test_no_model_id_is_hardcoded_anywhere_in_the_agent_package() -> None:
     """The rule, enforced rather than remembered."""
     package = Path(__file__).resolve().parents[1] / "factoria"

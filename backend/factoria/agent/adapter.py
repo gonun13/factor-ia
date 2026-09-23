@@ -191,6 +191,7 @@ class RunConfig(BaseModel):
         config: dict[str, Any] | None,
         *,
         default_model: str | None = None,
+        default_effort: str | None = None,
         append_system_prompt: str | None = None,
         add_dirs: list[str] | None = None,
         mcp_servers: dict[str, Any] | None = None,
@@ -212,6 +213,8 @@ class RunConfig(BaseModel):
         to "project default" can leave `config["model"] == ""`, and an empty
         string that reached the `known` dict would shadow the project's default
         with a falsier version of nothing.
+
+        `default_effort` walks the same ladder, one rung for the project.
         """
         raw = config or {}
         known = {
@@ -221,6 +224,8 @@ class RunConfig(BaseModel):
         }
         if default_model and not known.get("model"):
             known["model"] = default_model
+        if default_effort and not known.get("effort"):
+            known["effort"] = default_effort
         # Passed in, like `default_model`, for the reason above. Blank is
         # dropped under the same rule blank values get here: a skill file that
         # is somehow all frontmatter must not produce an empty flag.

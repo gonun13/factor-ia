@@ -130,8 +130,17 @@ try {
   // same thing — that equality is the point of the whole labelling change.
   const chosenLabel = (await page.locator("#project-model option:checked").innerText()).trim();
   check("an unsaved change is flagged", await page.locator(".slideover .pill.dirty").count(), 1);
+  // Effort is the one setting that does not start on *ask nobody*
+  // (`decisions/0026`): a fresh project reads `high`.
+  check("a new project's effort is high", await page.locator("#project-effort").inputValue(), "high");
+  await page.locator("#project-effort").selectOption("max");
   await saveSettings.click();
   await page.waitForSelector(".slideover", { state: "detached" });
+  check(
+    "the effort persisted",
+    (await api(`/api/projects/${PROJECT}`).then((r) => r.json())).settings.default_effort,
+    "max",
+  );
 
   check("the node's inherit option now names the project's model", (await inherited()).trim(), `${chosenLabel} (default)`);
   check("project settings leave the canvas's dirty pill exactly as it was", await page.locator(".savebar .pill").innerText(), pillBefore);
@@ -146,6 +155,7 @@ try {
   await page.locator("#project-provider").selectOption("fake");
   const fakeOffer = (await api("/api/agent/status").then((r) => r.json())).providers.fake;
   check("the model select greys out for a provider that ignores it", await page.locator("#project-model").isDisabled(), true);
+  check("the effort select greys out with it", await page.locator("#project-effort").isDisabled(), true);
   check("…and names what that provider will actually report", (await page.locator("#project-model option").first().innerText()).trim(), `${fakeOffer.default_model} (default)`);
   await saveSettings.click();
   await page.waitForSelector(".slideover", { state: "detached" });

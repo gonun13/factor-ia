@@ -59,10 +59,10 @@ Which entry an edge arrives at is a drawing and nothing else: it is not read by
 anything that decides how a run behaves, so parking a belt on the wrong one is a
 notice beside the Run button, never a reason a factory will not start.
 
-### Provider and model are set once, overridden where it matters
+### Provider, model and effort are set once, overridden where it matters
 
 The cog in the topbar opens **Project settings**: the provider every agent in
-this project runs on, and the model. Both start as *inherit* — the provider
+this project runs on, the model, and the effort. The first two start as *inherit* — the provider
 falls through to the container's own, the model to whatever the CLI reports as
 its default. Neither is ever a model id Factor-ia picked.
 
@@ -80,6 +80,15 @@ touches the dirty pill, and ⌘S never writes it.
 A model the CLI has stopped offering is shown as such and kept, never silently
 swapped for one nobody chose. It is refused at run time by the CLI, in the CLI's
 own words.
+
+The same panel sets **Effort**: how hard every agent in the project thinks.
+Unlike the other two it does not start on *inherit*. A project starts on `high`
+([`decisions/0026`](decisions/0026-effort-defaults-to-high.md)), marked
+*(recommended)*, and *CLI default* is the option that hands it back. Under a
+provider that makes no model calls it greys out with the model, and keeps its
+value. It greys out the same way, naming the model, when the model in force is
+one the handshake says takes no effort. **Not built:** a per-node effort control on the agent plate. A node whose
+`config` carries an `effort` is honoured, but nothing on the canvas writes one.
 
 ### Clearing up, from the panel that knows the project
 

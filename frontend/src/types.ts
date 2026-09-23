@@ -457,13 +457,18 @@ export type Factory = {
   updated_at: string;
 };
 
+/** The levels the Claude CLI's handshake reports as supported. */
+export type EffortLevel = "low" | "medium" | "high" | "xhigh" | "max";
+
 /** Project-wide execution defaults an agent node inherits unless it overrides
  * them. `null` means *ask nobody*: the provider falls through to the
  * container's, and the model to the CLI's own — which is the only place a model
- * id ever comes from. */
+ * id ever comes from. Effort is the exception: a new project starts on `high`
+ * (`decisions/0026`), and `null` still hands it back to the CLI. */
 export type ProjectSettings = {
   default_provider: "claude" | "cursor" | "fake" | null;
   default_model: string | null;
+  default_effort: EffortLevel | null;
 };
 
 export type Project = {
@@ -506,6 +511,9 @@ export type AgentModel = {
   label: string;
   detail: string;
   resolved: string;
+  /** False only when the handshake reports effort for some models and leaves
+   * this one out (`decisions/0026`). */
+  supports_effort: boolean;
 };
 
 /** The CLI's own `initialize` answer. `default_model` is null when it could not
