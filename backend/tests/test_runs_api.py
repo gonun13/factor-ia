@@ -621,13 +621,20 @@ Ask what it is for.
 """
 
 
-def _open_question(client: TestClient, run_id: str) -> dict:
+def _open_question(
+    client: TestClient, run_id: str, answered_here: frozenset[str] = frozenset()
+) -> dict:
     """Poll the *stream* for the open question, the way a browser learns of one.
 
     Unlike a gate, a scope node's question is not in the run record at all: the
     record is a snapshot from before the walk and a node that asks four times
     looks identical in it each time. The request id only exists on the stream,
     which is the whole reason the form is driven from there.
+
+    `answered_here` is what the caller has already posted. The `run.question`
+    event is written by the walk's task *after* the answer endpoint returns, so
+    for a moment the log still shows a just-answered request as open — and
+    answering it again is, correctly, a 409.
     """
     for _ in range(1500):
         # The **log**, not the stream: an SSE response ends when the run does,
@@ -636,6 +643,7 @@ def _open_question(client: TestClient, run_id: str) -> dict:
         events = list(RunLog(run_id).read(0))
         asked = [e for e in events if e["type"] == "run.question.request"]
         answered = {e["request_id"] for e in events if e["type"] == "run.question"}
+        answered |= answered_here
         for event in asked:
             if event["request_id"] not in answered:
                 return event
@@ -659,9 +667,9 @@ def test_a_run_parks_on_every_question_and_an_answer_resumes_it(
     run = start(runnable)
     runnable.post(f"/api/runs/{run['id']}/input", json={"text": "make it resumable"})
 
-    asked = 0
-    while asked < 2:
-        question = _open_question(runnable, run["id"])
+    answered: set[str] = set()
+    while len(answered) < 2:
+        question = _open_question(runnable, run["id"], frozenset(answered))
         assert question["node_id"] == "n-scope"
         assert question["questions"], "the form has nothing to render"
         answers = {
@@ -680,7 +688,7 @@ def test_a_run_parks_on_every_question_and_an_answer_resumes_it(
         # Still `waiting_input`: the session resumes on the walk's own task and
         # the transition arrives on the stream, like every other transition.
         assert posted.json()["status"] == "waiting_input"
-        asked += 1
+        answered.add(question["request_id"])
 
     events = read_stream(runnable, f"/api/runs/{run['id']}/events")
     assert events[-1]["type"] == "run.status" and events[-1]["status"] == "succeeded"

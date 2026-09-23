@@ -7,7 +7,7 @@ import os
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 
 from . import __version__, config
@@ -94,6 +94,20 @@ app.include_router(skills_router)
 # a human keeps rather than JSON the store owns — and separate from them because
 # almost every rule differs (`docs/KNOWLEDGE.md`).
 app.include_router(knowledge_router)
+
+
+@app.api_route("/api/{rest:path}", methods=["GET", "HEAD"], include_in_schema=False)
+async def no_such_api_route(rest: str) -> None:
+    """A read that no router claimed is a 404, whether or not a frontend is built.
+
+    Without this it fell through to the static mount below, which answers
+    `/api/knowledge/..%2F..` by resolving the dots to its own root and
+    redirecting to the app shell — a 200 of HTML to a JSON client, and a
+    different answer from a checkout with no `static/` than from the image.
+    Reads only: every other verb already ends in the router's own 404 or 405.
+    The path is not repeated back.
+    """
+    raise HTTPException(status_code=404, detail="There is nothing at that address in the API.")
 
 
 # Static last: this mount matches everything, and Starlette resolves routes in

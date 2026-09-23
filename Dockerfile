@@ -9,7 +9,7 @@ ARG UV_IMAGE=ghcr.io/astral-sh/uv:0.12.13
 # Provider CLIs are runtime dependencies, and their stream-json output shapes
 # are parsing dependencies — an unpinned upgrade is a breaking change
 # (DESIGN.md, Assumptions). Bump deliberately, never via @latest / install tip.
-ARG CLAUDE_CODE_VERSION=2.1.236
+ARG CLAUDE_CODE_VERSION=2.1.280
 # Cursor Agent CLI lab build id from https://cursor.com/install (date-hash).
 ARG CURSOR_AGENT_VERSION=2026.09.15-d2fe57e
 ARG PNPM_VERSION=12.4.1

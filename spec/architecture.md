@@ -102,6 +102,10 @@ Settings: `GET /api/agent/status` (account + the CLI's handshake) ·
 `GET`/`POST /api/agent/login`, `POST /api/agent/login/code`,
 `POST /api/agent/login/cancel` · `GET`/`POST /api/ssh/key`.
 
+**A `GET` under `/api/` that no route claims is a JSON 404**, and never reaches
+the built frontend mounted at `/` — whether or not `static/` exists
+(`main.no_such_api_route`).
+
 A canvas loads one factory whole and saves it whole, so the whole-graph `PUT` is
 the primary write and everything else is a convenience over the same document.
 
