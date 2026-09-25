@@ -244,6 +244,8 @@ def update_project(
         # because the CLI is momentarily unreachable would be worse than a
         # stale id the CLI itself refuses at spawn time.
         project.settings = body.settings
+    if body.icon is not None:
+        project.icon = body.icon
     project.updated_at = utcnow()
     try:
         return store.update_project(project)

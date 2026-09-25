@@ -113,10 +113,16 @@ reason kinds live in `config` and not in `NodeType`; see
 
 `/data/projects.json`. Machine-local, `schema_version: 1`.
 
-`ProjectSettings` is appended **last** in the model, so a registry written
-before the field existed loads with the default and needs neither a migration
-nor a `schema_version` bump. That is the cheap move for adding a field, and it
-is the one to reach for first.
+`ProjectSettings`, and after it `icon`, are appended **last** in the model, so a
+registry written before either field existed loads with the default and needs
+neither a migration nor a `schema_version` bump. That is the cheap move for
+adding a field, and it is the one to reach for first.
+
+`Project.icon` is one of `code | terminal | bug | rocket | package | globe |
+cloud | puzzle | flask | bolt`, closed at the model, and defaults to **`code`** —
+so a registry written before icons existed loads with every project on `code`.
+It sits beside `settings` rather than inside it: it is identity, not an
+execution default an agent inherits.
 
 `ProjectSettings.default_provider` and `default_model` are both `None` by
 default, and `None` means *ask nobody*: the provider falls through to the
@@ -203,6 +209,9 @@ latest.
   sends it has one Save button and always knows both fields; a per-field update
   model could not express *clear this one* without inventing a sentinel.
   Omitting the key leaves settings exactly as they were.
+- **`ProjectUpdate.icon` is sparse.** Omitting the key keeps the current icon,
+  and sending `settings` alone never resets it; an icon outside the ten presets
+  is a 422. `POST /projects` takes no icon — a new project starts on `code`.
 - **Every model forbids extra fields** (`Base.model_config`), so a typo in a
   request body is a 422 rather than a silently ignored key.
 - **A PRD is read in the browser and posted as text.** There is no upload

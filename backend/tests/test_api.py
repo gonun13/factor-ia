@@ -329,6 +329,28 @@ def test_patching_something_else_leaves_the_settings_alone(client: TestClient) -
     assert renamed.json()["settings"]["default_model"] == "m-1"
 
 
+def test_an_unknown_icon_is_refused(client: TestClient) -> None:
+    """The icon is a closed set of ten presets."""
+    client.post("/api/projects", json={"name": "Demo"})
+    response = client.patch("/api/projects/demo", json={"icon": "unicorn"})
+    assert response.status_code == 422
+
+
+def test_patching_the_icon_leaves_everything_else_alone(client: TestClient) -> None:
+    """The icon is its own sparse key: it neither resets nor is reset by the rest."""
+    created = client.post("/api/projects", json={"name": "Demo"})
+    assert created.json()["icon"] == "code"
+    client.patch("/api/projects/demo", json={"settings": {"default_model": "m-1"}})
+    iconed = client.patch("/api/projects/demo", json={"icon": "rocket"})
+    assert iconed.json()["icon"] == "rocket"
+    assert iconed.json()["name"] == "Demo"
+    assert iconed.json()["settings"]["default_model"] == "m-1"
+    resettled = client.patch(
+        "/api/projects/demo", json={"settings": {"default_model": "m-2"}}
+    )
+    assert resettled.json()["icon"] == "rocket"
+
+
 def test_an_unknown_provider_is_refused(client: TestClient) -> None:
     """The provider is a closed set — claude, cursor, fake."""
     client.post("/api/projects", json={"name": "Demo"})

@@ -21,7 +21,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { ApiError, api } from "../api";
-import { TrashGlyph } from "../nodes/Glyphs";
+import { PROJECT_ICON_GLYPHS, TrashGlyph } from "../nodes/Glyphs";
 import {
   KNOWLEDGE_FILE_MAX_BYTES,
   KNOWLEDGE_TYPES,
@@ -227,7 +227,13 @@ export function ProjectList({ onOpen }: { onOpen: (projectId: string) => void })
                 ) : (
                   <div key={project.id} className="project-slot">
                     <button className="project-card" onClick={() => onOpen(project.id)}>
-                      <span className="name">{project.name}</span>
+                      <span className="name">
+                        {/* Hidden: the name beside it already labels the card. */}
+                        <span className="project-icon" data-icon={project.icon} aria-hidden>
+                          {PROJECT_ICON_GLYPHS[project.icon]()}
+                        </span>
+                        {project.name}
+                      </span>
                       <span className="meta mono">{project.id}</span>
                       <span className="meta">
                         main factory · created{" "}

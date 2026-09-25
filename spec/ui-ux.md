@@ -9,8 +9,8 @@ away. You lay down machines and then you watch those same machines work.
 
 There are three, and two of them are lists.
 
-- **Project list** — the entry point. Projects, and a **Settings** link top
-  right.
+- **Project list** — the entry point. Projects, each card showing the
+  project's icon beside its name, and a **Settings** link top right.
 - **Canvas** — where everything happens. One factory, whole.
 - **Settings** — a deliberately small, plain screen. Sign-in and the git key.
   Not a second canvas.
@@ -72,6 +72,13 @@ to, so you can see what a machine will run on without opening anything. Pick a
 specific model there when one machine on the line needs something different;
 that is a property of the agent, so it lives on the agent and saves with the
 factory file.
+
+The same panel sets the project's **Icon**: ten preset software glyphs as a row
+of toggle buttons, each named by its label rather than by hover alone. A new
+project starts on `code`, and this panel is the only place it changes. The icon
+shows on the project's card in the list and beside its name in the canvas
+topbar, which picks up a save without a reload. It is monochrome — colour on
+this product's surfaces encodes category, and an icon is identity.
 
 The settings panel saves on its own button, immediately. It writes to the
 machine-local project registry, not to the git-tracked factory — so it never

@@ -1,5 +1,6 @@
 /**
- * Project settings — the default provider, model and effort, as a slide-over.
+ * Project settings — the default provider, model and effort, and the project's
+ * icon, as a slide-over.
  *
  * **Why a panel here and not a route.** The machine-wide `Settings` screen is a
  * route because signing the container in is a once-per-machine errand you leave
@@ -24,14 +25,17 @@
 
 import { useEffect, useRef, useState, type ReactElement } from "react";
 import { api } from "../api";
-import { SettingsGlyph } from "../nodes/Glyphs";
+import { PROJECT_ICON_GLYPHS, SettingsGlyph } from "../nodes/Glyphs";
 import { NO_OFFER, type ProviderName } from "../canvasContext";
-import type {
-  EffortLevel,
-  HousekeepingReport,
-  ModelOffer,
-  Project,
-  ProjectSettings,
+import {
+  PROJECT_ICONS,
+  PROJECT_ICON_LABEL,
+  type EffortLevel,
+  type HousekeepingReport,
+  type ModelOffer,
+  type Project,
+  type ProjectIcon,
+  type ProjectSettings,
 } from "../types";
 
 /** The adapters that exist. */
@@ -94,6 +98,7 @@ export function ProjectSettingsPanel({
   const [effort, setEffort] = useState<"" | EffortLevel>(
     project.settings.default_effort ?? "",
   );
+  const [icon, setIcon] = useState<ProjectIcon>(project.icon);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const panel = useRef<HTMLElement>(null);
@@ -112,7 +117,8 @@ export function ProjectSettingsPanel({
   const dirty =
     provider !== (project.settings.default_provider ?? "") ||
     model !== (project.settings.default_model ?? "") ||
-    effort !== (project.settings.default_effort ?? "");
+    effort !== (project.settings.default_effort ?? "") ||
+    icon !== project.icon;
   // A model the CLI no longer offers. Kept and shown rather than reset — see
   // the module docstring. Only meaningful once we actually have a list to
   // check against; an unreachable CLI must not make a good id look broken.
@@ -199,7 +205,7 @@ export function ProjectSettingsPanel({
         default_model: model || null,
         default_effort: effort || null,
       };
-      onSaved(await api.updateProject(project.id, { settings }));
+      onSaved(await api.updateProject(project.id, { settings, icon }));
       onClose();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
@@ -260,8 +266,8 @@ export function ProjectSettingsPanel({
         <div className="slideover-body">
           <p className="lede">
             What every agent in <strong>{project.name}</strong> runs on unless
-            the agent says otherwise. Saved to this machine, not to the factory
-            file.
+            the agent says otherwise, and the icon the project wears. Saved to
+            this machine, not to the factory file.
           </p>
 
           {error && <div className="error">{error}</div>}
@@ -364,6 +370,33 @@ export function ProjectSettingsPanel({
                 </option>
               ))}
             </select>
+          </section>
+
+          <section className="setting">
+            <div className="setting-head">
+              <span className="eyebrow" id="project-icon-title">Icon</span>
+            </div>
+            <span className="muted">Shown on the project list and in the canvas topbar.</span>
+            <div className="icon-picker" role="group" aria-labelledby="project-icon-title">
+              {PROJECT_ICONS.map((value) => {
+                const Glyph = PROJECT_ICON_GLYPHS[value];
+                const chosen = icon === value;
+                return (
+                  <button
+                    key={value}
+                    type="button"
+                    className={`icon-option${chosen ? " chosen" : ""}`}
+                    aria-pressed={chosen}
+                    aria-label={PROJECT_ICON_LABEL[value]}
+                    title={PROJECT_ICON_LABEL[value]}
+                    data-icon={value}
+                    onClick={() => setIcon(value)}
+                  >
+                    <Glyph />
+                  </button>
+                );
+              })}
+            </div>
           </section>
 
           <section className="setting">
