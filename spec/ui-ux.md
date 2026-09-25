@@ -77,8 +77,12 @@ The same panel sets the project's **Icon**: ten preset software glyphs as a row
 of toggle buttons, each named by its label rather than by hover alone. A new
 project starts on `code`, and this panel is the only place it changes. The icon
 shows on the project's card in the list and beside its name in the canvas
-topbar, which picks up a save without a reload. It is monochrome — colour on
-this product's surfaces encodes category, and an icon is identity.
+topbar, which picks up a save without a reload. Each preset is drawn dark on a
+rounded tile of its own fixed colour — ten presets, ten colours — so projects
+tell apart at a glance, and the picker shows every preset on its tile with the
+chosen one ringed. The colour belongs to the preset, not to a separate choice,
+so it needs no field of its own. Tiles appear only on the project list, the
+topbar and the picker, never on the sheet, where colour encodes node type.
 
 The settings panel saves on its own button, immediately. It writes to the
 machine-local project registry, not to the git-tracked factory — so it never

@@ -185,6 +185,8 @@ try {
   // the same machine-local registry — so the topbar must follow it and the
   // canvas's pill must not.
   check("the topbar wears the default icon", await page.locator(".brand .project-icon").getAttribute("data-icon"), "code");
+  const tileOf = () => page.locator(".brand .project-icon").evaluate((el) => getComputedStyle(el).backgroundColor);
+  const codeTile = await tileOf();
   await cog.click();
   await page.waitForSelector(".slideover");
   const icons = page.locator(".icon-picker .icon-option");
@@ -196,6 +198,7 @@ try {
   await saveSettings.click();
   await page.waitForSelector(".slideover", { state: "detached" });
   check("the topbar follows the save without a reload", await page.locator(".brand .project-icon").getAttribute("data-icon"), "rocket");
+  check("…on its own preset's tile colour", (await tileOf()) !== codeTile, true);
   check("the icon persisted", (await api(`/api/projects/${PROJECT}`).then((r) => r.json())).icon, "rocket");
   check("…and leaves the canvas's dirty pill exactly as it was", await page.locator(".savebar .pill").innerText(), pillBefore);
 

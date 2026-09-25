@@ -178,12 +178,31 @@ button:focus-visible {
   align-self: center;
 }
 
-/* The project's own icon. Monochrome on purpose: colour encodes category on
-   this product's surfaces, and a preset is identity, not a category. */
+/* The project's own icon: a glyph on a tile of the preset's colour. Each preset
+   owns one colour, so two projects on different presets never look alike. The
+   tiles sit only on the project list and the topbar — never on the sheet, where
+   colour encodes node type. */
+[data-icon="code"] { --tile: #5b8def; }
+[data-icon="terminal"] { --tile: #3fb68b; }
+[data-icon="bug"] { --tile: #e5534b; }
+[data-icon="rocket"] { --tile: #f0883e; }
+[data-icon="package"] { --tile: #c9a046; }
+[data-icon="globe"] { --tile: #2fb3c9; }
+[data-icon="cloud"] { --tile: #8f95e8; }
+[data-icon="puzzle"] { --tile: #d86cab; }
+[data-icon="flask"] { --tile: #a878f0; }
+[data-icon="bolt"] { --tile: #e6c84a; }
+
 .project-icon {
   display: inline-flex;
   flex: 0 0 auto;
-  color: var(--ink-dim);
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  background: var(--tile, var(--raised));
+  color: var(--bg);
 }
 
 .project-icon svg {
@@ -193,6 +212,8 @@ button:focus-visible {
 
 .brand .project-icon {
   align-self: center;
+  width: 22px;
+  height: 22px;
 }
 
 .brand small {
@@ -2543,8 +2564,8 @@ ul.plain {
   gap: 0.4rem;
 }
 
-/* The icon picker: square toggles in a wrapped grid, pressed like a chosen
-   question option but in the project card's accent rather than the human's. */
+/* The icon picker: square toggles in a wrapped grid, each on its preset's tile
+   colour. The chosen one is ringed in ink, since its fill is already taken. */
 .icon-picker {
   display: grid;
   grid-template-columns: repeat(auto-fill, 2.4rem);
@@ -2558,21 +2579,21 @@ ul.plain {
   width: 2.4rem;
   height: 2.4rem;
   padding: 0;
-  border: 1px solid var(--edge);
+  border: none;
   border-radius: 6px;
-  background: #0f151e;
-  color: var(--ink-dim);
+  background: var(--tile, #0f151e);
+  color: var(--bg);
+  opacity: 0.55;
 }
 
 .icon-option:hover:not(:disabled) {
-  border-color: var(--ink-faint);
-  color: var(--ink);
+  opacity: 0.85;
 }
 
 .icon-option.chosen {
-  border-color: var(--agent);
-  background: #131b26;
-  color: var(--ink);
+  opacity: 1;
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
 }
 
 .icon-option svg {

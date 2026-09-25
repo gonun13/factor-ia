@@ -57,7 +57,7 @@ frontend/    Vite + React + TypeScript + React Flow v12, built at image build ti
              screens/  project list · canvas   nodes/  node + belt components
              run.ts  the EventSource client and the runtime reducer
              graph.ts  API graph <-> React Flow   validation.ts  run preconditions
-bin/         host-side setup and housekeeping (bootstrap, up, down, tidy, walkthrough)
+bin/         host-side setup and housekeeping (bootstrap, up, down, demo, tidy, walkthrough)
 Dockerfile   multi-stage: build the SPA, then a Python runtime with both provider CLIs
 spec/        the authoritative specification — this file's home
 docs/        BUILD_STATE.md, SECURITY_PRD.md — operator-local, gitignored

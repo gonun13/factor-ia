@@ -1,0 +1,124 @@
+#!/usr/bin/env sh
+# Seed the repository the README's first run works on, and show what that run
+# left behind. Idempotent: run it before the first run to create the repo, and
+# again afterwards to see the branch the run committed.
+#
+#   bin/demo            create <workspace>/readme-demo if missing, else report on it
+#   bin/demo --reset    delete readme-demo, its run branches included, and seed it again
+#
+# The seed is exactly `# a readme`: the fake adapter's scripted edit turns
+# "a readme" into "the readme", so a different seed would still commit, but
+# not the edit the README promises.
+set -eu
+
+REPO_ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+ENV_FILE="$REPO_ROOT/.env"
+NAME=readme-demo
+
+RESET=0
+for arg in "$@"; do
+  case "$arg" in
+    --reset) RESET=1 ;;
+    -h|--help) sed -n '2,11p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *) echo "factor-ia: bin/demo does not take '$arg'. Try bin/demo --help." >&2; exit 2 ;;
+  esac
+done
+
+# The same precedence bin/bootstrap uses: the shell environment, then .env,
+# then the sibling default.
+if [ -z "${FACTOR_IA_WORKSPACE_HOST:-}" ] && [ -f "$ENV_FILE" ]; then
+  FACTOR_IA_WORKSPACE_HOST=$(sed -n 's/^[[:space:]]*FACTOR_IA_WORKSPACE_HOST=//p' "$ENV_FILE" | tail -n 1)
+fi
+WORKSPACE="${FACTOR_IA_WORKSPACE_HOST:-$REPO_ROOT/../factor-ia-workspace}"
+
+if [ ! -d "$WORKSPACE" ]; then
+  echo "factor-ia: there is no workspace at $WORKSPACE yet." >&2
+  echo "  Run ./bin/up first. It creates the workspace and starts the app." >&2
+  exit 1
+fi
+WORKSPACE=$(CDPATH= cd -- "$WORKSPACE" && pwd)
+DEMO="$WORKSPACE/$NAME"
+
+# The demo must not depend on the operator's git config: no global identity is
+# assumed, and a global signing or hooks setting must not prompt or fail here.
+demo_git() {
+  git -C "$DEMO" \
+    -c user.name=demo -c user.email=demo@localhost \
+    -c commit.gpgsign=false -c core.hooksPath=/dev/null \
+    "$@"
+}
+
+if [ "$RESET" -eq 1 ] && [ -e "$DEMO" ]; then
+  rm -rf "$DEMO"
+  echo "factor-ia: removed $DEMO"
+fi
+
+if [ ! -e "$DEMO" ]; then
+  mkdir -p "$DEMO"
+  git -c init.defaultBranch=main init -q "$DEMO"
+  printf '# a readme\n' > "$DEMO/README.md"
+  demo_git add README.md
+  demo_git commit -q -m 'chore: seed demo'
+  echo "factor-ia: created $DEMO"
+  echo "           one commit, README.md reads: # a readme"
+  CREATED=1
+else
+  CREATED=0
+  if ! git -C "$DEMO" rev-parse --git-dir >/dev/null 2>&1 \
+     || [ "$(git -C "$DEMO" rev-parse --show-toplevel)" != "$(CDPATH= cd -- "$DEMO" && pwd -P)" ]; then
+    echo "factor-ia: $DEMO exists but is not a git repository of its own." >&2
+    echo "  Move it aside, or run bin/demo --reset to replace it." >&2
+    exit 1
+  fi
+  echo "factor-ia: $DEMO is already there"
+fi
+
+# A run cuts its branch from a clean checkout, so say so now rather than let
+# the first run refuse.
+if [ -n "$(git -C "$DEMO" status --porcelain)" ]; then
+  echo
+  echo "factor-ia: readme-demo has uncommitted changes, and a run needs a clean working tree." >&2
+  echo "  See them with: git -C \"$DEMO\" status" >&2
+  echo "  Start over with: bin/demo --reset" >&2
+  exit 1
+fi
+
+LATEST=$(git -C "$DEMO" for-each-ref --sort=-committerdate --count=1 \
+  --format='%(refname:short)' 'refs/heads/factor-ia/')
+
+if [ -n "$LATEST" ]; then
+  COUNT=$(git -C "$DEMO" for-each-ref --format=x 'refs/heads/factor-ia/' | wc -l | tr -d ' ')
+  echo
+  echo "Your checkout is untouched: README.md on $(git -C "$DEMO" branch --show-current) still reads"
+  sed 's/^/  | /' "$DEMO/README.md"
+  echo
+  echo "The run left its edit on a branch of its own ($COUNT run branch(es) so far). The latest is"
+  echo "  $LATEST"
+  echo "and README.md there reads"
+  git -C "$DEMO" show "$LATEST:README.md" | sed 's/^/  | /'
+  echo
+  echo "Look closer:"
+  echo "  git -C \"$DEMO\" log --oneline -1 $LATEST"
+  echo "  git -C \"$DEMO\" diff HEAD $LATEST"
+  exit 0
+fi
+
+# Nothing has run yet: the next steps, in the browser.
+if curl -fsS -o /dev/null --max-time 2 http://127.0.0.1:8000/api/health 2>/dev/null; then
+  UP="Open http://127.0.0.1:8000"
+else
+  UP="Start the app with ./bin/up, then open http://127.0.0.1:8000"
+fi
+echo
+[ "$CREATED" -eq 1 ] && echo "Ready for a first run." || echo "No run has committed to it yet."
+cat <<EOF
+
+  1. $UP
+  2. Select New project, enter a name, and select Create.
+  3. Open Project settings, choose Fake (dry run), and save.
+  4. From the palette, add Request, Worker and Commit, and connect them in
+     that order. On the Worker, pick $NAME.
+  5. Select Save, then Run. Enter "Tidy the README" and submit.
+
+Then run bin/demo again to see the branch the run left.
+EOF

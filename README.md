@@ -28,19 +28,15 @@ check. Open <http://127.0.0.1:8000> once it prints
 ## Usage
 
 The first run uses the fake adapter. It makes a real edit and commit without
-calling a provider or spending tokens. Any repository you attach must have at
-least one commit and a clean working tree.
+calling a provider or spending tokens. Create a small repository for it to
+work on:
 
 ```sh
-mkdir -p ../factor-ia-workspace/readme-demo
-cd ../factor-ia-workspace/readme-demo
-git init
-printf '# a readme\n' > README.md
-git add README.md
-git -c user.name=demo -c user.email=demo@localhost commit -m 'chore: seed demo'
+./bin/demo
 ```
 
-In the browser:
+This creates `readme-demo` in the workspace and prints the next steps. In the
+browser:
 
 1. Select **New project**, enter a name, and select **Create**.
 2. Open **Project settings**, choose **Fake (dry run)**, and save.
@@ -48,12 +44,12 @@ In the browser:
    that order, then pick `readme-demo` on the Worker.
 4. Select **Save**, then **Run**. Enter `Tidy the README` and submit.
 
-Your checkout stays untouched, and a new branch holds the edit:
+When the run finishes, run `./bin/demo` again. It shows that your checkout
+still reads `# a readme`, and that a new `factor-ia/...` branch holds the edit,
+`# the readme`. To start over, run `./bin/demo --reset`.
 
-```sh
-git branch --list 'factor-ia/*'
-git show 'factor-ia/main/<run-id>:README.md'   # prints: # the readme
-```
+To use your own code, put a git repository in `../factor-ia-workspace`. Any
+repository you attach must have at least one commit and a clean working tree.
 
 To use real agents, open **Settings** from the project list and select
 **Sign in** for Claude or Cursor. Then choose that provider in **Project

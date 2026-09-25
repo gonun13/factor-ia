@@ -18,7 +18,9 @@ their proof belongs in.
 
 `bin/tidy` is an operator script rather than a test layer: it prints the
 server's own preview and removes nothing without `--yes`, so what it can do is
-proved by the routes it calls.
+proved by the routes it calls. `bin/demo` is one too: it seeds the README's
+first-run repository on the host and reports what a run left in it, and it
+calls nothing on the server except the health check.
 
 ---
 
