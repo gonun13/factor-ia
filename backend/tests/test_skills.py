@@ -390,6 +390,7 @@ def test_system_skills_sort_first_then_everything_by_name(workspace: Path) -> No
     listed = skills.list_skills()
 
     assert [one.name for one in listed] == [
+        "commit-message",
         "knowledge-codebase",
         "knowledge-general",
         "knowledge-project",
@@ -399,4 +400,4 @@ def test_system_skills_sort_first_then_everything_by_name(workspace: Path) -> No
     ]
     # And the block at the top is exactly the system ones — an operator's
     # `knowledge-notes` sorts with the imports, where it belongs.
-    assert [one.system for one in listed] == [True, True, True, False, False, False]
+    assert [one.system for one in listed] == [True, True, True, True, False, False, False]

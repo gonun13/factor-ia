@@ -14,9 +14,10 @@ agent — `/workspace/_skills/<name>.md`, a top-level directory sibling to
 a codebase.
 
 **Except for the ones a node type is hardwired to.** `SYSTEM_SKILLS` names
-documents the product ships in `system_skills/`, one per writable knowledge
-scope, which a knowledge node applies to the answer it receives rather than an
-agent wearing by choice. They are skills in every other respect — same format,
+documents the product ships in `system_skills/` — one per writable knowledge
+scope, which a knowledge node applies to the answer it receives, and the one
+the commit node writes its message with — rather than ones an agent wears by
+choice. They are skills in every other respect — same format,
 same parser, same ceiling, listed and edited in the same library — and they
 differ in exactly three places, each marked below: the library lists one
 whether or not the workspace has a copy, `delete_skill` reverts rather than
@@ -58,10 +59,13 @@ SKILLS_DIRNAME = "_skills"
 SYSTEM_SKILLS_DIRNAME = "system_skills"
 
 #: **Skills a node type is hardwired to**, rather than ones an operator
-#: imported and an agent node wears by choice. Three today, one per writable
-#: knowledge scope: they are the contract a knowledge node applies to the
+#: imported and an agent node wears by choice. Four today. Three are one per
+#: writable knowledge scope: the contract a knowledge node applies to the
 #: answer it receives, so the base it fills is a datastore and not a
-#: transcript (`knowledge/filing.py`, `spec/behaviour/knowledge.md`).
+#: transcript (`knowledge/filing.py`, `spec/behaviour/knowledge.md`). The
+#: fourth is what an output node writes its commit message with, so a commit
+#: reads as release notes and not as a transcript either (`commit_pass.py`,
+#: `decisions/0028`).
 #:
 #: **An explicit registry and not a name prefix.** A `knowledge-` rule would
 #: quietly capture an operator's own `knowledge-notes.md` and make it
@@ -75,7 +79,7 @@ SYSTEM_SKILLS_DIRNAME = "system_skills"
 #:   - a node's picker does not offer it, and `runcheck` refuses a node that
 #:     names one anyway.
 SYSTEM_SKILLS: frozenset[str] = frozenset(
-    {"knowledge-general", "knowledge-codebase", "knowledge-project"}
+    {"knowledge-general", "knowledge-codebase", "knowledge-project", "commit-message"}
 )
 
 #: The largest document we will hand to the CLI. Not a taste limit: the body

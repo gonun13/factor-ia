@@ -180,14 +180,14 @@ try {
     await page.locator(".skill-card", { hasText: SKILL }).first().evaluate(
       (el) => el.classList.contains("is-system")), false);
 
-  // System first, then everything by name — so the shipped three are a block
+  // System first, then everything by name — so the shipped four are a block
   // at the top and an import has a stable place to start.
   const order = await page.locator(".skill-grid .skill-card .name").allInnerTexts();
-  const systemRows = order.filter((name) => name.startsWith("knowledge-")).length;
+  const shipped = ["commit-message", "knowledge-codebase", "knowledge-general", "knowledge-project"];
   check("the system skills sort to the top",
-    order.slice(0, 3).every((name) => name.startsWith("knowledge-")) && systemRows >= 3, true);
+    shipped.every((name) => order.slice(0, shipped.length).includes(name)), true);
   check("and the imported one is below them",
-    order.indexOf(SKILL) >= 3, true);
+    order.indexOf(SKILL) >= shipped.length, true);
   const systemSlot = page.locator(".skill-slot").filter({ hasText: SYSTEM });
   check("and it offers no delete, because a node type is built on it",
     await systemSlot.locator(".card-delete").count(), 0);

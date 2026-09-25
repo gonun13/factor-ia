@@ -575,6 +575,19 @@ def diff_stat(worktree: Path | str, base: str, head: str = "HEAD") -> str:
     return done.stdout.strip()
 
 
+def pending_stat(worktree: Path | str, base: str) -> str:
+    """The `--stat` of what `commit_all` is about to commit, before it does.
+
+    Stages everything first, exactly as `commit_all` will — which is why doing
+    it early changes nothing — so that new files count. The diff is against
+    `base`, not `HEAD`: an agent that committed on its own left work there too,
+    and the commit message describes the branch, not the last few files.
+    """
+    _git(["add", "--all", "."], cwd=worktree)
+    done = _git(["diff", "--cached", "--stat", base], cwd=worktree, check=False)
+    return done.stdout.strip()
+
+
 def changed_files(worktree: Path | str, base: str, head: str = "HEAD") -> list[str]:
     done = _git(["diff", "--name-only", f"{base}..{head}"], cwd=worktree, check=False)
     return [line for line in done.stdout.splitlines() if line.strip()]

@@ -147,10 +147,11 @@ what makes a second lap mean anything; see [`review-loops.md`](review-loops.md).
 | cancelled | removed (an explicit discard) | removed | kept, empty |
 
 **Scratch** is every directory a run owns that is not a checkout: `_memory/`,
-`_knowledge/` and `_scope/`. All three follow the worktree column exactly. Each
-was added to `RunWorkspaces.cleanup` separately, and each that was missed held
-its whole run directory open against the emptiness guard below it —
-`_scope/` was the third and was found only in the wild.
+`_knowledge/`, `_scope/` and `_commit/`. All four follow the worktree column
+exactly. Each was added to `RunWorkspaces.cleanup` separately, and each that was
+missed held its whole run directory open against the emptiness guard below it —
+`_scope/` was the third and was found only in the wild. `_commit/` was added
+with the list in mind.
 
 **Branches are never deleted by Factor-ia, not even its own.** `gitwork.py` has
 no code path that deletes a ref, and a test asserts it. `bin/tidy --branches`

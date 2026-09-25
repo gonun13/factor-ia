@@ -67,8 +67,8 @@ implementation detail:
 | `stopped` | **kept**, same as `failed` — a pause has a Resume behind it | **kept** | kept |
 | `cancelled` | removed — an explicit discard is what cancel *means* | removed | kept |
 
-**Scratch** is every other directory a run owns: `_memory/`, `_knowledge/` and
-`_scope/`. All three follow the worktree column exactly, and for the same
+**Scratch** is every other directory a run owns: `_memory/`, `_knowledge/`,
+`_scope/` and `_commit/`. All four follow the worktree column exactly, and for the same
 reason a run's memory does — it is scratch for the run, it is worth nothing
 once the run succeeded, and it is worth everything when the run failed and
 somebody has to work out what the agents thought they knew. Naming the set
@@ -98,6 +98,7 @@ from pathlib import Path
 from . import gitwork
 from .models import Codebase, RunWorktree, RunStatus
 from .paths import is_inside_workspace, safe_name, workspace_root
+from .scrub import scrub_text
 
 #: Underscore-prefixed to match `_factories/` and to keep discovery's exclusion
 #: rule doing the work belt-and-braces (see the module docstring); plural so it
@@ -153,6 +154,13 @@ KNOWLEDGE_DIRNAME = "_knowledge"
 #: allowed to read, so a directory holding another node's work would be a
 #: directory this one can read without any belt saying so.
 SCOPE_DIRNAME = "_scope"
+
+#: Where the commit node's message pass runs (`orchestrator._commit_pass`). An
+#: empty directory, one per run, for `SCOPE_DIRNAME`'s reason: the adapter needs
+#: a cwd inside `/workspace`, and the pass has no business in a worktree — it
+#: runs *just before* that worktree is committed, so anything it wrote there
+#: would be committed with it.
+COMMIT_DIRNAME = "_commit"
 
 
 def run_dir(run_id: str, root: Path | None = None) -> Path:
@@ -214,12 +222,17 @@ def knowledge_dir(run_id: str, root: Path | None = None) -> Path:
     return run_dir(run_id, root) / KNOWLEDGE_DIRNAME
 
 
-#: The three directories a run owns that are not a checkout. `cleanup` removes
-#: all three together (the "scratch" column in this module's policy table), so
-#: a run directory holding nothing else is a run directory the policy has
-#: already finished with.
+def commit_dir(run_id: str, root: Path | None = None) -> Path:
+    """`<workspace>/_runs/<run-id>/_commit/`. See `COMMIT_DIRNAME`."""
+    return run_dir(run_id, root) / COMMIT_DIRNAME
+
+
+#: The directories a run owns that are not a checkout. `cleanup` removes all of
+#: them together (the "scratch" column in this module's policy table), so a run
+#: directory holding nothing else is a run directory the policy has already
+#: finished with.
 RESIDUE_DIRNAMES: frozenset[str] = frozenset(
-    {MEMORY_DIRNAME, KNOWLEDGE_DIRNAME, SCOPE_DIRNAME}
+    {MEMORY_DIRNAME, KNOWLEDGE_DIRNAME, SCOPE_DIRNAME, COMMIT_DIRNAME}
 )
 
 #: What a macOS bind mount leaves in a directory nobody wrote to. Named rather
@@ -236,7 +249,7 @@ def is_residue_only(run_id: str, root: Path | None = None) -> bool:
     the same principle as `cleanup`'s emptiness guard one level down: a child
     this module cannot name is an operator's, and a sweep that deleted it would
     be the failure the guard exists to prevent. So this is a whitelist of the
-    three directories `cleanup` itself removes — never a blacklist, and never
+    directories `cleanup` itself removes — never a blacklist, and never
     "no checkout means empty".
 
     False for a directory that does not exist, so a caller cannot read "nothing
@@ -470,6 +483,13 @@ class RunWorkspaces:
         to protect.
         """
         path = knowledge_dir(self.run_id, self.root)
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    def ensure_commit_dir(self) -> Path:
+        """`_commit/`, created if it is not there. Idempotent. See
+        `COMMIT_DIRNAME`."""
+        path = commit_dir(self.run_id, self.root)
         path.mkdir(parents=True, exist_ok=True)
         return path
 
@@ -717,6 +737,13 @@ class RunWorkspaces:
                 shutil.rmtree(scope_root(self.run_id, self.root), ignore_errors=True)
             except Exception:  # noqa: BLE001 — see docstring
                 pass
+            # The commit message pass's cwd, by the same policy — added with
+            # the list above in mind, so it is not a fourth one found in the
+            # wild.
+            try:
+                shutil.rmtree(commit_dir(self.run_id, self.root), ignore_errors=True)
+            except Exception:  # noqa: BLE001 — see docstring
+                pass
             # The per-run directory is ours and should now be empty; the `_runs`
             # root stays so its purpose is discoverable from the host.
             #
@@ -739,6 +766,61 @@ class RunWorkspaces:
         return kept
 
 
+#: A commit subject's ceiling. Git itself does not care; every tool that shows
+#: `git log --oneline` in a column does.
+SUBJECT_MAX = 72
+
+#: How much of an upstream answer the *fallback* body keeps. The written body
+#: (`commit_pass`) has no cap here — its skill keeps it short, and cutting a
+#: message a writer composed would undo the composing.
+FALLBACK_BODY_MAX = 1500
+
+#: Trailer keys this function writes, and so the only ones a body may not.
+TRAILER_KEYS = ("Factory", "Factor-ia-Run", "Factor-ia-Source")
+
+
+def _clip(text: str, limit: int) -> str:
+    """`text` cut to at most `limit` characters, at a word boundary, with an
+    ellipsis when anything went. A subject that ends "and s…" is a subject
+    somebody has to finish reading in their head."""
+    if len(text) <= limit:
+        return text
+    cut = text[: limit - 1]
+    space = cut.rfind(" ")
+    if space > limit // 2:
+        cut = cut[:space]
+    return cut.rstrip(" ,;:—-") + "…"
+
+
+def _paragraphs(text: str) -> str:
+    """Whitespace tidied *inside* paragraphs and blank lines kept between them —
+    the fallback used to flatten an answer's headings and bullets onto one
+    line, which is not a body anybody reads."""
+    kept: list[str] = []
+    for block in text.strip().split("\n\n"):
+        lines = [" ".join(line.split()) for line in block.splitlines()]
+        lines = [line for line in lines if line]
+        if lines:
+            kept.append("\n".join(lines))
+    return "\n\n".join(kept)
+
+
+def strip_trailers(body: str) -> str:
+    """`body` without any line that spells one of our trailers.
+
+    The trailers are how a commit leads back to its run, so they are this
+    function's to write and nobody else's: a model that wrote
+    `Factor-ia-Run: run-…` into a body would be forging the one line an
+    operator greps for.
+    """
+    lines = [
+        line
+        for line in body.splitlines()
+        if not any(line.strip().startswith(f"{key}:") for key in TRAILER_KEYS)
+    ]
+    return "\n".join(lines).strip()
+
+
 def commit_message(
     request: str,
     *,
@@ -746,28 +828,47 @@ def commit_message(
     run_id: str,
     agent_summary: str = "",
     sources: list[str] | None = None,
+    subject: str | None = None,
+    body: str | None = None,
 ) -> str:
-    """What the commit says. Subject from the request, trailers for the run.
+    """What the commit says: a subject, a body, and the run's trailers.
 
-    The request is the only thing a human wrote, so it is the subject. The
-    trailers are how a commit found six months later leads back to the run log
-    that produced it — `/data/runs/<run-id>/` is a directory name, not a guess.
+    **`subject` and `body` are the commit pass's** (`orchestrator._commit_pass`,
+    the `commit-message` system skill), written for somebody reading `git log`.
+    When that pass wrote nothing usable they are `None`, and this falls back to
+    what it always did: the request as the subject — the only thing a human
+    wrote — and the upstream answer as the body, paragraphs kept.
+
+    The trailers are how a commit found six months later leads back to the run
+    log that produced it — `/data/runs/<run-id>/` is a directory name, not a
+    guess. **They are always this function's**, and a body is stripped of any
+    line that spells one.
 
     `sources` names the documents the run was fed — a `prd` input node's
     filename. It is a trailer rather than body text because it is a reference,
     and because a reader scanning `git log` for "which PRD produced this?"
     wants one greppable line.
+
+    **Scrubbed as a whole** (`scrub.scrub_text`): the body is model-written, the
+    commit is git-tracked, and "credentials never reach anything git-tracked" is
+    a requirement, not a hope.
     """
-    first = " ".join(request.strip().split())
-    subject = (first[:68] + "…") if len(first) > 69 else first
-    if not subject:
-        subject = "Factor-ia run"
-    body = [subject, ""]
-    if agent_summary.strip():
-        body += [" ".join(agent_summary.strip().split())[:600], ""]
-    body += [
+    head = " ".join((subject or "").split())
+    if not head:
+        head = _clip(" ".join(request.strip().split()), SUBJECT_MAX)
+    head = _clip(head, SUBJECT_MAX) or "Factor-ia run"
+
+    if body is not None:
+        text = strip_trailers(body)
+    else:
+        text = _clip(_paragraphs(strip_trailers(agent_summary)), FALLBACK_BODY_MAX)
+
+    lines = [head, ""]
+    if text:
+        lines += [text, ""]
+    lines += [
         f"Factory: {factory_name}",
         f"Factor-ia-Run: {run_id}",
     ]
-    body += [f"Factor-ia-Source: {source}" for source in (sources or [])]
-    return "\n".join(body) + "\n"
+    lines += [f"Factor-ia-Source: {source}" for source in (sources or [])]
+    return scrub_text("\n".join(lines) + "\n")

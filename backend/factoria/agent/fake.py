@@ -58,6 +58,7 @@ Script = Literal[
     "verdict-pass",
     "verdict-fail",
     "scope",
+    "commit-message",
 ]
 
 #: What the fake reports as the model. Deliberately not a real model id — a
@@ -73,6 +74,11 @@ would not notice if that stopped being true."""
 #: docstring. Raise it per adapter (`FakeAdapter(cost_usd=…)`) or per node
 #: (`fake_cost` in an agent's config) when the cost path itself is under test.
 FAKE_COST_USD = 0.0
+
+
+#: What `success` says before its first tool call — addressed to nobody, and
+#: so never on the belt.
+NARRATION = "I'll start by reading the README.\n"
 
 
 def _init(session_id: str, cwd: str) -> ev.SessionInit:
@@ -97,13 +103,18 @@ _KNOWLEDGE_APPEND = "mcp__knowledge__knowledge_append"
 
 
 def success_script(session_id: str, cwd: str, prompt: str, cost: float) -> Iterable[AgentEvent]:
-    """A node that reads a file, writes one, ticks its checklist and finishes."""
+    """A node that reads a file, writes one, ticks its checklist and finishes.
+
+    It narrates before its first tool call and reports after its last, because
+    that is a real agent's shape — and only the report travels
+    (`decisions/0027`). The report echoes the prompt's head, which is how a test
+    reads what a node was handed.
+    """
     tool_a, tool_b = f"toolu_{uuid.uuid4().hex[:12]}", f"toolu_{uuid.uuid4().hex[:12]}"
     todo = f"toolu_{uuid.uuid4().hex[:12]}"
     yield _init(session_id, cwd)
     yield ev.ThinkingDelta(session_id=session_id, text="Looking at the request. ")
-    yield ev.TextDelta(session_id=session_id, text="Working on: ")
-    yield ev.TextDelta(session_id=session_id, text=prompt[:80])
+    yield ev.TextDelta(session_id=session_id, text=NARRATION)
     yield ev.ToolStart(
         session_id=session_id,
         tool_use_id=todo,
@@ -130,6 +141,8 @@ def success_script(session_id: str, cwd: str, prompt: str, cost: float) -> Itera
         session_id=session_id,
         items=[ev.TodoItem(content="Read the file", status="completed")],
     )
+    yield ev.TextDelta(session_id=session_id, text="Working on: ")
+    yield ev.TextDelta(session_id=session_id, text=prompt[:80])
     yield ev.TextDelta(session_id=session_id, text="\nDone.")
     yield ev.TurnEnd(
         session_id=session_id,
@@ -395,6 +408,42 @@ def knowledge_file_script(
     yield ev.Exit(session_id=session_id, cause="completed", code=0)
 
 
+#: What the `commit-message` script writes. Fixed, so a test can assert the
+#: commit carries exactly this and not the request it would otherwise fall
+#: back to.
+FAKE_COMMIT_SUBJECT = "Give every project an icon"
+FAKE_COMMIT_BODY = (
+    "Projects can now carry an icon, picked from a preset set in their\n"
+    "settings and shown in the project list and on the canvas."
+)
+
+
+def commit_message_script(
+    session_id: str, cwd: str, prompt: str, cost: float
+) -> Iterable[AgentEvent]:
+    """A commit message pass that narrates, then writes its block.
+
+    The narration is there on purpose: it is the shape a real pass produces,
+    and the one thing that must never reach a commit.
+    """
+    yield _init(session_id, cwd)
+    yield ev.TextDelta(session_id=session_id, text="I'll read the stat first.\n\n")
+    yield ev.TextDelta(
+        session_id=session_id,
+        text="```json\n%s\n```"
+        % json.dumps({"subject": FAKE_COMMIT_SUBJECT, "body": FAKE_COMMIT_BODY}),
+    )
+    yield ev.TurnEnd(
+        session_id=session_id,
+        model=FAKE_MODEL,
+        usage=ev.Usage(input_tokens=300, output_tokens=60),
+        total_cost_usd=cost,
+        duration_ms=900,
+        num_turns=1,
+    )
+    yield ev.Exit(session_id=session_id, cause="completed", code=0)
+
+
 SCRIPTS: dict[str, Callable[[str, str, str, float], Iterable[AgentEvent]]] = {
     "success": success_script,
     #: Completes without producing any text. The empty belt, without a failure.
@@ -416,6 +465,9 @@ SCRIPTS: dict[str, Callable[[str, str, str, float], Iterable[AgentEvent]]] = {
     # names. The default for that pass is `silent`, which files nothing and so
     # exercises the orchestrator's verbatim fallback; this is the other half.
     "knowledge-file": knowledge_file_script,
+    # An output node's commit message pass, writing a real block. The default
+    # for that pass is `silent`, which exercises the fallback.
+    "commit-message": commit_message_script,
 }
 
 

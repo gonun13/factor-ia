@@ -892,14 +892,26 @@ function SkillEditor({
               than it does for an ordinary skill. */}
           {loaded?.system && (
             <div className="skill-editor-warning" role="note">
-              <strong>This skill is built into the knowledge node.</strong> It is
-              not chosen by a machine — every knowledge base with the matching
-              type files through it, in every factory and every project.
+              {name === "commit-message" ? (
+                <>
+                  <strong>This skill is built into the commit node.</strong> It
+                  is not chosen by a machine — every commit a run makes has its
+                  message written through it, in every factory and every
+                  project.
+                </>
+              ) : (
+                <>
+                  <strong>This skill is built into the knowledge node.</strong>{" "}
+                  It is not chosen by a machine — every knowledge base with the
+                  matching type files through it, in every factory and every
+                  project.
+                </>
+              )}
               <ul>
                 <li>
-                  A change takes effect on the next run, everywhere. Instructions
-                  that stop being clear will fill your bases with entries nobody
-                  can use, and the entries already filed are not revisited.
+                  {name === "commit-message"
+                    ? "A change takes effect on the next run, everywhere. A message the pass cannot deliver falls back to the request and the last answer, so unclear instructions cost you readable commits, never a commit."
+                    : "A change takes effect on the next run, everywhere. Instructions that stop being clear will fill your bases with entries nobody can use, and the entries already filed are not revisited."}
                 </li>
                 <li>
                   Saving writes <code>_skills/{name}.md</code>, which from then

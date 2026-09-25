@@ -164,7 +164,7 @@ def run_problems(
             if skills.is_system(wanted):
                 problems.append(
                     f"Agent “{label(node)}”: {wanted!r} is a system skill, "
-                    "built into the knowledge node — it cannot be worn by a node. "
+                    "built into a node type — it cannot be worn by a node. "
                     "Choose another, or clear the plate."
                 )
                 continue
@@ -201,7 +201,7 @@ def run_problems(
         if skills.is_system(wanted):
             problems.append(
                 f"Scope “{label(node)}”: {wanted!r} is a system skill, "
-                "built into the knowledge node — it cannot be worn by a node. "
+                "built into a node type — it cannot be worn by a node. "
                 "Choose another, or clear the plate."
             )
             continue

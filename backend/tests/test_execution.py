@@ -590,7 +590,8 @@ def test_the_skill_body_reaches_the_spawn(
     original = FakeAdapter.create_run
 
     def capture(self, prompt, cwd, config=None):
-        seen.append(config.append_system_prompt if config else None)
+        if not _is_commit_pass(cwd):
+            seen.append(config.append_system_prompt if config else None)
         return original(self, prompt, cwd, config)
 
     monkeypatch.setattr(FakeAdapter, "create_run", capture)
@@ -602,6 +603,12 @@ def test_the_skill_body_reaches_the_spawn(
     assert "description:" not in seen[0]
 
 
+def _is_commit_pass(cwd: str) -> bool:
+    """The output node's message pass (`orchestrator._commit_pass`), which
+    wears its own system skill and is not the machine these tests are about."""
+    return Path(cwd).name == worktree.COMMIT_DIRNAME
+
+
 def test_a_node_wearing_no_skill_appends_nothing(
     orch: Orchestrator, factory: Factory, monkeypatch
 ) -> None:
@@ -609,7 +616,8 @@ def test_a_node_wearing_no_skill_appends_nothing(
     original = FakeAdapter.create_run
 
     def capture(self, prompt, cwd, config=None):
-        seen.append(config.append_system_prompt if config else None)
+        if not _is_commit_pass(cwd):
+            seen.append(config.append_system_prompt if config else None)
         return original(self, prompt, cwd, config)
 
     monkeypatch.setattr(FakeAdapter, "create_run", capture)
@@ -627,7 +635,8 @@ def test_the_verdict_contract_reaches_a_reviewer_and_only_a_reviewer(
     original = FakeAdapter.create_run
 
     def capture(self, prompt, cwd, config=None):
-        seen.append(config.append_system_prompt if config else None)
+        if not _is_commit_pass(cwd):
+            seen.append(config.append_system_prompt if config else None)
         return original(self, prompt, cwd, config)
 
     monkeypatch.setattr(FakeAdapter, "create_run", capture)
@@ -666,7 +675,8 @@ def test_a_reviewer_wearing_a_skill_gets_both_and_the_contract_last(
     original = FakeAdapter.create_run
 
     def capture(self, prompt, cwd, config=None):
-        seen.append(config.append_system_prompt if config else None)
+        if not _is_commit_pass(cwd):
+            seen.append(config.append_system_prompt if config else None)
         return original(self, prompt, cwd, config)
 
     monkeypatch.setattr(FakeAdapter, "create_run", capture)
@@ -690,7 +700,8 @@ def test_the_machine_contract_rides_with_a_worn_skill_and_only_then(
     original = FakeAdapter.create_run
 
     def capture(self, prompt, cwd, config=None):
-        seen.append(config.append_system_prompt if config else None)
+        if not _is_commit_pass(cwd):
+            seen.append(config.append_system_prompt if config else None)
         return original(self, prompt, cwd, config)
 
     monkeypatch.setattr(FakeAdapter, "create_run", capture)
@@ -727,7 +738,8 @@ def test_the_machine_contract_sits_above_the_verdict_fence(
     original = FakeAdapter.create_run
 
     def capture(self, prompt, cwd, config=None):
-        seen.append(config.append_system_prompt if config else None)
+        if not _is_commit_pass(cwd):
+            seen.append(config.append_system_prompt if config else None)
         return original(self, prompt, cwd, config)
 
     monkeypatch.setattr(FakeAdapter, "create_run", capture)

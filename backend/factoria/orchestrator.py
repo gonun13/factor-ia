@@ -88,6 +88,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from . import (
+    commit_pass,
     config,
     gitwork,
     housekeeping,
@@ -305,7 +306,11 @@ def adapter_name_for(node: Node, settings: ProjectSettings | None = None) -> str
 
 
 def adapter_for(
-    node: Node, settings: ProjectSettings | None = None, *, lap: int = 1
+    node: Node,
+    settings: ProjectSettings | None = None,
+    *,
+    lap: int = 1,
+    default_script: str | None = None,
 ) -> AgentAdapter:
     """The seam stage 5 left. Same signature, real body.
 
@@ -319,6 +324,10 @@ def adapter_for(
     only interesting shape a loop has. A list is indexed by lap and its last
     entry repeats, so `["verdict-fail", "verdict-pass"]` is a review that is
     satisfied on the second look.
+
+    `default_script` is the fake's answer when the node names none, for a spawn
+    whose default `success` would be wrong — the commit pass's is `silent`, so
+    a dry run commits under the fallback message unless a test asks otherwise.
     """
     name = adapter_name_for(node, settings)
     if name == "fake":
@@ -330,7 +339,7 @@ def adapter_for(
             # `success` would edit a README and say "Done", which is not a thing
             # this node can do and not a document anything downstream can read —
             # a dry run of a scope node must still stop and ask.
-            default = "scope" if _is_scope(node) else "success"
+            default = default_script or ("scope" if _is_scope(node) else "success")
             script = str(
                 node.definition.config.get("fake_script")
                 or config.fake_script()
@@ -572,6 +581,12 @@ class ActiveRun:
 #: read an entry and rewrite it — the shipped skills ask for exactly that
 #: sequence — and short enough that a loop is caught rather than waited out.
 FILING_TIMEOUT_S = 180.0
+
+#: What the commit message pass may not do — everything but write text. It is
+#: handed the request, the stat and the answer in its prompt, and its cwd is an
+#: empty scratch directory (`worktree.COMMIT_DIRNAME`), so there is nothing a
+#: tool would find that it was not already given.
+COMMIT_DENIED_TOOLS: tuple[str, ...] = SCOPE_DENIED_TOOLS + ("Read", "Grep", "Glob")
 
 
 def _decide(state: "ActiveRun", edge_id: str, *, taken: bool) -> None:
@@ -2388,12 +2403,8 @@ class Orchestrator:
                     # to nobody: the operator sees the form, and the next
                     # machine gets handed `output_text`. So the text resets at
                     # every tool call, and what survives is the prose written
-                    # after the final one, which is the document.
-                    #
-                    # Deliberately unlike `_run_agent`, where the *whole* reply
-                    # is kept because a reviewer's analysis is what the next lap
-                    # acts on. Here the reply and the artefact are different
-                    # things, and only one of them is for anybody.
+                    # after the final one, which is the document. `_run_agent`
+                    # does the same (`decisions/0027`).
                     collected.clear()
                 elif event.type == "permission.request":
                     # **The whole feature, in one await.** The walk parks inside
@@ -2655,12 +2666,28 @@ class Orchestrator:
             )
             return
 
+        # **The message is the commit node's to write** (`decisions/0028`),
+        # through its system skill, and verified: anything the pass did not
+        # deliver falls back to the request and the answer, which is what a
+        # commit said before the pass existed.
+        written, why = await self._commit_pass(state, node, incoming, made_all)
+        if state.cancelled:
+            # Stopped or cancelled while the message was being written: the
+            # pass was interrupted, and the fallback is no licence to commit
+            # anyway.
+            await self._set_node(
+                state, node.id, "failed", STOPPED if state.stopped else CANCELLED
+            )
+            return
+        subject, body = written if written is not None else (None, None)
         message = worktree.commit_message(
             state.run.input_text or "",
             factory_name=state.run.factory_name or state.run.factory_id,
             run_id=state.run.id,
             agent_summary=incoming,
             sources=_input_sources(state),
+            subject=subject,
+            body=body,
         )
         committed: list[str] = []
         empty: list[str] = []
@@ -2706,6 +2733,8 @@ class Orchestrator:
             return
 
         detail = "committed " + "; ".join(committed)
+        if written is None and why:
+            detail = f"{detail} · {commit_pass.FALLBACK_NOTE} — {why}"
         if kind in PUSHING_OUTPUT_KINDS:
             pushed = await self._push_all(state, node, kind, made_all)
             if pushed is None:
@@ -2713,6 +2742,120 @@ class Orchestrator:
             detail = f"{detail} · {pushed}"
             state.run.worktrees = state.workspaces.all
         await self._set_node(state, node.id, "succeeded", detail)
+
+    async def _commit_pass(
+        self,
+        state: ActiveRun,
+        node: Node,
+        incoming: str,
+        made_all: list[RunWorktree],
+    ) -> tuple[tuple[str, str] | None, str]:
+        """Let the `commit-message` system skill write this commit's message.
+
+        Returns `((subject, body), "")`, or `(None, reason)` when the caller
+        should fall back — and a reason of `""` with `None` when there was
+        nothing to write about, which is not worth a word on the node.
+
+        `_filing_pass`'s shape, for its reasons. **This is the commit node's
+        work, not the machine's**: the reviewer upstream said what shipped, and
+        how git records it is decided here, by a skill an operator can open in
+        the library. **It never raises**, because it is an improvement on a
+        mechanism that already worked, and an improvement that can take the
+        commit down with it is not one. **It runs on the project's default
+        model and effort**, through the output node's config for the ladder's
+        sake — an output node has no model plate, so the project answers.
+
+        The pass has no tools and no worktree (`COMMIT_DENIED_TOOLS`,
+        `worktree.COMMIT_DIRNAME`): it runs *just before* the commit, so a pass
+        that could write would be a pass that could change what is committed.
+        What it knows of the change is the stat it is handed.
+        """
+        assert state.workspaces is not None
+        stats: dict[str, str] = {}
+        try:
+            for made in made_all:
+                stat = await asyncio.to_thread(
+                    gitwork.pending_stat, made.path, made.base_commit
+                )
+                if stat:
+                    stats[made.codebase_name or made.codebase_id] = stat
+        except gitwork.GitError as exc:
+            return None, f"the change could not be read — {exc}"
+        if not stats:
+            # Nothing to describe, and the commit below is about to fail the
+            # node for exactly that reason. A model call first would only
+            # delay the sentence the operator needs.
+            return None, ""
+
+        try:
+            instructions = skills.body("commit-message")
+        except (SkillError, PathEscape) as exc:
+            return None, f"its skill could not be read — {exc}"
+
+        await self._set_node(state, node.id, "running", "writing the commit message")
+        prompt = commit_pass.render_request(state.run.input_text or "", incoming, stats)
+        adapter = adapter_for(node, state.settings, default_script="silent")
+        collected: list[str] = []
+        ended: str | None = None
+        try:
+            agent_run = adapter.create_run(
+                prompt,
+                str(state.workspaces.ensure_commit_dir()),
+                RunConfig.from_node_config(
+                    node.definition.config,
+                    default_model=state.settings.default_model,
+                    default_effort=state.settings.default_effort,
+                    append_system_prompt=verdict.compose_system_prompt(
+                        instructions, reviewer=False
+                    ),
+                    disallowed_tools=list(COMMIT_DENIED_TOOLS),
+                ),
+            )
+            # Registered like any machine's spawn, so Stop and Cancel interrupt
+            # it at once rather than after the hard-cancel grace.
+            state.agent_run = agent_run
+            try:
+                async with asyncio.timeout(commit_pass.COMMIT_PASS_TIMEOUT_S):
+                    async for event in agent_run:
+                        # On the output node's own log: it is that node's work,
+                        # and its log is where an operator goes to see why a
+                        # commit reads the way it does.
+                        await state.channel.emit(
+                            AgentStreamEvent(
+                                run_id=state.run.id, node_id=node.id, event=event
+                            )
+                        )
+                        if event.type == "text.delta":
+                            collected.append(event.text)
+                        elif event.type == "tool.start":
+                            collected.clear()
+                        elif event.type == "exit" and event.cause != "completed":
+                            ended = event.detail or event.cause
+            except TimeoutError:
+                with contextlib.suppress(Exception):
+                    await agent_run.interrupt()
+                return None, (
+                    f"it ran past {int(commit_pass.COMMIT_PASS_TIMEOUT_S)}s "
+                    "and was stopped"
+                )
+            except asyncio.CancelledError:
+                # **Unlike a timeout, not swallowed.** A run cancelled while
+                # its message was being written is a run that must not go on
+                # to commit under the fallback.
+                with contextlib.suppress(Exception):
+                    await agent_run.interrupt()
+                raise
+            finally:
+                state.agent_run = None
+        except Exception as exc:  # noqa: BLE001 — see docstring
+            return None, f"it failed — {type(exc).__name__}: {exc}"
+
+        if ended is not None:
+            return None, f"it did not finish — {ended}"
+        try:
+            return commit_pass.parse_message("".join(collected)), ""
+        except commit_pass.CommitMessageError as exc:
+            return None, str(exc)
 
     async def _push_all(
         self,
@@ -2957,6 +3100,9 @@ class Orchestrator:
         )
         state.agent_run = agent_run
         collected: list[str] = []
+        # The last stretch of prose that was not empty, kept for a reply that
+        # ends on a tool call and so has nothing after it (`decisions/0027`).
+        earlier = ""
         cumulative = 0.0
         cause = "crash"
         detail: str | None = None
@@ -2971,6 +3117,16 @@ class Orchestrator:
                     AgentStreamEvent(run_id=state.run.id, node_id=node.id, event=event)
                 )
                 if event.type == "tool.start":
+                    # **The final message travels, not the narration.** The
+                    # machine contract says so, and `_run_scope` has always
+                    # done it: "let me look at the diff" is addressed to
+                    # nobody, and joined onto the answer it reached the next
+                    # machine, the commit and `summary.md`. The whole reply is
+                    # still in the node's log (`events.jsonl`).
+                    said = "".join(collected).strip()
+                    if said:
+                        earlier = said
+                    collected.clear()
                     # **The read, as opposed to the offer.** The pointer above
                     # said this machine was told where the document is; this
                     # says a tool call actually went there. Matched on the
@@ -3025,11 +3181,11 @@ class Orchestrator:
         finally:
             state.agent_run = None
 
-        # The reviewer's **whole** reply, not just its reason. The analysis is
-        # what the next lap has to act on — unlike `_run_human`, where a note
-        # replaces the text because a person writing one is choosing what to
-        # send on. Nobody chose here.
-        node_run.output_text = "".join(collected).strip()
+        # The final message — the prose after the last tool call — and, for a
+        # reviewer, all of it rather than just its reason: the analysis is what
+        # the next lap has to act on. A reply that ended on a tool call passes
+        # on the last thing it did say rather than nothing.
+        node_run.output_text = "".join(collected).strip() or earlier
         # Filed here, after the answer is final and before the outcome is
         # routed: what gets stored is exactly what the next machine on the line
         # would have been handed. A crash still files what it managed to say —

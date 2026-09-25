@@ -94,9 +94,11 @@ each with the sentence saying what holds instead. **Those notes never refuse an
 import** — the contract is what makes such a line survivable.
 
 **System skill** — a skill the product ships and a node type is *hardwired* to,
-rather than one a machine wears by choice (`skills.SYSTEM_SKILLS`). Three
-today, one per writable knowledge type: a knowledge node applies one to the
-answer it receives, so its base is a datastore and not a transcript. Listed and
+rather than one a machine wears by choice (`skills.SYSTEM_SKILLS`). Four
+today. Three are one per writable knowledge type: a knowledge node applies one
+to the answer it receives, so its base is a datastore and not a transcript. The
+fourth, `commit-message`, is what a committing output node writes its commit
+message with (decision `0028`). Listed and
 edited in the library like any other skill — an edit is an ordinary `_skills/`
 file shadowing the shipped one — but **never offered in a node's picker** and
 **never deletable**, only revertible to the shipped text. A node naming one is

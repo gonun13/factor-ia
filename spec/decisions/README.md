@@ -52,3 +52,5 @@ original keeps its number.
 | [0024](0024-stop-is-not-cancel.md) | Stop is not Cancel | amends `PROJECT.md` durability |
 | [0025](0025-tidying-is-an-errand-not-a-policy.md) | Tidying is an errand, not a policy | extends `0024` |
 | [0026](0026-effort-defaults-to-high.md) | Effort defaults to `high` | narrows `data.md`'s *ask nobody* to provider and model |
+| [0027](0027-agents-pass-on-their-final-message.md) | A machine passes on its final message | supersedes part of `behaviour/human-nodes.md` |
+| [0028](0028-the-commit-message-is-a-system-skill-pass.md) | The commit message is written by a system skill pass | extends `0016` |

@@ -123,10 +123,17 @@ def test_the_events_replay_the_same_story(
         ("n-agent", "running"),
         ("n-agent", "succeeded"),
         ("n-out", "running"),
+        # The same status again, carrying "writing the commit message": the
+        # commit pass is the output node's own work (`decisions/0028`).
+        ("n-out", "running"),
         ("n-out", "succeeded"),
     ]
     # And the agent's stream is in there whole, ending in its one exit event.
-    agent_events = [event.event for event in replayed if event.type == "agent"]
+    agent_events = [
+        event.event
+        for event in replayed
+        if event.type == "agent" and event.node_id == "n-agent"
+    ]
     assert agent_events[0].type == "session.init"
     assert [event.type for event in agent_events].count("exit") == 1
     assert "".join(e.text for e in agent_events if e.type == "text.delta")

@@ -276,9 +276,12 @@ what a single-request factory posts. A factory with a request *and* a PRD
 addresses them one at a time, and **the walk starts only when the last input is
 in**; until then the run sits in `waiting_input` with a form per node.
 
-The commit subject comes from the first `request` node in factory order, falling
-back to the first PRD's leading `#` heading (`orchestrator.prd_title`) — never
-the first 68 characters of a document body. Read in node order rather than
+The commit message is written by the commit node's own pass, wearing the
+`commit-message` system skill (decision `0028`, and
+[`behaviour/git-output.md`](behaviour/git-output.md)). Its fallback subject
+comes from the first `request` node in factory order, falling back to the first
+PRD's leading `#` heading (`orchestrator.prd_title`) — never the first
+characters of a document body. Read in node order rather than
 submission order, so the same factory produces the same subject however the
 operator filled the forms in.
 
@@ -350,8 +353,8 @@ A run with a codebase attached does this to it:
 4. `summary.md` is written: the request, the branch, the commit, the diffstat,
    and the two commands that review it.
 
-Cleanup policy — **scratch** is `_memory/`, `_knowledge/` and `_scope/`, which
-follow the worktree column exactly:
+Cleanup policy — **scratch** is `_memory/`, `_knowledge/`, `_scope/` and
+`_commit/`, which follow the worktree column exactly:
 
 | outcome | worktree | scratch | branch |
 |---|---|---|---|
@@ -753,7 +756,7 @@ not is the map.
 | **R1** | A mutating request is accepted only when its `Host` is one this deployment was configured to answer to. Self-consistency with `Origin` may remain an *additional* narrowing; it may not be the whole test. | **Met.** `security.host_is_allowed` (`security.py:91`) refuses, on every request and before the `Origin` rule runs, any `Host` that is not loopback (`LOOPBACK_HOSTS`, `:65`) or named in `FACTOR_IA_ALLOWED_HOSTS` (`config.py:162`; a bare name allows any port, `name:port` that port only). The rebinding shape — `Host` and `Origin` agreeing on the attacker's name — is refused in `tests/test_api.py:370`. |
 | **R2** | No `git` invocation this process makes may execute a command named by configuration it did not author. The mitigation must be structural — applied at the `_git` choke point — rather than per-call. | **Met.** `gitwork._git` (`gitwork.py:436`) pins every config key git would execute at command scope (`_PINNED`, `:164`), blanks the filter and credential-helper keys the repo names, read before each command (`_foreign_commands`, `:375`), passes `--no-ext-diff --no-textconv` to `diff`/`log`/`show`, restricts transports from the environment (`_ALLOWED_PROTOCOLS`, `:195`), and names the pack program on `fetch`/`ls-remote`/`push` — wrapped with the same pins when the remote is a local path, whose own config and hooks would otherwise run (`_pack_flag`, `:408`). `tests/test_gitwork.py:320` onward plant a tripwire for each vector and drive the module as a run does. One window remains, stated in the docstring: a key written between the config read and the command it guards. |
 | **R3** | Reaching the API from another machine requires a deliberate, documented act. It is not the default of any path the README describes. | **Unmet.** `frontend/vite.config.ts:9` sets `host: true`, binding the dev server to `0.0.0.0`; `Dockerfile:135` binds uvicorn to `0.0.0.0` and is safe only because compose narrows it. |
-| **R4** | Every path by which agent- or user-originated text is persisted outside the process passes through `scrub_text`/`scrub_value` first. A new exit should be hard to add without noticing. | **Partly met.** `events.jsonl` (`runlog.py:144`), adapter error details and the settings account detail are scrubbed. `summary.py:78,248` persists the request and agent output without scrubbing, and `worktree.py:767` puts raw agent-derived text in a commit message. |
+| **R4** | Every path by which agent- or user-originated text is persisted outside the process passes through `scrub_text`/`scrub_value` first. A new exit should be hard to add without noticing. | **Partly met.** `events.jsonl` (`runlog.py:144`), adapter error details and the settings account detail are scrubbed. `worktree.commit_message` scrubs the whole commit message. `summary.py:78,248` still persists the request and agent output without scrubbing. |
 | **R5** | A cross-origin caller cannot cause this server to spawn processes. Pure reads — the store, the run record, the SSE stream — may stay exempt; reads that shell out may not. | **Met.** `RequestGateMiddleware` (`security.py:132`) applies the `Origin` rule to every `/api` request, reads included, and refuses one the browser labels `cross-site` or `same-site` unless its origin is configured (`fetch_site_is_allowed`, `:119`) — the check that sees a `no-cors` `GET`, which carries no `Origin`. All of `/api` is gated rather than only the reads that spawn today, so a new route cannot become one quietly; the SSE stream is a same-origin read and passes. Tested for `/api/agent/status` and `/api/codebases/{id}/git` in `tests/test_api.py:403`. Residual: a browser that sends no `Sec-Fetch-Site` (Safari before 16.4) gets the `Origin` rule alone on reads. |
 | **R6** | Every `detail` string on the settings surface that originated in a subprocess is scrubbed before it leaves the process. | **Partly met.** `settings_api.py:130` scrubs account-status detail. The Claude and Cursor login handlers return `LoginState.detail` unchanged, although raw stderr can populate it (`agent/login.py:234–242`, `agent/cursor_login.py:184–189`). |
 

@@ -56,6 +56,7 @@ Two rules follow from the volumes and are easy to break by accident:
 /workspace/_runs/<run-id>/_memory/<slug>/<slug>.md  # run memory — RAM for one run
 /workspace/_runs/<run-id>/_knowledge/                # this run's grants and write journal
 /workspace/_runs/<run-id>/_scope/<node>/             # a scope session's cwd — empty by design
+/workspace/_runs/<run-id>/_commit/                   # the commit message pass's cwd — empty by design
 /data/projects.json                                 # machine-local registry
 /data/runs/<run-id>/run.json                        # the run record
 /data/runs/<run-id>/events.jsonl                    # append-only event log

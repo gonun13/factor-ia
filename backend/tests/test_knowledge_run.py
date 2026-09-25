@@ -982,10 +982,11 @@ def test_a_principles_base_never_reaches_a_filing_pass(
         drive(orch)
     assert "principles base" in str(refused.value)
 
-    # And the registry holds exactly the writable types.
+    # And the registry holds exactly the writable types — plus the commit
+    # node's, which is no knowledge scope at all (`decisions/0028`).
     assert skills.SYSTEM_SKILLS == {
         f"knowledge-{one}" for one in ("general", "codebase", "project")
-    }
+    } | {"commit-message"}
 
 
 # ---- a stream is not a status ----------------------------------------------

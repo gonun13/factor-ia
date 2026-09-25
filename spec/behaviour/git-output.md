@@ -81,10 +81,28 @@ theirs.
   (`- GIT_AUTHOR_NAME`), never `${VAR:-}`. The default form injects empty
   strings on a host that sets none, and an empty ident beats the configured one,
   failing `git commit` outright.
-- The subject comes from the first `request` node in factory order, falling back
-  to the first PRD's leading `#` heading.
-- A PRD's filename travels as a `Factor-ia-Source:` trailer — a label, reduced
-  to a printable basename. Nothing ever opens it.
+- **The message is written by the commit node's own pass**
+  (`orchestrator._commit_pass`, decision `0028`), wearing the `commit-message`
+  system skill. The pass is handed three things: the request, a `git diff --stat`
+  per codebase against the run's base (`gitwork.pending_stat`), and what arrived
+  on the belt, fenced as material. It returns a subject of at most 72 characters
+  and a release-note body in a ```` ```json ```` block (`commit_pass.parse_message`).
+  It has no file, shell or web tools, and it runs in an empty `_runs/<run-id>/_commit/`
+  rather than the worktree, so it cannot change what is committed.
+- **Anything the pass does not deliver falls back.** That covers no block, a
+  malformed one, an over-long subject, a crash, a 180 s timeout or an unreadable
+  skill. The fallback subject is the first `request` node in factory order, or
+  the first PRD's leading `#` heading, cut at a word boundary. The fallback body
+  is what arrived on the belt, with its paragraphs kept, cut at 1,500
+  characters. The node's detail then says `commit message from the fallback —
+  <why>`. Stop and Cancel interrupt the pass, and nothing is committed. A dry
+  run (`FACTOR_IA_ADAPTER=fake`) takes the fallback unless the output node
+  names a `fake_script`.
+- **The trailers are always ours:** `Factory:`, `Factor-ia-Run:` and, for each
+  PRD, `Factor-ia-Source:`. A body line that spells one is removed, so a
+  model cannot forge the line that leads back to the run. A PRD's filename is
+  a label, reduced to a printable basename, and nothing ever opens it.
+- **The whole message is scrubbed** (`scrub.scrub_text`) before git sees it.
 
 **A run whose agent changed nothing fails.** Never a green tick over an empty
 branch. This is about the three committing kinds only — a `discard` output

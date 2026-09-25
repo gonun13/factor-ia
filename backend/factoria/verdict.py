@@ -14,9 +14,10 @@ testable on strings, which matters more here than anywhere else in the
 codebase — this is the one place a model's prose becomes control flow.
 
 **Hand-rolled, in the spirit of `skills.parse_frontmatter` and
-`orchestrator.prd_title`.** There is no JSON-block reader anywhere else in the
-backend (every other `json.loads` is over machine JSON the CLI emitted), and
-this one reads *one shape* and refuses everything else **by name**. The refusal
+`orchestrator.prd_title`.** This is the backend's one JSON-block reader (every
+other `json.loads` is over machine JSON the CLI emitted, and `commit_pass`
+borrows this one through `json_blocks` rather than growing a second), and it
+reads *one shape* and refuses everything else **by name**. The refusal
 is the product: it is what an operator reads on a red node, so every one of
 them says which rule was broken rather than "invalid".
 
@@ -167,6 +168,13 @@ def _blocks(text: str) -> tuple[list[str], bool]:
     if ticks is not None and info in _CANDIDATE_INFO:
         blocks.append("\n".join(_cut_at_a_run_on_fence(body, len(ticks))))
     return blocks, tildes
+
+
+def json_blocks(text: str) -> list[str]:
+    """Every ```` ```json ```` (or bare ```` ``` ````) block in `text`, in order —
+    `_blocks` for a reader that is not the verdict's. The last one is the
+    answer, for `parse_verdict`'s reason."""
+    return _blocks(text or "")[0]
 
 
 def _cut_at_a_run_on_fence(body: list[str], ticks: int) -> list[str]:

@@ -238,6 +238,9 @@ def test_a_join_waits_for_the_branch_that_will_never_arrive_to_be_ruled_out(
         if event.get("type") == "node.status"
         and event.get("node_id") == "n-out"
         and event.get("status") == "running"
+        # A `running` with a detail is a note on a node already running — the
+        # commit message pass — not a second start.
+        and not event.get("detail")
     ]
     assert len(started) == 1, "the join ran more than once"
 

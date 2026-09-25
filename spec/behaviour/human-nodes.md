@@ -194,8 +194,7 @@ the backstop.
 tool call, so what survives is the prose written after the final one. A session
 narrates between questions and that narration is addressed to nobody: the
 operator is looking at the form, and the next machine gets handed `output_text`.
-This is deliberately unlike an agent node, where the *whole* reply is kept
-because a reviewer's analysis is what the next lap acts on.
+An agent node does the same (decision `0027`).
 
 **The document is not guaranteed clean.** The contract tells the agent to begin
 its final message with the document's first heading and write nothing around it,

@@ -104,6 +104,9 @@ def test_the_output_node_runs_exactly_once_however_many_laps_there_were(
         if event.get("type") == "node.status"
         and event.get("node_id") == "n-out"
         and event.get("status") == "running"
+        # A `running` with a detail is a note on a node already running — the
+        # commit message pass — not a second start.
+        and not event.get("detail")
     ]
     assert len(started) == 1, "the output node ran on more than one lap"
 
@@ -1011,6 +1014,9 @@ def test_the_output_node_runs_once_however_many_times_the_person_says_no(
         if event.get("type") == "node.status"
         and event.get("node_id") == "n-out"
         and event.get("status") == "running"
+        # A `running` with a detail is a note on a node already running — the
+        # commit message pass — not a second start.
+        and not event.get("detail")
     ]
     assert len(started) == 1, "the output node ran on more than one lap"
     assert laps(run)["n-work"] == 3
