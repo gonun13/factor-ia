@@ -2,159 +2,324 @@
 
 > Build and operate AI software factories.
 
-A local, single-user tool for building automated agent workflows on a canvas —
-where building the factory and running it are the same experience. You lay down
-request / agent / commit nodes, connect them with belts, attach a codebase, and
-press Run; the agent works in a git worktree of its own and leaves you a branch
-and a commit to review.
+Factor-ia is a local, single-user canvas for developers who want repeatable
+coding-agent workflows instead of prompt-chain glue. Draw a line from a request
+through workers, reviewers, human decisions, and storage; run it on that same
+canvas; then review the commit left on an isolated git branch.
 
-## Prerequisites
+- Build workflows from requests or PRDs, workers, reviewers, human sign-offs or
+  scope interviews, run memory, durable knowledge, and four output modes.
+- Watch status, tool calls, questions, costs, and outcomes stream onto the canvas;
+  stop, cancel, or resume without switching to a separate dashboard.
+- Run Claude or Cursor through their installed CLIs, or exercise the complete
+  worktree-and-commit path with the token-free fake adapter.
+- Keep source changes out of the working tree: each run gets its own git
+  worktree and `factor-ia/<factory>/<run-id>` branch.
+- Store factory definitions, skills, and knowledge as reviewable JSON and
+  Markdown files. Factor-ia needs no database service.
 
-- Docker with compose v2, and **at least 4 GB of RAM available to it**. Claude
-  Code in a container wants that floor, and the install step is the hungriest
-  part — a mystery OOM on first run is otherwise the introduction.
-- Nothing else. Python, Node, `uv` and `pnpm` all live in the image; the host
-  needs them only to run the backend or frontend outside Docker.
+> [!WARNING]
+> Factor-ia runs coding agents and git commands while required security
+> hardening remains incomplete. Keep it on a trusted local machine and do not
+> expose it beyond loopback. The authoritative spec records the
+> [unmet security requirements](spec/architecture.md#security-requirements);
+> they are a release gate.
 
-## Run it
+## Contents
+
+- [Quick start](#quick-start)
+- [First token-free run](#first-token-free-run)
+- [Real providers and git push](#real-providers-and-git-push)
+- [How a run touches your repository](#how-a-run-touches-your-repository)
+- [Configuration and operation](#configuration-and-operation)
+- [Development](#development)
+- [Status and limitations](#status-and-limitations)
+- [Documentation](#documentation)
+
+## Quick start
+
+### Prerequisites
+
+- Git.
+- Docker with Compose v2 and at least 4 GB of RAM available to Docker.
+- A POSIX-like host environment for the bundled `sh` scripts (`sh`, `id`, and
+  `curl`). The supported container path does not require host Python, Node,
+  `uv`, or `pnpm`.
+
+Clone the repository and start the stack:
 
 ```sh
-./bin/bootstrap          # creates ../factor-ia-workspace and writes .env
-docker compose up --build
+git clone git@github.com:gonun13/factor-ia.git
+cd factor-ia
+./bin/up
 ```
 
-Then open <http://127.0.0.1:8000>. The port is published on loopback only — this
-is remote code execution as a service, and LAN access would need auth.
+`bin/up` runs the idempotent bootstrap, builds the image, starts it in the
+background, waits for the health check, and prints the application URL. Open
+<http://127.0.0.1:8000> when it reports healthy.
 
-`bin/bootstrap` is idempotent. It creates the workspace **sibling** directory
-(`../factor-ia-workspace` by default, overridable with `FACTOR_IA_WORKSPACE_HOST`)
-along with `_factories/` inside it, and writes `FACTOR_IA_WORKSPACE_HOST`,
-`FACTOR_IA_UID` and `FACTOR_IA_GID` into `.env` from `id`. Any other keys you put
-in `.env` — `TZ`, a git identity — are left alone. See [`.env.example`](.env.example).
+Confirm that the workspace bind is usable:
 
-The workspace is a sibling of the repo, never inside it: one directory per git
-codebase, plus `_factories/` for factory definitions.
-
+```sh
+curl -fsS http://127.0.0.1:8000/api/health
 ```
+
+Expected shape:
+
+```json
+{
+  "status": "ok",
+  "version": "0.1.0",
+  "workspace": "/workspace",
+  "workspace_present": true,
+  "workspace_writable": true
+}
+```
+
+The bootstrap creates `../factor-ia-workspace` by default and mounts it at
+`/workspace`. It also creates `_factories/` and writes the host workspace path
+and current uid/gid to the gitignored `.env` file. Existing operator-owned keys
+in that file are preserved.
+
+```text
 Projects/
-├── factor-ia/              ← this repo
-└── factor-ia-workspace/    ← mounted at /workspace
-    ├── some-project/
-    └── _factories/
+├── factor-ia/              # this repository
+└── factor-ia-workspace/    # mounted at /workspace
+    ├── some-project/       # a discovered git codebase
+    ├── _factories/         # factory JSON
+    ├── _skills/            # standing instructions
+    └── _knowledge/         # durable knowledge bases
 ```
 
-## First-time setup
+Keep the workspace beside this repository, not inside it. To use a different
+location, set `FACTOR_IA_WORKSPACE_HOST` before the first `./bin/up` or in
+`.env`; `bin/bootstrap` resolves it to an absolute path and refuses a path
+inside the Factor-ia checkout.
 
-Once per machine, in **Settings** (top right of the project list):
+## First token-free run
 
-- **Sign in.** The backend spawns the CLI's login headless and shows a
-  verification URL. Open it in your own browser — the container has no browser —
-  and paste back what the page gives you, **including the `#` and everything
-  after it**.
-- **Generate a git key.** One ed25519 keypair, created inside the container.
-  Only the public half is ever shown; add it to your forge to let a run push.
+This walkthrough uses the fake adapter. It makes a real edit and commit in a
+run worktree but does not contact an agent provider or spend tokens.
 
-## Use it
-
-Put your git repos in the workspace directory — they are discovered by a scan,
-never typed in by hand. Then, on the canvas:
-
-1. Create a project and drag a **Request**, an **Agent** and a **Commit** out of
-   the palette.
-2. Belt them together handle-to-handle and pick a codebase on the agent.
-3. **Save** (⌘/Ctrl-S). Saving is explicit — there is no autosave.
-4. **Run**. Submit the request once and watch the nodes work in place. If Run is
-   disabled, the reason is next to it.
-
-The repo must be **clean** before a run — uncommitted or untracked work refuses
-the run up front. The agent then works in a worktree at
-`/workspace/_runs/<run-id>/<codebase>/` on `factor-ia/<factory>/<run-id>`; your
-working tree is never touched. When it finishes:
+First, create a small clean repository in the default workspace:
 
 ```sh
-cd ../factor-ia-workspace/<codebase>
-git log --oneline --all | head
-git diff main..factor-ia/main/<run-id>
+mkdir -p ../factor-ia-workspace/readme-demo
+(
+  cd ../factor-ia-workspace/readme-demo
+  git init
+  printf '# a readme\n' > README.md
+  git add README.md
+  git -c user.name='Factor-ia demo' \
+    -c user.email='factor-ia@localhost' \
+    commit -m 'chore: seed demo'
+)
 ```
 
-Branches are never deleted by Factor-ia — `git branch -d` is yours to type. One
-run at a time; a second is refused with the id of the run holding the slot.
+Then use the browser:
 
-## Check the stack is healthy
+1. Select **New project**, enter a name, and select **Create**.
+2. Open **Project settings**, choose **Fake (dry run)** as the provider, and
+   save the settings.
+3. Add **Request**, **Worker**, and **Commit** from the Input, Agents, and Output
+   palette groups.
+4. Connect them in that order with belts and select `readme-demo` on the Worker.
+5. Select **Save**, then **Run**, enter `Tidy the README`, and submit the request.
+
+The nodes update in place. A successful run changes `a readme` to `the readme`,
+commits that edit on a branch named `factor-ia/main/<run-id>`, and leaves the
+original working tree unchanged. Inspect the result from the host:
 
 ```sh
-curl 127.0.0.1:8000/api/health
-# {"status":"ok","version":"0.1.0","workspace":"/workspace",
-#  "workspace_present":true,"workspace_writable":true}
+git -C ../factor-ia-workspace/readme-demo status --short
+git -C ../factor-ia-workspace/readme-demo branch --list 'factor-ia/main/*'
+git -C ../factor-ia-workspace/readme-demo show \
+  'factor-ia/main/<run-id>:README.md'
 ```
 
-`workspace_writable: true` is the honest half: a container that boots but cannot
-write the bind mount is useless, and the failure is silent otherwise.
+The first command should print nothing. The second prints the run branch; use
+its id in the third command, whose output is:
 
-An end-to-end walkthrough — create a project, discover codebases, save a graph,
-restart the container, find it intact — is scripted:
+```text
+# the readme
+```
+
+Factor-ia also writes `/data/runs/<run-id>/summary.md` inside the container with
+the request, branch, commit, diffstat, and exact review commands:
+
+```sh
+docker compose exec factoria sh -c \
+  'cat /data/runs/<run-id>/summary.md'
+```
+
+## Real providers and git push
+
+Claude and Cursor are separate providers with separate credentials. For each
+one you plan to use:
+
+1. Open **Settings** from the project list and select **Sign in** for that
+   provider.
+2. Open the verification URL in your browser.
+3. Paste back the complete value the provider gives you, including `#` and
+   everything after it.
+4. Choose the provider at project level, or override it on an individual agent.
+
+The container stores provider credentials in the `agent-home` named volume; it
+never mounts the host's provider configuration. The default provider is Claude.
+Models are read from each CLI's own handshake instead of being hardcoded.
+
+A local **Commit** output needs no forge credential. For **Commit & push** or
+**Commit & merge**, use **Generate key** in Settings and add the displayed
+public ed25519 key to the repository's forge. The private key is never returned
+by the API. A pushing run also requires a configured git remote that is
+reachable over SSH.
+
+`Commit & merge` is intentionally stronger than a local commit: it first pushes
+the run branch, then attempts a non-forced fast-forward of the remote base
+branch. Factor-ia does not open a pull request or resolve a conflict.
+
+## How a run touches your repository
+
+Every attached codebase must be a git repository with at least one commit and a
+clean working tree. Factor-ia refuses a run with all detected reasons before it
+starts, so untracked or uncommitted work is never silently omitted.
+
+For a run with id `<run-id>`, the agent works at:
+
+```text
+/workspace/_runs/<run-id>/<codebase>/
+```
+
+That worktree shares the repository's object store but has its own HEAD, index,
+and branch. The operator's checked-out files are not edited. Successful
+worktrees are removed while their branches remain; failed or stopped worktrees
+are kept for inspection or resume. Cancel removes the worktree but still does
+not delete the branch.
+
+Factor-ia never deletes refs. Preview reclaimable run directories with:
+
+```sh
+./bin/tidy
+```
+
+The preview changes nothing. `./bin/tidy --yes` removes only the listed
+checkouts; `./bin/tidy --yes --branches` additionally asks host git to delete
+branches with the safe, non-forced `git branch -d` operation.
+
+## Configuration and operation
+
+The public [`.env.example`](.env.example) documents the available host-side
+settings. `bin/bootstrap` owns only these three values:
+
+| Variable | Purpose | Default |
+|---|---|---|
+| `FACTOR_IA_WORKSPACE_HOST` | Host directory mounted at `/workspace` | `../factor-ia-workspace` |
+| `FACTOR_IA_UID` | Runtime uid for writable bind mounts | current `id -u` |
+| `FACTOR_IA_GID` | Runtime gid for writable bind mounts | current `id -g` |
+
+Optional `GIT_AUTHOR_*` and `GIT_COMMITTER_*` variables set commit authorship;
+otherwise Factor-ia uses its documented local fallback identity. `TZ` defaults
+to `UTC`.
+
+Choose the fake adapter in **Project settings** as shown above. Although
+`.env.example` currently mentions `FACTOR_IA_ADAPTER`, the Compose service does
+not forward that variable; it applies to host-side backend runs and tests, not
+to `./bin/up`.
+
+`FACTOR_IA_DANGEROUS_PERMISSIONS=1` enables permission-bypass modes inside the
+container. Leave it unset unless you intentionally accept the larger blast
+radius: the provider credential and the complete workspace mount are reachable
+from that container.
+
+Common operations:
+
+```sh
+./bin/up --no-build   # start an already-built image
+./bin/down            # stop containers; keep credentials, projects, and logs
+./bin/down --volumes  # also delete named-volume state after confirmation
+docker compose logs factoria
+```
+
+`./bin/down --volumes` removes provider sign-ins, the project registry, run
+history, and event logs. Workspace files and run branches are outside those
+named volumes and remain on the host.
+
+## Development
+
+The production image builds the React frontend and serves it from FastAPI on a
+single port. Development and verification use the same container toolchain as
+the application; no host Python, Node, `uv`, or `pnpm` installation is needed.
+
+Run the backend suite in an ephemeral container with the source mounted
+read-only:
+
+```sh
+docker compose run --rm --no-deps \
+  -v ./backend:/src:ro \
+  -w /src \
+  -e UV_PROJECT_ENVIRONMENT=/tmp/factoria-venv \
+  --entrypoint sh factoria \
+  -lc 'uv sync --locked --no-install-project && uv run pytest'
+```
+
+Build the complete runtime image, including the locked frontend install,
+TypeScript check, and Vite production bundle:
+
+```sh
+docker compose build factoria
+```
+
+Browser checks run against the real built bundle, one script at a time:
+
+```sh
+docker compose --profile uitest run --rm uitest node tests/settings.mjs
+```
+
+With the stack running and at least one git repository in the workspace, the
+installed-stack walkthrough verifies project creation, codebase discovery,
+factory persistence, origin refusal, and restart durability:
 
 ```sh
 ./bin/walkthrough
 ```
 
-It prints each claim before checking it and exits non-zero on the first broken
-one. It needs at least one git repo under the workspace to have anything to
-discover (`git init ../factor-ia-workspace/some-project`), and it is safe to
-re-run.
+See [`spec/tests.md`](spec/tests.md) for the complete test strategy and the UI
+script that belongs to each feature.
 
-Run logs live at `/data/runs/<run-id>/` — `events.jsonl`, append-only and
-scrubbed of token-shaped strings, plus a `summary.md` per run:
+## Status and limitations
 
-```sh
-docker compose exec factoria sh -c 'ls /data/runs'
-docker compose exec factoria sh -c 'cat /data/runs/<run-id>/summary.md'
-```
+Factor-ia currently targets one developer on one trusted machine:
 
-## Running it without tokens
+- One active run is allowed; a second is refused rather than queued.
+- The UI attaches one codebase per project. Nested factories, parallel fan-out,
+  and shell/test execution nodes are not built.
+- GitHub/GitLab pull-request creation is not built; runs stop at local commits,
+  pushed branches, or an explicitly drawn remote fast-forward.
+- Run history is retained indefinitely until the operator tidies it.
+- Two browser tabs editing one factory are last-write-wins.
+- English is the only interface language, and real provider runs require
+  network access.
+- The Claude scope-interview mechanism is covered by stub tests but has not been
+  verified in a live Claude session; the Cursor path has.
 
-Set `FACTOR_IA_ADAPTER=fake` on the container (or `"adapter": "fake"` in one
-agent node's config) and the whole path above runs on the fake adapter, whose
-scripted edits are real file writes into the worktree. The default is the real
-`claude` CLI.
+The built-versus-planned inventory lives in
+[`spec/PROJECT.md`](spec/PROJECT.md#requirements). Unmarked claims in `spec/`
+describe shipped behavior; planned behavior is explicitly marked **Not built.**
 
-## Develop
+## Documentation
 
-Tests:
+Factor-ia is spec-driven. [`AGENTS.md`](AGENTS.md) defines precedence when the
+documents disagree.
 
-```sh
-cd backend && uv sync && uv run pytest
-```
-
-Outside Docker — handy for a fast loop; the supported run path is still compose:
-
-```sh
-cd backend && uv sync
-FACTOR_IA_WORKSPACE=../../factor-ia-workspace \
-FACTOR_IA_ALLOWED_ORIGINS=http://localhost:5173 \
-  uv run uvicorn factoria.main:app --reload
-
-cd frontend && pnpm install && pnpm dev     # proxies /api to :8000
-```
-
-`FACTOR_IA_ALLOWED_ORIGINS` is not optional here. Vite's proxy rewrites the
-`Host` header to the target, so a save from the dev server arrives as
-`Origin: http://localhost:5173` against `Host: localhost:8000` and the
-same-origin rule refuses it with a 403.
-
-## Docs
-
-This project is spec-driven: what it must do lives under [`spec/`](spec/), and
-[`AGENTS.md`](AGENTS.md) states the order those docs win in when they disagree.
-
-- [`spec/PROJECT.md`](spec/PROJECT.md) — the goal, the scope, the non-goals.
-- [`spec/domain.md`](spec/domain.md) — entities, kinds, and the invariants.
-- [`spec/architecture.md`](spec/architecture.md) — how it is put together: the
-  layout, the API, storage, execution, the adapter seam, security boundaries.
-- [`spec/ui-ux.md`](spec/ui-ux.md) — the canvas, the run experience, settings.
-- [`spec/data.md`](spec/data.md) — file formats, persistence, what survives.
-- [`spec/behaviour/`](spec/behaviour/) — one file per system: run execution,
-  review loops, git output, human nodes, knowledge, memory.
-- [`spec/decisions/`](spec/decisions/) — why the contested choices went the way
-  they did.
-- [`spec/tests.md`](spec/tests.md) — how it is verified, and what done means.
+- [`spec/PROJECT.md`](spec/PROJECT.md) — purpose, scope, requirements, and
+  non-goals.
+- [`spec/domain.md`](spec/domain.md) — entities, kinds, and invariants.
+- [`spec/architecture.md`](spec/architecture.md) — components, API, storage,
+  provider seam, and security boundaries.
+- [`spec/ui-ux.md`](spec/ui-ux.md) — canvas, run experience, and settings.
+- [`spec/data.md`](spec/data.md) — file formats and persistence.
+- [`spec/behaviour/`](spec/behaviour/) — run execution, review loops, git output,
+  human nodes, knowledge, and memory.
+- [`spec/decisions/`](spec/decisions/) — durable design decisions and their
+  superseding records.
+- [`spec/tests.md`](spec/tests.md) — verification and acceptance criteria.

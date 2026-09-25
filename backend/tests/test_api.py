@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from .conftest import make_git_repo
@@ -253,7 +254,7 @@ def test_same_origin_is_allowed(client: TestClient) -> None:
     response = client.post(
         "/api/projects",
         json={"name": "Demo"},
-        headers={"Origin": "http://testserver", "Host": "testserver"},
+        headers={"Origin": "http://127.0.0.1:8000"},
     )
     assert response.status_code == 201
 
@@ -356,9 +357,83 @@ def test_a_blank_model_is_stored_as_unset(client: TestClient) -> None:
     assert response.json()["settings"]["default_model"] is None
 
 
-def test_cross_origin_read_is_allowed(client: TestClient) -> None:
+def test_a_cross_origin_read_is_refused(client: TestClient) -> None:
+    """Reads under `/api` are gated like writes: several of them shell out, and
+    the side effect happens whether or not the caller can read the answer."""
     response = client.get("/api/health", headers={"Origin": "https://evil.example"})
+    assert response.status_code == 403
+
+
+# ---- Host check (R1) and reads another site caused (R5) --------------------
+
+
+def test_a_page_that_rebinds_its_own_name_to_loopback_is_refused(client: TestClient) -> None:
+    """The shape the Origin rule alone cannot see: Host and Origin agree with
+    each other, and both name the attacker."""
+    rebound = {"Host": "evil.example:8000", "Origin": "http://evil.example:8000"}
+    refused = client.post("/api/projects", json={"name": "Evil"}, headers=rebound)
+    assert refused.status_code == 403
+    assert "FACTOR_IA_ALLOWED_HOSTS" in refused.json()["detail"]
+    assert client.get("/api/projects", headers=rebound).status_code == 403
+    assert client.get("/api/projects").json() == []
+
+
+@pytest.mark.parametrize("host", ["127.0.0.1:8000", "localhost:8000", "localhost:5173", "[::1]:8000"])
+def test_loopback_is_answered_with_no_configuration(client: TestClient, host: str) -> None:
+    assert client.get("/api/health", headers={"Host": host}).status_code == 200
+
+
+def test_a_foreign_host_is_refused_even_for_the_spa(client: TestClient) -> None:
+    assert client.get("/", headers={"Host": "evil.example"}).status_code == 403
+
+
+def test_a_configured_host_is_answered_on_the_port_it_names(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("FACTOR_IA_ALLOWED_HOSTS", "factoria:8000, Lab-Box")
+    assert client.get("/api/health", headers={"Host": "factoria:8000"}).status_code == 200
+    assert client.get("/api/health", headers={"Host": "factoria:9000"}).status_code == 403
+    assert client.get("/api/health", headers={"Host": "lab-box:1234"}).status_code == 200
+
+
+@pytest.mark.parametrize(
+    "path", ["/api/agent/status", "/api/codebases/anything/git", "/api/health"]
+)
+@pytest.mark.parametrize("site", ["cross-site", "same-site"])
+def test_a_read_another_site_caused_is_refused(
+    client: TestClient, path: str, site: str
+) -> None:
+    """A `no-cors` GET carries no Origin, so only `Sec-Fetch-Site` sees it —
+    and it is refused before any handler, so nothing is spawned."""
+    response = client.get(path, headers={"Sec-Fetch-Site": site})
+    assert response.status_code == 403
+    assert "another site" in response.json()["detail"]
+
+
+@pytest.mark.parametrize("site", ["same-origin", "none"])
+def test_the_apps_own_reads_pass(client: TestClient, site: str) -> None:
+    """The SPA (`same-origin`) and a URL typed into the address bar (`none`).
+    The SSE stream is one of these reads: a 404 for a run that does not exist
+    is the handler answering, which means the gate let it through."""
+    headers = {"Sec-Fetch-Site": site}
+    assert client.get("/api/health", headers=headers).status_code == 200
+    assert client.get("/api/runs/no-such-run/events", headers=headers).status_code == 404
+
+
+def test_a_configured_origin_may_ask_from_another_site(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("FACTOR_IA_ALLOWED_ORIGINS", "http://localhost:5173")
+    response = client.get(
+        "/api/health",
+        headers={"Sec-Fetch-Site": "same-site", "Origin": "http://localhost:5173"},
+    )
     assert response.status_code == 200
+
+
+def test_a_link_to_the_app_from_another_site_still_opens_it(client: TestClient) -> None:
+    """The SPA's own files run nothing, so the gate leaves them to anyone."""
+    assert client.get("/", headers={"Sec-Fetch-Site": "cross-site"}).status_code != 403
 
 
 def test_every_mutating_verb_is_covered(client: TestClient) -> None:

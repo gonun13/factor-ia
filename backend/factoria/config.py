@@ -159,6 +159,17 @@ def allowed_origins() -> frozenset[str]:
     return frozenset(item.strip().rstrip("/") for item in raw.split(",") if item.strip())
 
 
+def allowed_hosts() -> frozenset[str]:
+    """`Host` values this server answers to, beyond the loopback names.
+
+    Each entry is a bare name, which allows it on any port, or `name:port`,
+    which allows that port only — `factoria` for the compose network's UI test
+    runner, say. Comma-separated, stripped, lowercased.
+    """
+    raw = os.environ.get("FACTOR_IA_ALLOWED_HOSTS", "")
+    return frozenset(item.strip().lower() for item in raw.split(",") if item.strip())
+
+
 def dangerous_permissions_allowed() -> bool:
     """The server-side opt-in `DESIGN.md` §6 requires before anything
     `bypassPermissions`-shaped can be selected.

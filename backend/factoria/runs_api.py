@@ -6,8 +6,9 @@ Two halves with deliberately different transports (`DESIGN.md`, Stack):
   Mutating, so the Origin check in `security.py` covers them all — starting a run is the
   most dangerous thing this server does, and it must not be reachable from
   another page in the operator's browser.
-- **State is SSE, one-way.** `GET /api/runs/{id}/events`. Stage 2 left GETs out
-  of the Origin check precisely so this works, and run state is one-way because
+- **State is SSE, one-way.** `GET /api/runs/{id}/events`. The SPA opens it from
+  its own origin, which the request gate lets through (`security.py` refuses a
+  read another site caused, not every read), and run state is one-way because
   the input is a one-shot submission rather than a conversation (open question
   2). A human node that *negotiates* was the one thing expected to force that
   decision open again, and it did not: a `scope` node's question is an ordinary
@@ -294,9 +295,9 @@ async def housekeeping_preview(
 ) -> Any:
     """What could be reclaimed, and what is being spared and why. Removes nothing.
 
-    A GET, and therefore outside the Origin check — which is deliberate twice
-    over: it reads and it is what makes the `curl` door work at all
-    (`security.py` allows a request with no Origin precisely so a script can).
+    A GET, and reachable from `curl` because `security.py` allows a request that
+    carries no Origin and that no other site caused — which is what makes the
+    `curl` door work at all.
 
     **`?format=text` is not a convenience.** `bin/tidy` has to work on a machine
     that only has `curl` (`bin/walkthrough` assumes the same), and `sed` over

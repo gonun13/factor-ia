@@ -56,6 +56,10 @@ services:
       # and the `/workspace` bind mount are both inside the blast radius, and
       # neither is discarded with the run's worktree.
       - FACTOR_IA_DANGEROUS_PERMISSIONS
+      # Names the server answers to beyond localhost/127.0.0.1 (`security.py`).
+      # Bare name, unset by default: the published port is loopback, and every
+      # name added here is one more a page could rebind to it.
+      - FACTOR_IA_ALLOWED_HOSTS
     healthcheck:
       test:
         - CMD
@@ -86,10 +90,13 @@ services:
     depends_on:
       factoria:
         condition: service_healthy
-    # No published port: it reaches the app over the compose network, at the
-    # service name. Nothing here is exposed to the host.
+    # No published port, and no network of its own: it shares the app's, so it
+    # reaches it at 127.0.0.1 — a name the app answers to with no
+    # configuration. Reaching it as `factoria` would mean allowing that name on
+    # every install. Nothing here is exposed to the host.
+    network_mode: "service:factoria"
     environment:
-      - FACTOR_IA_URL=http://factoria:8000
+      - FACTOR_IA_URL=http://127.0.0.1:8000
     volumes:
       # Bind-mounted so a test can be edited on the host and re-run without a
       # rebuild. Read-only: a test has no business writing to the repo.

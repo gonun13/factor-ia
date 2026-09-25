@@ -16,7 +16,7 @@ from .knowledge import store as knowledge_store
 from .knowledge_api import router as knowledge_router
 from .orchestrator import get_orchestrator
 from .runs_api import router as runs_router
-from .security import OriginCheckMiddleware
+from .security import RequestGateMiddleware
 from .settings_api import router as settings_router
 from .skills_api import router as skills_router
 
@@ -54,9 +54,10 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
 
 app = FastAPI(title="Factor-ia", version=__version__, lifespan=lifespan)
 
-# First and outermost: a cross-origin POST must be refused before any handler
-# or dependency runs (see security.py for why loopback alone is not enough).
-app.add_middleware(OriginCheckMiddleware)
+# First and outermost: a foreign Host, or a request another site caused, must
+# be refused before any handler or dependency runs (see security.py for why
+# loopback alone is not enough).
+app.add_middleware(RequestGateMiddleware)
 
 
 @app.get("/api/health")

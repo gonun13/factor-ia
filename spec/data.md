@@ -49,9 +49,8 @@ Two rules follow from the volumes and are easy to break by accident:
 ```
 /workspace/_factories/<project>/main.json           # the main factory — shared via git
 /workspace/_factories/<project>/<name>.json         # nested factories          (not built)
-/workspace/_factories/<project>/memory/*.md         # long-term memory          (not built)
 /workspace/_skills/<name>.md                        # standing instructions — shared via git
-/workspace/_knowledge/<id>/manifest.md              # a knowledge base
+/workspace/_knowledge/<id>/manifest.md              # a knowledge base — the long-term memory
 /workspace/_knowledge/<id>/**/*.md                  # its content
 /workspace/_runs/<run-id>/<codebase>/               # the run's worktree — the only place an agent writes
 /workspace/_runs/<run-id>/_memory/<slug>/<slug>.md  # run memory — RAM for one run

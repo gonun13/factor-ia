@@ -22,7 +22,9 @@ the tab that asked and is never logged or persisted.
 
 Mutating routes are `POST` (never `GET`), so the Origin check in
 `security.py` covers every one of them. A `GET /api/agent/login` that *started*
-a login would be a sign-in any page in the operator's browser could trigger.
+a login would be a side effect behind the one verb nothing expects to have one;
+the request gate refuses reads another site caused, but only in a browser that
+says so.
 """
 
 from __future__ import annotations
