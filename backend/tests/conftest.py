@@ -84,8 +84,11 @@ def test_store(workspace: Path, data_dir: Path) -> store.Store:
 @pytest.fixture
 def client(test_store: store.Store, monkeypatch: pytest.MonkeyPatch) -> TestClient:
     monkeypatch.delenv("FACTOR_IA_ALLOWED_ORIGINS", raising=False)
-    # TestClient sends no Origin unless asked, which is the `curl` case.
-    with TestClient(app) as test_client:
+    monkeypatch.delenv("FACTOR_IA_ALLOWED_HOSTS", raising=False)
+    # TestClient sends no Origin unless asked, which is the `curl` case. The
+    # base URL is the documented one, so the suite runs on the Host allowlist's
+    # out-of-the-box default rather than on a name configured for it.
+    with TestClient(app, base_url="http://127.0.0.1:8000") as test_client:
         yield test_client
 
 

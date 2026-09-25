@@ -294,7 +294,8 @@ awkward is not a rule — `main.json` is a file people edit in a pull request.
     prompt are copied onto the `NodeRun` when the run is created, because the
     factory file is editable while a run is in flight.
 19. **`NodeRuntime` never lands on disk**, and never is read from it.
-20. **A run interrupted by a restart is marked `failed` on the way back up**,
-    never silently resumed.
+20. **A run interrupted by a restart is marked `stopped` on the way back up**,
+    never silently resumed. Its worktree stays, and moving again requires an
+    explicit Resume or Cancel ([`decisions/0024`](decisions/0024-stop-is-not-cancel.md)).
 21. **Factor-ia never deletes a branch**, not even its own. `gitwork.py` has no
     code path that deletes a ref, and a test asserts it.

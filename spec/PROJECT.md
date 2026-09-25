@@ -220,9 +220,18 @@ notes under them record how the thing was actually settled.
 - **Shell/test execution nodes**, which is when the **dind sidecar** arrives.
 - **GitHub / GitLab integration** — open the PR, don't just leave the branch.
 - **Parallel fan-out** across agent nodes.
-- **Resume / replay** from a failed node.
-- **Long-term memory** surfaces as first-class Markdown the user can edit — the
-  slot knowledge nodes are designed into ([`behaviour/knowledge.md`](behaviour/knowledge.md)).
+- ~~**Resume / replay** from a failed node~~ — *done.* `POST /api/runs/{id}/resume`
+  with `{"from_node_id": …}` reopens a stopped run — failed, succeeded or
+  cancelled — and re-runs that node and everything reachable from it, replaying
+  the nodes above it out of the record
+  ([`decisions/0023`](decisions/0023-a-run-can-be-restarted-from-a-node.md)).
+- ~~**Long-term memory**~~ — *done, as knowledge bases.* Permanent Markdown
+  under `/workspace/_knowledge/<id>/`, shared across projects, that machines
+  read and contribute to through knowledge nodes and the operator edits in the
+  library ([`behaviour/knowledge.md`](behaviour/knowledge.md),
+  [`decisions/0017`](decisions/0017-the-library-edits-a-bases-files.md)). It is
+  not a per-project `memory/` directory, which is what this entry first
+  pictured; run memory stays RAM for one run ([`behaviour/memory.md`](behaviour/memory.md)).
 - ~~**Additional provider adapters**~~ — *partly done.* `cursor` is built and at
   parity with `claude`; `codex` and friends, following `askill`'s list, are not.
   This is the item that superseded the "one implementation" non-goal above — see
@@ -297,9 +306,9 @@ generalizes: it already drives `claude`, `cursor`, `codex`, `copilot` and
 
 ## Non-functional requirements
 
-- **Scale.** Single user, single machine, one or two concurrent runs. No
-  horizontal scaling, no load balancing, no connection pooling. Anything designed
-  for more than this is over-built.
+- **Scale.** Single user, single machine, one active run. A second run is
+  refused rather than queued. No horizontal scaling, load balancing or connection
+  pooling; anything designed for more than this is over-built.
 - **This is remote code execution as a service.** Overseer's §6 framing applies
   unchanged, and "single-user, local" does not remove the problem:
   - Publish the host port on **`127.0.0.1`** only. LAN access would require auth.
@@ -363,10 +372,11 @@ generalizes: it already drives `claude`, `cursor`, `codex`, `copilot` and
   4 GB RAM**, and installation is memory-hungry
   ([guide](https://claudecodeguides.com/claude-code-with-docker-containers-guide/)).
   Document this; a mystery OOM on first run would be a miserable introduction.
-- **Durability.** Factory definitions live in the project repo and are backed up
-  by git. Run history lives in a named volume and is discarded by a reset. A run
-  interrupted mid-flight is marked **stopped** on restart, never silently
-  resumed. *(`failed` until
+- **Durability.** Factory definitions live under `/workspace/_factories/`, a
+  separate team-owned directory that can be backed up and shared through its own
+  git repository. Run history lives in a named volume and is discarded by a
+  reset. A run interrupted mid-flight is marked **stopped** on restart, never
+  silently resumed. *(`failed` until
   [`decisions/0024`](decisions/0024-stop-is-not-cancel.md); the*
   *never-silently-resumed half is unchanged — the run still ends and still waits*
   *for a deliberate click. What changed is which buttons that click has to*
@@ -390,9 +400,9 @@ Defaults chosen where the operator didn't specify. Each is cheap to reverse.
   port, no CORS, no dev-server in production.
 - **Package managers:** `uv` for Python, `pnpm` for the frontend — both current
   defaults, both fast, both fine to swap.
-- **No test framework mandated** for v1 given the two-day target, but the
-  `AgentAdapter` is designed to be faked so the orchestrator is testable without
-  spending a single token.
+- Verification has three layers: pytest for server decisions, Playwright scripts
+  for browser-only behavior, and `bin/walkthrough` for the installed stack. The
+  `AgentAdapter` stays fakeable so none of them needs to spend a token.
 - **Agent model** defaults to whatever the provider CLI reports as its default,
   read from its own `initialize` handshake rather than hardcoded — Overseer's
   §1.1.1 approach. Defaulted per project, overridable per agent node: the ladder
@@ -401,9 +411,9 @@ Defaults chosen where the operator didn't specify. Each is cheap to reverse.
   way, with one clamp — a container pinned to `fake` stays fake, because that
   pin is what makes a machine with no credential, and the whole test suite,
   spend nothing.
-- The **`claude` CLI is installed in the image** and pinned to a known-good
-  version; its stream-json output shape is a parsing dependency, so an unpinned
-  upgrade is a breaking change.
+- The **Claude and Cursor CLIs are installed in the image** and pinned to
+  known-good versions; their stream output shapes are parsing dependencies, so
+  an unpinned upgrade is a breaking change.
 - Run history is **kept indefinitely**; no retention policy until it hurts.
 - Project registry is machine-local and **not** git-tracked; factory definitions
   **are**, in `_factories/` — a repo separate from both Factor-ia and every
@@ -412,10 +422,11 @@ Defaults chosen where the operator didn't specify. Each is cheap to reverse.
 
 ---
 
-## Open questions
+## Questions
 
-Genuinely contested, cheap to defer, and better answered by experiment than by
-argument. Deliberately left open.
+The open items are genuinely contested, cheap to defer, and better answered by
+experiment than by argument. Item 2 stays in place, marked closed, because the
+decision and behaviour records refer to its original number.
 
 1. **Does `_factories/` hold one directory per project, or does a team share one
    flat set of factories?** *Resolved, in part:* factory definitions live in

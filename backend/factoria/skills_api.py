@@ -16,7 +16,7 @@ same bargain the PRD drop zone struck (`runs_api.submit_input`): no upload
 endpoint, no second path into the container that takes a filename, and no
 outbound request made on a caller's say-so.
 
-Mutating routes are `POST`/`DELETE`, so `security.OriginCheckMiddleware`
+Mutating routes are `POST`/`DELETE`, so `security.RequestGateMiddleware`
 covers them.
 """
 

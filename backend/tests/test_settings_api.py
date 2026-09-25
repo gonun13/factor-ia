@@ -75,8 +75,9 @@ def test_every_provider_reports_what_it_offers_not_just_the_cli(
 
 
 def test_reading_the_login_state_never_starts_one(stubbed, client: TestClient) -> None:
-    """A `GET` that started a sign-in would be one any page in the operator's
-    browser could trigger — the Origin check only guards mutating methods."""
+    """A `GET` that started a sign-in would be a side effect behind the one verb
+    nothing expects to have one. The request gate refuses reads another site
+    caused, but only in a browser that says so (`Sec-Fetch-Site`)."""
     assert client.get("/api/agent/login").json()["active"] is False
     assert login._flow is None
 

@@ -47,7 +47,7 @@ detect.
 
 **Nothing here fetches a URL.**
 
-Mutating routes are `POST`/`PUT`/`DELETE`, so `security.OriginCheckMiddleware`
+Mutating routes are `POST`/`PUT`/`DELETE`, so `security.RequestGateMiddleware`
 covers them (`security.MUTATING_METHODS`).
 """
 

@@ -6,11 +6,12 @@ worktree on a dedicated branch. No force-push, no writes to the default branch,
 no deletes outside the worktree."* Convention cannot enforce that. A single
 choke point can, so:
 
-- **`_git` refuses any subcommand not on `ALLOWED_SUBCOMMANDS`.** `fetch`,
-  `reset`, `clean`, `checkout`, `switch`, `rebase`, `merge`, `update-ref` and
-  friends are simply absent, so the capability does not exist in the process at
-  all — a future edit that tries to reset a branch raises `GitDenied` before a
-  child is spawned, and a test asserts it. **There is no `merge` here and there
+- **`_git` refuses any subcommand not on `ALLOWED_SUBCOMMANDS`.** `reset`,
+  `clean`, `checkout`, `switch`, `rebase`, `merge`, `update-ref` and friends
+  are simply absent — `fetch` is present in one shape only (`_check_fetch`) —
+  so the capability does not exist in the process at all. A future edit that
+  tries to reset a branch raises `GitDenied` before a child is spawned, and a
+  test asserts it. **There is no `merge` here and there
   will not be**: a local merge means writing to a branch the operator has
   checked out, which is the one thing this whole design promises not to do. The
   `commit-merge` node merges *on the remote*, with `push`, below.
@@ -46,10 +47,49 @@ choke point can, so:
 
 Two more scars, paid for rather than discovered:
 
-- **Hooks are disabled on every invocation.** A codebase's `.git/hooks` is the
-  operator's own code, and `git commit`/`git worktree add` would run it inside
-  the container, as the container, with the container's credentials. `-c
-  core.hooksPath=<nonexistent>` plus `--no-verify` is the whole mitigation.
+- **No command a config file names is ever run.** A repository's config and
+  attributes are not ours — a codebase may arrive as a tarball, and an agent
+  can write to one — and git will execute a surprising number of commands
+  named in them, inside the container, as the container, with its credentials.
+  The image ships no git config of its own, so every such command is foreign.
+  `_git` closes each vector we know of, on every invocation:
+
+  - *Hooks* — `core.hooksPath` pinned to a path that does not exist, plus
+    `--no-verify` on `commit`.
+  - *`core.fsmonitor`* (run by `status`, `add`, `commit`), *`core.askPass`*,
+    *`core.alternateRefsCommand`*, *`credential.helper`* and the signing
+    programs (`gpg.*program`, with `commit.gpgSign`, `tag.gpgSign`,
+    `push.gpgSign` and `log.showSignature` off) — pinned at command scope
+    (`_PINNED`), which beats the repo's value.
+  - *Filters* (`filter.<name>.clean`/`.smudge`/`.process`, run by `status`,
+    `add`, `commit`, `worktree add`) and *URL-scoped credential helpers*
+    (`credential.<url>.helper`) — the repo chooses their names, so
+    `_foreign_commands` reads the config before each command and blanks every
+    one it finds.
+  - *`diff.external`, `diff.<driver>.command`, `diff.<driver>.textconv`* —
+    `--no-ext-diff --no-textconv` on `diff`, `log` and `show`. Blanking them
+    instead makes git fail with "cannot run".
+  - *`core.sshCommand`* and *`core.gitProxy`* — shadowed by `GIT_SSH_COMMAND`
+    and an empty `GIT_PROXY_COMMAND` in the environment.
+  - *`ext::<command>` URLs and unlisted remote helpers* — `GIT_ALLOW_PROTOCOL`
+    permits `file`, `git`, `ssh`, `http` and `https` only, whatever
+    `protocol.*.allow` says.
+  - *`remote.<name>.uploadpack`/`.receivepack`* — `-c` loses to these (git
+    takes the first value), so `fetch`, `ls-remote` and `push` carry an
+    explicit `--upload-pack`/`--receive-pack`. For a remote that is a path on
+    this machine, git runs that program in the *other* repository, under its
+    config and hooks, and strips our pins on the way; so the program named is
+    `git` with the pins that matter written into the command, and a push
+    never checks files out there.
+  - *Submodules* — each is a repository whose config the pins cannot see, so
+    git is kept out of them: `status` reports a submodule whose commit moved,
+    but not uncommitted edits inside one.
+
+  Two limits, stated rather than discovered. A key written into the config
+  between `_foreign_commands` reading it and the command starting is not
+  blanked; the window is one process spawn wide. And a remote whose URLs mix a
+  local path with a network address is refused, because one pack program
+  cannot be right for both.
 - **The commit identity is validated, not discovered at commit time.** Compose
   passes `GIT_AUTHOR_*` / `GIT_COMMITTER_*` through as bare names, so on a host
   that sets none they are simply absent and the container — which has no
@@ -114,9 +154,66 @@ _REMOTE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 #: no `^`, no `~`, no `@{…}`, no glob, no whitespace.
 _REF = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,254}$")
 
-#: Hooks live in the *operator's* repo. Running them would execute host-authored
-#: code inside the container on every commit.
-_NO_HOOKS = ["-c", "core.hooksPath=/nonexistent/factoria-no-hooks"]
+#: Where every config-named program is pointed when it has to be named at all.
+_NOWHERE = "/nonexistent/factoria-no-exec"
+
+#: Config pinned on every invocation, at command scope, which beats the repo's
+#: own for any single-valued key. Each of these is a key whose value git would
+#: otherwise *run*. See the module docstring for why, and for the vectors that
+#: are closed some other way.
+_PINNED: tuple[tuple[str, str], ...] = (
+    ("core.hooksPath", _NOWHERE),
+    ("core.fsmonitor", "false"),
+    ("core.askPass", ""),
+    ("core.alternateRefsCommand", "true"),
+    # An empty value resets the helper list, so none from any file survives.
+    ("credential.helper", ""),
+    ("commit.gpgSign", "false"),
+    ("tag.gpgSign", "false"),
+    ("push.gpgSign", "false"),
+    ("log.showSignature", "false"),
+    ("gpg.program", _NOWHERE),
+    ("gpg.openpgp.program", _NOWHERE),
+    ("gpg.ssh.program", _NOWHERE),
+    ("gpg.x509.program", _NOWHERE),
+    # A submodule is another repository with its own config, which the pins
+    # below it cannot see. So git is not allowed to descend into one.
+    ("submodule.recurse", "false"),
+    ("fetch.recurseSubmodules", "false"),
+    ("push.recurseSubmodules", "no"),
+    ("diff.ignoreSubmodules", "dirty"),
+)
+
+#: Keys whose names are chosen by the repository — a filter or a URL-scoped
+#: credential helper is `<section>.<anything>.<key>` — so they cannot be pinned
+#: up front. `_foreign_commands` reads the repo's config and blanks each one.
+_FOREIGN_KEYS = re.compile(r"^(filter\..+\.(clean|smudge|process)|credential\..+\.helper)$")
+
+#: The only transports git may use. Set in the environment, which overrides any
+#: `protocol.*.allow` in a config file; it is what keeps `ext::<command>` — and
+#: every remote helper not on this list — out of reach.
+_ALLOWED_PROTOCOLS = "file:git:ssh:http:https"
+
+#: Subcommands that can print a patch, and so reach `diff.external` and
+#: `diff.<driver>.textconv`/`.command`. Those cannot be blanked by config — an
+#: empty value makes git fail with "cannot run" — so these flags go on instead.
+_PATCH_SUBCOMMANDS = frozenset({"diff", "log", "show"})
+_NO_DIFF_PROGRAMS = ["--no-ext-diff", "--no-textconv"]
+
+#: Subcommands that start a pack program, which `remote.<name>.uploadpack` /
+#: `.receivepack` would otherwise choose — and for which `-c` loses, since git
+#: takes the first of several values.
+_PACK_FLAG = {"fetch": "--upload-pack", "ls-remote": "--upload-pack", "push": "--receive-pack"}
+
+#: The pack program for a remote that is a path on this machine. Git runs it
+#: with the *remote* repository's config and hooks and strips our pinned config
+#: on the way — so the pins that matter there travel inside the command itself.
+#: `receive.denyCurrentBranch=refuse` stops a push from checking files out in a
+#: non-bare remote, which is where that repository's filters would run.
+_LOCAL_PACK_PINS = (
+    f"-c core.hooksPath={_NOWHERE} -c core.fsmonitor=false "
+    "-c core.alternateRefsCommand=true -c receive.denyCurrentBranch=refuse"
+)
 
 DEFAULT_TIMEOUT_S = 120.0
 
@@ -249,10 +346,91 @@ def _env(extra: dict[str, str] | None = None) -> dict[str, str]:
     # Nothing this process runs may sit waiting for a credential that no human
     # is present to type. A prompt would hang a run until the watchdog fires.
     env["GIT_TERMINAL_PROMPT"] = "0"
+    # Both of these beat the repo's config: the first shadows `core.sshCommand`,
+    # and an empty proxy command switches `core.gitProxy` off.
     env.setdefault("GIT_SSH_COMMAND", "ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new")
+    env.setdefault("GIT_PROXY_COMMAND", "")
+    env.setdefault("GIT_ALLOW_PROTOCOL", _ALLOWED_PROTOCOLS)
     if extra:
         env.update(extra)
     return env
+
+
+def _pin(env: dict[str, str], pairs: list[tuple[str, str]]) -> None:
+    """Add `pairs` to `env` as command-scope config, after any already there.
+
+    The environment rather than `-c`: `-c` splits at the first `=`, and a
+    filter's name is the repository's to choose — `=` included.
+    """
+    try:
+        start = int(env.get("GIT_CONFIG_COUNT", "0") or 0)
+    except ValueError:
+        start = 0
+    for index, (key, value) in enumerate(pairs, start):
+        env[f"GIT_CONFIG_KEY_{index}"] = key
+        env[f"GIT_CONFIG_VALUE_{index}"] = value
+    env["GIT_CONFIG_COUNT"] = str(start + len(pairs))
+
+
+def _foreign_commands(cwd: Path | str | None, env: dict[str, str]) -> list[tuple[str, str]]:
+    """Every repo-named command key in the config git will read here, blanked.
+
+    `git config --list` runs nothing, follows `include`s, and sees every scope,
+    worktree config included. A config git cannot read is a refusal, not a
+    shrug: running the command anyway would run it without these pins.
+    """
+    argv = ["git", "config", "--list", "-z"]
+    try:
+        done = subprocess.run(
+            argv,
+            cwd=str(cwd) if cwd is not None else None,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=DEFAULT_TIMEOUT_S,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise GitError(argv[1:], -1, str(error)) from error
+    if done.returncode != 0:
+        raise GitError(argv[1:], done.returncode, done.stderr)
+    keys = {entry.split("\n", 1)[0] for entry in done.stdout.split("\0") if entry}
+    return [(key, "") for key in sorted(keys) if _FOREIGN_KEYS.match(key)]
+
+
+def _is_local_url(url: str) -> bool:
+    """Would git reach `url` through the filesystem? Git's own test, restated."""
+    if "://" in url:
+        return url.startswith("file://")
+    colon, slash = url.find(":"), url.find("/")
+    return colon == -1 or (slash != -1 and slash < colon)
+
+
+def _pack_flag(args: list[str], cwd: Path | str | None) -> str:
+    """The explicit pack program for a remote-contacting command."""
+    flag = _PACK_FLAG[args[0]]
+    program = "git-receive-pack" if args[0] == "push" else "git-upload-pack"
+    positional = [item for item in args[1:] if not item.startswith("-")]
+    if not positional:
+        raise GitDenied(args, "a command that contacts a remote must name it")
+    target = positional[0]
+    listed = _git(
+        ["remote", "get-url", "--all", *(["--push"] if args[0] == "push" else []), target],
+        cwd=cwd,
+        check=False,
+    )
+    urls = listed.stdout.split() if listed.returncode == 0 else [target]
+    local = {_is_local_url(url) for url in urls}
+    if local == {True}:
+        return f"{flag}=git {_LOCAL_PACK_PINS} {program.removeprefix('git-')}"
+    if True in local:
+        raise GitError(
+            args,
+            -1,
+            f"the remote {target!r} lists both a path on this machine and a network "
+            "address, and one push cannot be made safe for both. Give each its own "
+            "remote.",
+        )
+    return f"{flag}={program}"
 
 
 def _git(
@@ -263,14 +441,37 @@ def _git(
     check: bool = True,
     timeout: float = DEFAULT_TIMEOUT_S,
 ) -> subprocess.CompletedProcess[str]:
-    """Run one allowed git command. Synchronous — callers use `to_thread`."""
+    """Run one allowed git command. Synchronous — callers use `to_thread`.
+
+    Every command runs with the pins in `_PINNED`, the repo's own command keys
+    blanked, and — where the subcommand can reach one — an explicit diff or
+    pack program. This is the one place that happens, so a new caller cannot
+    forget it.
+    """
     _check(args)
-    argv = ["git", *_NO_HOOKS, *args]
+    command = list(args)
+    if command[0] in _PATCH_SUBCOMMANDS:
+        command[1:1] = _NO_DIFF_PROGRAMS
+    command_env = _env(env)
+    try:
+        if command[0] in _PACK_FLAG:
+            command.insert(1, _pack_flag(args, cwd))
+        _pin(command_env, [*_PINNED, *_foreign_commands(cwd, command_env)])
+    except GitDenied:
+        raise
+    except GitError as refused:
+        # Refused before a child existed, for a reason in the repository rather
+        # than in our code. A caller that reads the return code gets it exactly
+        # as it would get git's own failure.
+        if check:
+            raise
+        return subprocess.CompletedProcess(["git", *args], refused.code, "", refused.stderr)
+    argv = ["git", *command]
     try:
         done = subprocess.run(
             argv,
             cwd=str(cwd) if cwd is not None else None,
-            env=_env(env),
+            env=command_env,
             capture_output=True,
             text=True,
             timeout=timeout,

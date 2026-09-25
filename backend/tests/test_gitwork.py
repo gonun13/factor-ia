@@ -9,6 +9,7 @@ fails the day someone adds `push` to the allowlist.
 
 from __future__ import annotations
 
+import os
 import subprocess
 from pathlib import Path
 
@@ -285,3 +286,174 @@ def test_a_commit_is_made_with_the_stated_identity_and_no_hooks(tmp_path: Path) 
     assert git(repo, "log", "-1", "--format=%an <%ae>", result.commit) == "Dev <d@e.x>"
     # The operator's own branch did not move.
     assert git(repo, "rev-parse", "main") == base
+
+
+# ---- commands a config file names ------------------------------------------
+#
+# A repository's config and attributes are not ours, and git runs a surprising
+# number of commands named in them. Each test below plants tripwires — programs
+# that leave a file behind if anything runs them — and then drives the module
+# the way a run does. The assertion is that nothing tripped.
+
+
+def _tripwire(tmp_path: Path, name: str, at: Path | None = None) -> str:
+    """A program that records that it ran, and fails."""
+    marks = tmp_path / "tripped"
+    marks.mkdir(exist_ok=True)
+    script = at or tmp_path / "tripwires" / name
+    script.parent.mkdir(parents=True, exist_ok=True)
+    script.write_text(f"#!/bin/sh\ntouch '{marks}/{name}'\nexit 1\n", encoding="utf-8")
+    script.chmod(0o755)
+    return str(script)
+
+
+def _tripped(tmp_path: Path) -> list[str]:
+    marks = tmp_path / "tripped"
+    return sorted(mark.name for mark in marks.iterdir()) if marks.exists() else []
+
+
+def _commit(repo: Path, message: str) -> None:
+    git(repo, "add", "-A")
+    git(repo, "-c", "user.name=T", "-c", "user.email=t@e.com", "commit", "-q", "-m", message)
+
+
+def test_no_command_named_in_a_repos_config_runs_through_a_whole_run(tmp_path: Path) -> None:
+    """R2: every vector `status`, `worktree add`, `add`, `commit`, `log` and
+    `diff` can reach, planted at once, and driven the way a run drives them."""
+    repo = make_git_repo(tmp_path / "repo")
+    (repo / ".gitattributes").write_text("*.txt filter=trap diff=trap\n", encoding="utf-8")
+    (repo / "a.txt").write_text("a\n", encoding="utf-8")
+    _commit(repo, "attributes")
+    for key in (
+        "core.fsmonitor",
+        "filter.trap.clean",
+        "filter.trap.smudge",
+        "filter.trap.process",
+        "diff.external",
+        "diff.trap.textconv",
+        "diff.trap.command",
+        "gpg.program",
+        "gpg.ssh.program",
+        "credential.helper",
+        "core.askPass",
+    ):
+        git(repo, "config", key, _tripwire(tmp_path, key))
+    git(repo, "config", "commit.gpgSign", "true")
+    git(repo, "config", "log.showSignature", "true")
+    # Stat-dirty but unchanged: `status` has to re-read it through the filter.
+    later = (repo / "a.txt").stat().st_mtime + 5
+    os.utime(repo / "a.txt", (later, later))
+
+    state = gitwork.tree_state(repo)
+    assert state.is_repo and not state.dirty
+
+    base = state.head or ""
+    tree = tmp_path / "wt"
+    gitwork.add_worktree(repo, tree, "factor-ia/main/run-9", base)
+    (tree / "a.txt").write_text("a\nb\n", encoding="utf-8")
+    result = gitwork.commit_all(
+        tree,
+        "touch a",
+        expect_branch="factor-ia/main/run-9",
+        base=base,
+        ident=gitwork.Identity("Dev", "d@e.x", "Dev", "d@e.x"),
+    )
+    assert result is not None and result.files == ("a.txt",)
+    assert "a.txt" in result.stat
+    assert gitwork.log_line(tree, "HEAD").endswith("touch a")
+    assert _tripped(tmp_path) == []
+
+
+def test_a_filter_whose_name_git_cannot_take_on_the_command_line_is_still_blanked(
+    tmp_path: Path,
+) -> None:
+    """`-c` splits at the first `=`; a filter's name is the repo's to choose."""
+    repo = make_git_repo(tmp_path / "repo")
+    (repo / ".gitattributes").write_text("*.md filter=odd=name\n", encoding="utf-8")
+    _commit(repo, "attributes")
+    git(repo, "config", "filter.odd=name.clean", _tripwire(tmp_path, "odd"))
+    later = (repo / "README.md").stat().st_mtime + 5
+    os.utime(repo / "README.md", (later, later))
+
+    assert not gitwork.tree_state(repo).dirty
+    assert _tripped(tmp_path) == []
+
+
+def test_a_submodules_own_config_is_never_reached(tmp_path: Path) -> None:
+    """A submodule is another repository; the pins cannot see its config, so
+    git is kept out of it. What that costs: edits inside one are not reported."""
+    inner = make_git_repo(tmp_path / "inner")
+    (inner / ".gitattributes").write_text("*.md filter=trap\n", encoding="utf-8")
+    _commit(inner, "attributes")
+    repo = make_git_repo(tmp_path / "repo")
+    git(repo, "-c", "protocol.file.allow=always", "submodule", "add", "-q", str(inner), "inner")
+    _commit(repo, "submodule")
+    git(repo / "inner", "config", "filter.trap.clean", _tripwire(tmp_path, "inner-clean"))
+    later = (repo / "inner" / "README.md").stat().st_mtime + 5
+    os.utime(repo / "inner" / "README.md", (later, later))
+
+    assert not gitwork.tree_state(repo).dirty
+    assert _tripped(tmp_path) == []
+
+
+def test_a_local_remote_runs_neither_our_pack_programs_nor_its_own_config(
+    tmp_path: Path,
+) -> None:
+    """`remote.<name>.uploadpack`/`.receivepack` beat `-c`, and a remote that is
+    a path runs in *its* repository, under its config and hooks."""
+    bare = tmp_path / "remote.git"
+    subprocess.run(["git", "init", "-q", "--bare", "-b", "main", str(bare)], check=True)
+    repo = make_git_repo(tmp_path / "repo")
+    git(repo, "remote", "add", "origin", str(bare))
+    git(repo, "push", "-q", "origin", "main")
+
+    git(repo, "config", "remote.origin.uploadpack", _tripwire(tmp_path, "uploadpack"))
+    git(repo, "config", "remote.origin.receivepack", _tripwire(tmp_path, "receivepack"))
+    hooks = tmp_path / "remote-hooks"
+    _tripwire(tmp_path, "pre-receive", at=hooks / "pre-receive")
+    git(bare, "config", "core.hooksPath", str(hooks))
+    git(bare, "config", "core.alternateRefsCommand", _tripwire(tmp_path, "alternate-refs"))
+
+    assert gitwork.remote_reachable(repo, "origin") == (True, "")
+    assert gitwork.fetch(repo).ok
+    git(repo, "branch", "factor-ia/main/run-1")
+    gitwork.push_ref(repo, "factor-ia/main/run-1", "factor-ia/main/run-1")
+    assert git(bare, "branch", "--list", "factor-ia/main/run-1")
+    assert _tripped(tmp_path) == []
+
+
+def test_network_remotes_ignore_the_repos_ssh_and_proxy_commands(tmp_path: Path) -> None:
+    """`core.sshCommand` and `core.gitProxy` are shadowed from the environment.
+    The hosts do not exist; the point is only what ran on the way to failing."""
+    repo = make_git_repo(tmp_path / "repo")
+    git(repo, "remote", "add", "far", "ssh://git@example.invalid/x.git")
+    git(repo, "remote", "add", "old", "git://example.invalid/x.git")
+    git(repo, "config", "core.sshCommand", _tripwire(tmp_path, "ssh"))
+    git(repo, "config", "core.gitProxy", _tripwire(tmp_path, "proxy"))
+
+    assert gitwork.remote_reachable(repo, "far")[0] is False
+    assert gitwork.remote_reachable(repo, "old")[0] is False
+    assert _tripped(tmp_path) == []
+
+
+def test_a_remote_that_is_a_command_is_not_a_transport(tmp_path: Path) -> None:
+    """`ext::<command>` runs its command as the transport. The repo allowing it
+    does not matter: the protocol list comes from the environment."""
+    repo = make_git_repo(tmp_path / "repo")
+    git(repo, "remote", "add", "evil", "ext::" + _tripwire(tmp_path, "ext"))
+    git(repo, "config", "protocol.allow", "always")
+
+    ok, said = gitwork.remote_reachable(repo, "evil")
+    assert not ok and "not allowed" in said
+    assert _tripped(tmp_path) == []
+
+
+def test_a_remote_mixing_a_path_and_a_network_address_is_refused(tmp_path: Path) -> None:
+    repo = make_git_repo(tmp_path / "repo")
+    git(repo, "remote", "add", "both", str(tmp_path / "remote.git"))
+    git(repo, "remote", "set-url", "--add", "both", "ssh://git@example.invalid/x.git")
+
+    ok, said = gitwork.remote_reachable(repo, "both")
+    assert not ok and "both a path on this machine and a network address" in said
+    with pytest.raises(gitwork.GitError, match="Give each its own remote"):
+        gitwork.push_ref(repo, "main", "main", remote="both")

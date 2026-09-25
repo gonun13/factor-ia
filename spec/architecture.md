@@ -11,12 +11,12 @@ Everything here describes the **shipped shape** unless it carries a bold
 
 One container, one port, one process tree. A FastAPI app serves both the REST
 API under `/api` and the built SPA at `/`, so there is no CORS story and no
-second origin in production. The `claude` CLI is the one runtime dependency
-beyond Python and the workspace bind mount; it is driven headless as a
-subprocess, never as a library.
+second origin in production. The pinned Claude and Cursor CLIs are the agent
+runtimes beyond Python and the workspace bind mount; both are driven headless as
+subprocesses, never as libraries. Claude is the default provider.
 
 ```
-browser  ──HTTP/SSE──▶  FastAPI  ──subprocess──▶  claude CLI
+browser  ──HTTP/SSE──▶  FastAPI  ──subprocess──▶  provider CLI
                            │
                            ├── /workspace   bind mount, one dir per git codebase
                            └── /data        named volume, runs + project registry
@@ -28,7 +28,7 @@ browser  ──HTTP/SSE──▶  FastAPI  ──subprocess──▶  claude CLI
 backend/     FastAPI app, uv-managed  (factoria.main:app)
              models.py  data model · paths.py  containment check
              discovery.py  codebase scan · store.py  atomic JSON store
-             api.py  REST · security.py  Origin check · tests/
+             api.py  REST · security.py  Host and Origin gate · tests/
              orchestrator.py  the walk, the state machine, cancel, the sweep
              gitwork.py  every git command, behind an allowlist
              worktree.py  one worktree per run, and its cleanup policy
@@ -44,7 +44,7 @@ backend/     FastAPI app, uv-managed  (factoria.main:app)
              machine.py  what a machine promises a skill, and the lint that reads one
              system_skills/  the ones a node type is hardwired to, shipped
              system_knowledge/  the base the product ships, seeded into _knowledge/
-             agent/    the CLI subprocess layer — the one runtime dependency
+             agent/    the provider CLI subprocess layer
                adapter.py  the AgentAdapter seam, and the permission-mode gate
                events.py  the event union
                claude.py / cursor.py  real adapters · fake.py  the token-free one
@@ -58,7 +58,7 @@ frontend/    Vite + React + TypeScript + React Flow v12, built at image build ti
              run.ts  the EventSource client and the runtime reducer
              graph.ts  API graph <-> React Flow   validation.ts  run preconditions
 bin/         host-side setup and housekeeping (bootstrap, up, down, tidy, walkthrough)
-Dockerfile   multi-stage: build the SPA, then a Python runtime with the claude CLI
+Dockerfile   multi-stage: build the SPA, then a Python runtime with both provider CLIs
 spec/        the authoritative specification — this file's home
 docs/        BUILD_STATE.md, SECURITY_PRD.md — operator-local, gitignored
 ```
@@ -74,6 +74,8 @@ per-edge endpoints under it.
 Runs: `POST /api/projects/{id}/factories/{factory}/runs` (start — refused 422
 with every reason if the graph cannot run, 409 if one is already in flight) ·
 `POST /api/runs/{id}/input` (the one-shot request) ·
+`POST /api/runs/{id}/decision` and `/answer` (human nodes) ·
+`POST /api/runs/{id}/stop` ·
 `POST /api/runs/{id}/cancel` ·
 `POST /api/runs/{id}/resume` (a blocked run, or — with an optional
 `{"from_node_id": …}` body — one node of a stopped run and everything below it,
@@ -81,7 +83,9 @@ with every reason if the graph cannot run, 409 if one is already in flight) ·
 `GET /api/runs`, `GET /api/runs/{id}` ·
 `GET /api/housekeeping` (the preview; `?format=text` for `bin/tidy`) ·
 `POST /api/housekeeping` (acts, on a fingerprint of that preview) ·
-`GET /api/runs/{id}/events` (SSE).
+`GET /api/runs/{id}/events` (SSE) ·
+`GET /api/runs/{id}/nodes/{node}/events` (one node's log) ·
+`GET /api/runs/{id}/memory/{node}` (one run-memory document).
 
 Skills: `GET`/`POST /api/skills` · `GET`/`DELETE /api/skills/{name}` ·
 `GET /api/machine/contract` (what every worn skill is told, served rather than
@@ -98,9 +102,16 @@ answers `DELETE` two ways: **204** removing that override and restoring the
 shipped text, **405** when there is nothing to revert. It cannot be removed —
 a node type is hardwired to it.
 
-Settings: `GET /api/agent/status` (account + the CLI's handshake) ·
+Knowledge: list/create bases at `/api/knowledge` · read/delete one at
+`/api/knowledge/{base}` · `GET`/`PUT` and `DELETE` entries beneath
+`/api/knowledge/{base}/entry`. System bases and protected entries narrow which
+of those mutations the server accepts;
+[`behaviour/knowledge.md`](behaviour/knowledge.md) holds the full contract.
+
+Settings: `GET /api/agent/status` (both accounts and both model listings) ·
 `GET`/`POST /api/agent/login`, `POST /api/agent/login/code`,
-`POST /api/agent/login/cancel` · `GET`/`POST /api/ssh/key`.
+`POST /api/agent/login/cancel` · the same four routes for Cursor under
+`/api/agent/cursor/login` · `GET`/`POST /api/ssh/key`.
 
 **A `GET` under `/api/` that no route claims is a JSON 404**, and never reaches
 the built frontend mounted at `/` — whether or not `static/` exists
@@ -395,23 +406,39 @@ change, never `@latest`. Model defaults are read from each CLI (Claude's
 
 ## Security boundaries
 
-The load-bearing three:
+The load-bearing ones:
 
 - **Codebases are discovered, never supplied.** A request names a codebase by
   the id a scan of `/workspace` returned. Every path derived from a request is
   re-checked against the workspace with symlinks resolved (`paths.py`).
-- **Mutating requests must be same-origin.** Loopback keeps the LAN out; it does
-  not keep out another tab in the operator's own browser. Requests with no
-  `Origin` header (curl, scripts) are allowed; cross-origin
-  `POST`/`PUT`/`PATCH`/`DELETE` get a 403 (`security.py`).
+- **Only the app's own pages reach the API.** Loopback keeps the LAN out; it
+  does not keep out another tab in the operator's own browser. Every request's
+  `Host` must be `localhost`, `127.0.0.1` or `[::1]` on any port, or a name in
+  `FACTOR_IA_ALLOWED_HOSTS`, so a page that points its own name at loopback is
+  refused. Under `/api` — reads included, because several reads spawn
+  processes — a foreign `Origin` gets a 403, and so does a request the browser
+  labels `cross-site` or `same-site` in `Sec-Fetch-Site`, unless its origin is
+  in `FACTOR_IA_ALLOWED_ORIGINS`. Requests with neither header (curl, scripts)
+  are allowed, and the SPA's own files are outside the gate (`security.py`).
 - **`GET /api/ssh/key` returns the public half only.** There is no endpoint that
   returns the private key, and `tests/test_sshkeys.py` proves it by crawling
   every route the app registers with a real key on disk.
 - **`git` runs only through `gitwork`, and only in allowed shapes.** `merge`,
-  `fetch`, `reset`, `clean`, `checkout`, `switch`, `rebase` and `update-ref` are
-  absent from `ALLOWED_SUBCOMMANDS` entirely, so the capability does not exist
-  in the process; `--force` is accepted for `worktree remove` and nowhere else;
-  no code path deletes a ref.
+  `reset`, `clean`, `checkout`, `switch`, `rebase` and `update-ref` are absent
+  from `ALLOWED_SUBCOMMANDS` entirely, so the capability does not exist in the
+  process; `fetch` exists in one shape, a remote name and no refspec
+  (`_check_fetch`); `--force` is accepted for `worktree remove` and nowhere
+  else; no code path deletes a ref.
+- **No `git` command runs a program a config file names.** A repository's
+  config and attributes are not the operator's to vouch for here — a codebase
+  can arrive as a tarball, and an agent can write to one — and git executes
+  commands named in them: hooks, `core.fsmonitor`, filters, diff drivers,
+  credential helpers, signing programs, `core.sshCommand`, `ext::` remotes and
+  a remote's own pack programs. `gitwork._git` closes each on every invocation;
+  the module docstring lists them and how. What it costs: uncommitted edits
+  *inside* a submodule are not reported as dirty, because git is kept out of
+  submodules, and a remote whose URLs mix a local path with a network address
+  is refused.
 
 `push` is the one capability that had to be granted rather than withheld, for
 the two pushing output kinds. What replaced absence is a **shape check**
@@ -505,8 +532,8 @@ broker, no external database.
 │   ├── project-a/ │   /workspace       │   └── event bus ──► SSE          │
 │   ├── project-b/ │   (the ONLY        │                                  │
 │   └── _factories/│    shared surface) │  AgentAdapter (interface)        │
-└──────────────────┘                    │   └── ClaudeAdapter → spawns     │
-                                        │        the provider CLI          │
+└──────────────────┘                    │   ├── ClaudeAdapter → claude CLI │
+                                        │   └── CursorAdapter → agent CLI  │
      (named volumes, never bound)       │                                  │
      agent-home   ──────────────────────►  /home/factoria  auth & config   │
      factoria-data ─────────────────────►  /data  projects, runs, events   │
@@ -526,8 +553,8 @@ broker, no external database.
   there's one port and one container.
 - **Orchestrator.** Walks the graph, decides what's runnable, drives node state
   machines (`pending → waiting_input → running → succeeded/failed`), and emits
-  every transition onto an event bus. In-process `asyncio` — a single user running
-  one or two factories does not need Celery or a queue.
+  every transition onto an event bus. In-process `asyncio`, with one active run
+  enforced by a module-level slot — no Celery or queue.
 - **AgentAdapter.** The seam that prevents vendor lock-in, modelled on Overseer's
   `AgentAdapter` (`docs/architecture-design.md` §1.1). It spawns a provider CLI as
   a child process and normalizes its output into one event union. Adopt Overseer's
@@ -592,11 +619,11 @@ Projects/
 
 ---
 
-## The Claude CLI is the one runtime dependency
+## Provider CLIs are subprocess runtimes
 
-**The `claude` CLI is installed in the image, and the backend shells out to it
-headless for everything it needs** — running an agent, checking status, signing
-in. There is no second mechanism and no SDK dependency. The frontend never
+**The Claude and Cursor CLIs are installed in the image, and the backend shells
+out to them headless for everything it needs** — running an agent, checking
+status and signing in. There is no SDK path beside them. The frontend never
 executes anything itself; it drives these invocations through the API, which is
 what lets a browser tab sign the container in.
 
@@ -658,7 +685,9 @@ design's biggest open question:
 | `/home/factoria` | every provider's config, auth, ssh key | `agent-home` volume — never bound to host |
 | `/workspace` | the one surface shared with the host | bind mount from `FACTOR_IA_WORKSPACE_HOST` |
 | `/data` | projects registry, run history, event logs | `factoria-data` volume |
-| `/workspace/_factories/` | factory definitions, agent memory | a **separate, team-owned git repo** under the workspace |
+| `/workspace/_factories/` | factory definitions | a **separate, team-owned git repo** under the workspace |
+| `/workspace/_skills/` | standing and overridden system skills | workspace files, suitable for the operator's own git history |
+| `/workspace/_knowledge/` | durable knowledge bases | workspace files, suitable for the operator's own git history |
 
 **Execution isolation.** Each agent run operates in its own **git worktree** of
 the attached codebase, on its own branch. Grounding: the current consensus for
@@ -689,7 +718,7 @@ Each choice with its rationale, and what the web check found.
 | Frontend | **React + TypeScript + Vite** | Required by React Flow. Vite for near-zero build config. |
 | Canvas | **React Flow (`@xyflow/react`) v12** | Operator's explicit choice, and the right one — it's what this entire product category is built on. *Check:* v12 is current, published as `@xyflow/react`, with native subflow support via `parentId` (renamed from `parentNode` in v12 — worth knowing since older tutorials use the old name). UI components were updated in August 2026 for shadcn/ui on React 19 + Tailwind 4. |
 | Backend | **Python + FastAPI** | Operator's comfort zone. Native async fits the orchestrator and child-process supervision. |
-| Agent runtime | **The `claude` CLI, spawned headless**, behind `AgentAdapter` | **Decided** — a reversal from this document's first draft, which recommended the Agent SDK (see Compliance below). The CLI is installed in the image and is the backend's single agent dependency. It speaks `--input-format stream-json --output-format stream-json`, a clean machine interface, and it is how both Overseer and `askill` drive it. Also the cheapest path to multi-provider: `askill` already launches five different CLIs through one script. |
+| Agent runtime | **Pinned Claude and Cursor CLIs, spawned headless**, behind `AgentAdapter` | **Decided** — a reversal from this document's first draft, which recommended the Agent SDK (see Compliance below). Each provider has its own adapter and parser; the orchestrator sees one normalized event union. The token-free fake uses the same seam. |
 | Live updates | **SSE** (`StreamingResponse` + `EventSource`) | *Check:* the current recommendation for one-way server→client task/progress streams is SSE over WebSockets — plain HTTP, no extra protocol, browser-native reconnect. Run state is one-way; run *control* (start, cancel) is a normal POST. The documented SSE weakness — the server keeps working after a client disconnect — is handled by making cancellation an explicit endpoint. Note Overseer chose `/ws` instead, because its raw console and permission prompts are genuinely bidirectional; Factor-ia's input is a one-shot request submission (open question 2), so this holds — expect to follow Overseer only if human-in-the-middle nodes turn out to need a live back-channel. *Stage 10: they did not.* The `scope` node negotiates over several turns and does it on SSE down and POST up, one exchange at a time — see open question 2 and [`behaviour/human-nodes.md`](behaviour/human-nodes.md). This row needs no revisiting; the thing that would still argue for `/ws` is a raw console, and there is none. |
 | Persistence | **JSON + Markdown files** | Operator's choice, and it earns it: git-diffable, reviewable, agent-readable, zero infrastructure. JSON for structure and state, Markdown for memory and summaries. No DB process in the container. |
 | Event log | **JSONL, append-only** | Natural fit for a stream; trivially tailable; gives replay later for free. |
@@ -703,8 +732,9 @@ Each choice with its rationale, and what the web check found.
 
 ## Security requirements
 
-The section above states the boundaries that **hold today**. This one states the
-six that are **required and not yet met**. They are kept here, in the
+The section above states the boundaries that **hold today**. This one states
+six that were **required and not met** when they were written down; three have
+since been met, and the table says which. They are kept here, in the
 authoritative tree, because a requirement that lives only in an operator-local
 PRD is a requirement an agent will implement around.
 
@@ -715,19 +745,19 @@ page to code execution on the operator's machine, and this repository is
 intended to be published. What belongs in public is the requirement; what does
 not is the map.
 
-> **Not built.** Every requirement in this section. Each status below was
-> verified against the tree, not copied from the PRD.
+> **Not built.** R3, R4 and R6. Each status below was verified against the
+> tree, not copied from the PRD.
 
 | | requirement | status |
 |---|---|---|
-| **R1** | A mutating request is accepted only when its `Host` is one this deployment was configured to answer to. Self-consistency with `Origin` may remain an *additional* narrowing; it may not be the whole test. | **Unmet.** `security.py:47` still accepts any `Origin` self-consistent with the request's own `Host`, and nothing validates `Host`. |
-| **R2** | No `git` invocation this process makes may execute a command named by configuration it did not author. The mitigation must be structural — applied at the `_git` choke point — rather than per-call. | **Unmet.** `gitwork.py:119` disables `core.hooksPath` only. `core.fsmonitor` is a command git runs during `git status` and is untouched. |
+| **R1** | A mutating request is accepted only when its `Host` is one this deployment was configured to answer to. Self-consistency with `Origin` may remain an *additional* narrowing; it may not be the whole test. | **Met.** `security.host_is_allowed` (`security.py:91`) refuses, on every request and before the `Origin` rule runs, any `Host` that is not loopback (`LOOPBACK_HOSTS`, `:65`) or named in `FACTOR_IA_ALLOWED_HOSTS` (`config.py:162`; a bare name allows any port, `name:port` that port only). The rebinding shape — `Host` and `Origin` agreeing on the attacker's name — is refused in `tests/test_api.py:370`. |
+| **R2** | No `git` invocation this process makes may execute a command named by configuration it did not author. The mitigation must be structural — applied at the `_git` choke point — rather than per-call. | **Met.** `gitwork._git` (`gitwork.py:436`) pins every config key git would execute at command scope (`_PINNED`, `:164`), blanks the filter and credential-helper keys the repo names, read before each command (`_foreign_commands`, `:375`), passes `--no-ext-diff --no-textconv` to `diff`/`log`/`show`, restricts transports from the environment (`_ALLOWED_PROTOCOLS`, `:195`), and names the pack program on `fetch`/`ls-remote`/`push` — wrapped with the same pins when the remote is a local path, whose own config and hooks would otherwise run (`_pack_flag`, `:408`). `tests/test_gitwork.py:320` onward plant a tripwire for each vector and drive the module as a run does. One window remains, stated in the docstring: a key written between the config read and the command it guards. |
 | **R3** | Reaching the API from another machine requires a deliberate, documented act. It is not the default of any path the README describes. | **Unmet.** `frontend/vite.config.ts:9` sets `host: true`, binding the dev server to `0.0.0.0`; `Dockerfile:135` binds uvicorn to `0.0.0.0` and is safe only because compose narrows it. |
-| **R4** | Every path by which agent- or user-originated text is persisted outside the process passes through `scrub_text`/`scrub_value` first. A new exit should be hard to add without noticing. | **Partly met.** `events.jsonl` (`runlog.py:144`), adapter error details and the settings account detail are scrubbed. `summary.py:204` writes `node_run.output_text` with no scrub. |
-| **R5** | A cross-origin caller cannot cause this server to spawn processes. Pure reads — the store, the run record, the SSE stream — may stay exempt; reads that shell out may not. | **Unmet.** `OriginCheckMiddleware` gates `MUTATING_METHODS` only, and several `GET`s shell out. |
-| **R6** | Every `detail` string on the settings surface that originated in a subprocess is scrubbed before it leaves the process. | **Partly met.** `settings_api.py:130` scrubs the account status detail; the login flow's own detail is the string `agent/login.py:36` calls deliberately unscrubbed. |
+| **R4** | Every path by which agent- or user-originated text is persisted outside the process passes through `scrub_text`/`scrub_value` first. A new exit should be hard to add without noticing. | **Partly met.** `events.jsonl` (`runlog.py:144`), adapter error details and the settings account detail are scrubbed. `summary.py:78,248` persists the request and agent output without scrubbing, and `worktree.py:767` puts raw agent-derived text in a commit message. |
+| **R5** | A cross-origin caller cannot cause this server to spawn processes. Pure reads — the store, the run record, the SSE stream — may stay exempt; reads that shell out may not. | **Met.** `RequestGateMiddleware` (`security.py:132`) applies the `Origin` rule to every `/api` request, reads included, and refuses one the browser labels `cross-site` or `same-site` unless its origin is configured (`fetch_site_is_allowed`, `:119`) — the check that sees a `no-cors` `GET`, which carries no `Origin`. All of `/api` is gated rather than only the reads that spawn today, so a new route cannot become one quietly; the SSE stream is a same-origin read and passes. Tested for `/api/agent/status` and `/api/codebases/{id}/git` in `tests/test_api.py:403`. Residual: a browser that sends no `Sec-Fetch-Site` (Safari before 16.4) gets the `Origin` rule alone on reads. |
+| **R6** | Every `detail` string on the settings surface that originated in a subprocess is scrubbed before it leaves the process. | **Partly met.** `settings_api.py:130` scrubs account-status detail. The Claude and Cursor login handlers return `LoginState.detail` unchanged, although raw stderr can populate it (`agent/login.py:234–242`, `agent/cursor_login.py:184–189`). |
 
-**Ordering.** R1 and R5 are one edit to `security.py`; R2 is what R5's trigger
-makes remotely reachable. Those three are the release gate. R4, R6 and R3
-follow, and R4 in particular writes to the operator's git history, which is not
-something a later fix can retract.
+**Ordering.** R1 and R5 were one edit to `security.py`, and R2 was what R5's
+trigger made remotely reachable; those three were the release gate, and are
+met. R4, R6 and R3 follow, and R4 in particular writes to the operator's git
+history, which is not something a later fix can retract.

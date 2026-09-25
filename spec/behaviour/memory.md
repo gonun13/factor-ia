@@ -48,7 +48,7 @@ The two are easy to confuse and they are opposites.
 A memory is **RAM for a run**. It is not a knowledge base, nothing accumulates
 across runs, and no agent should be told to "save" anything to it. The third
 column is the thing that *does* accumulate, and it is a separate system with
-separate rules — [`knowledge.md`](knowledge.md) (designed, not built).
+separate rules — [`knowledge.md`](knowledge.md).
 
 The consequence worth stating plainly: a memory that cannot be written does not
 fail anything. The machine did its work and the answer is real whether or not a

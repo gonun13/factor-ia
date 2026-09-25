@@ -2205,13 +2205,14 @@ class Orchestrator:
         future: asyncio.Future[RunDecision] = asyncio.get_running_loop().create_future()
         state.decisions[node.id] = future
 
+        # The *run* is waiting too — a canvas that joined late reads this to
+        # know the line is stopped on a person rather than wedged on a machine.
+        # Set before the node, so the one write `_set_node` makes carries both:
+        # set after, a reader could catch the node parked and the run running.
+        state.run.status = "waiting_input"
         await self._set_node(
             state, node.id, "waiting_input", prompt or "waiting for a decision"
         )
-        # The *run* is waiting too — a canvas that joined late reads this to
-        # know the line is stopped on a person rather than wedged on a machine.
-        state.run.status = "waiting_input"
-        await self._persist(state)
         await state.channel.emit(
             RunStatusEvent(
                 run_id=state.run.id, status="waiting_input", detail=prompt or None
@@ -2546,11 +2547,11 @@ class Orchestrator:
             node_id=node.id, questions=questions, future=future
         )
 
+        # Before the node, for the reason the gate gives (`_run_human`).
+        state.run.status = "waiting_input"
         await self._set_node(
             state, node.id, "waiting_input", questions[0].question[:120]
         )
-        state.run.status = "waiting_input"
-        await self._persist(state)
         await state.channel.emit(
             RunStatusEvent(
                 run_id=state.run.id,
