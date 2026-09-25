@@ -172,7 +172,7 @@ export const api = {
       joining the canvas's explicit-save policy. */
   updateProject: (
     id: string,
-    body: Partial<Pick<Project, "name" | "codebase_ids" | "settings">>,
+    body: Partial<Pick<Project, "name" | "codebase_ids" | "settings" | "icon">>,
   ) =>
     request<Project>(`/api/projects/${id}`, {
       method: "PATCH",

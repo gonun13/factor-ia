@@ -77,6 +77,7 @@ import {
   MemoryGlyph,
   MergeGlyph,
   OutputGlyph,
+  PROJECT_ICON_GLYPHS,
   PrdGlyph,
   PushGlyph,
   ReviewerGlyph,
@@ -671,7 +672,11 @@ function CanvasInner({ projectId, onBack }: { projectId: string; onBack: () => v
           ← Projects
         </button>
         <span className="brand">
-          <span className="dot" />
+          {project && (
+            <span className="project-icon" data-icon={project.icon} aria-hidden>
+              {PROJECT_ICON_GLYPHS[project.icon]()}
+            </span>
+          )}
           {project?.name ?? projectId}
           <small>· {factory?.name ?? "main"} factory</small>
         </span>

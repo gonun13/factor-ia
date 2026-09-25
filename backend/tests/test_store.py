@@ -258,6 +258,30 @@ def test_a_registry_written_before_settings_existed_still_loads(
     assert project.settings.default_effort == "high"
 
 
+def test_a_registry_written_before_icons_existed_loads_as_code(
+    test_store: Store, data_dir: Path
+) -> None:
+    """`Project.icon` came later too; a file without it wears the default."""
+    (data_dir / "projects.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "projects": [
+                    {
+                        "id": "demo",
+                        "name": "Demo",
+                        "codebase_ids": [],
+                        "settings": {},
+                        "created_at": "2026-01-01T00:00:00Z",
+                        "updated_at": "2026-01-01T00:00:00Z",
+                    }
+                ],
+            }
+        )
+    )
+    assert test_store.get_project("demo").icon == "code"
+
+
 def test_project_settings_round_trip_through_update(test_store: Store) -> None:
     test_store.create_project(Project(id="demo", name="Demo"))
     project = test_store.get_project("demo")

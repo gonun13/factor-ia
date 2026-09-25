@@ -130,7 +130,8 @@ direction when asked to build it.
 
 ### Built
 
-- **Projects.** A project list, create/rename/delete. Codebases are *discovered*
+- **Projects.** A project list, create/rename/delete, and a preset icon per
+  project, picked in the project settings panel. Codebases are *discovered*
   by scanning `/workspace` for git repos, never typed in as host paths.
 - **One project, one main factory, one attached codebase.** The data model
   allows many of each; the UI attaches one.

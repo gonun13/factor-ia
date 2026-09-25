@@ -55,7 +55,8 @@ Project ──< Codebase          (v1 attaches exactly one; the model allows man
 ```
 
 **Project** — a named workspace. Owns codebases and factories, and carries the
-project-wide provider and model defaults an agent node inherits.
+project-wide provider and model defaults an agent node inherits, and an icon
+from a fixed set of ten presets.
 
 **Codebase** — a directory under `/workspace` that is a git repo. Both the
 agent's *knowledge base* and its *operating target*. **Discovered, never

@@ -180,6 +180,25 @@ try {
   await page.waitForSelector(".slideover", { state: "detached" });
   check("a click on the scrim closes it", await page.locator(".slideover").count(), 0);
 
+  // ---- the project's icon -------------------------------------------------
+  // Identity rather than an execution default, but saved by the same button to
+  // the same machine-local registry — so the topbar must follow it and the
+  // canvas's pill must not.
+  check("the topbar wears the default icon", await page.locator(".brand .project-icon").getAttribute("data-icon"), "code");
+  await cog.click();
+  await page.waitForSelector(".slideover");
+  const icons = page.locator(".icon-picker .icon-option");
+  check("the panel offers ten icons", await icons.count(), 10);
+  check("…with code pressed on a new project", await page.locator('.icon-option[aria-pressed="true"]').getAttribute("data-icon"), "code");
+  check("save is disabled before an icon is picked", await saveSettings.isDisabled(), true);
+  await page.getByRole("button", { name: "Rocket", exact: true }).click();
+  check("picking another icon enables save", await saveSettings.isDisabled(), false);
+  await saveSettings.click();
+  await page.waitForSelector(".slideover", { state: "detached" });
+  check("the topbar follows the save without a reload", await page.locator(".brand .project-icon").getAttribute("data-icon"), "rocket");
+  check("the icon persisted", (await api(`/api/projects/${PROJECT}`).then((r) => r.json())).icon, "rocket");
+  check("…and leaves the canvas's dirty pill exactly as it was", await page.locator(".savebar .pill").innerText(), pillBefore);
+
   // ---- the per-node override ----------------------------------------------
   const override = (await select.locator("option").all()).at(-1);
   const value = await override.getAttribute("value");

@@ -471,11 +471,53 @@ export type ProjectSettings = {
   default_effort: EffortLevel | null;
 };
 
+/** The preset icons a project can wear — `models.ProjectIcon`. A new project
+ * starts on `code`; only the settings panel changes it. */
+export type ProjectIcon =
+  | "code"
+  | "terminal"
+  | "bug"
+  | "rocket"
+  | "package"
+  | "globe"
+  | "cloud"
+  | "puzzle"
+  | "flask"
+  | "bolt";
+
+export const PROJECT_ICONS: ProjectIcon[] = [
+  "code",
+  "terminal",
+  "bug",
+  "rocket",
+  "package",
+  "globe",
+  "cloud",
+  "puzzle",
+  "flask",
+  "bolt",
+];
+
+/** A name each, for the picker's buttons — which carry no visible text. */
+export const PROJECT_ICON_LABEL: Record<ProjectIcon, string> = {
+  code: "Code",
+  terminal: "Terminal",
+  bug: "Bug",
+  rocket: "Rocket",
+  package: "Package",
+  globe: "Globe",
+  cloud: "Cloud",
+  puzzle: "Puzzle",
+  flask: "Flask",
+  bolt: "Bolt",
+};
+
 export type Project = {
   id: string;
   name: string;
   codebase_ids: string[];
   settings: ProjectSettings;
+  icon: ProjectIcon;
   created_at: string;
   updated_at: string;
 };

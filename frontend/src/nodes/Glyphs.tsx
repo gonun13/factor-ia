@@ -1,5 +1,8 @@
 /** Inline SVG so there is no icon dependency and every glyph inherits colour. */
 
+import type { ReactNode } from "react";
+import type { ProjectIcon } from "../types";
+
 const stroke = {
   fill: "none",
   stroke: "currentColor",
@@ -251,3 +254,135 @@ export function TrashGlyph() {
     </svg>
   );
 }
+
+// ---- project icons ---------------------------------------------------------
+// A project's own mark, not a kind of node: these never sit on the canvas, so
+// they are free to be ordinary software pictures rather than parts of the line.
+
+/** Code: angle brackets around a slash. */
+export function CodeGlyph() {
+  return (
+    <svg viewBox="0 0 16 16" aria-hidden>
+      <path d="M5.2 4.5 1.8 8l3.4 3.5M10.8 4.5 14.2 8l-3.4 3.5" {...stroke} />
+      <path d="M9.2 3 6.8 13" {...stroke} />
+    </svg>
+  );
+}
+
+/** Terminal: a window with a prompt and a cursor.
+ *
+ * Deliberately landscape and square-cornered with no turned-down corner — the
+ * skill, log and PRD glyphs are all pages, and this is a screen, not a page. */
+export function TerminalGlyph() {
+  return (
+    <svg viewBox="0 0 16 16" aria-hidden>
+      <rect x="1.6" y="2.6" width="12.8" height="10.8" rx="1.6" {...stroke} />
+      <path d="m4.4 6.2 2.2 1.9-2.2 1.9" {...stroke} />
+      <path d="M8.4 10.4h3.2" {...stroke} />
+    </svg>
+  );
+}
+
+/** Bug: a beetle — body, head, antennae and three pairs of legs. */
+export function BugGlyph() {
+  return (
+    <svg viewBox="0 0 16 16" aria-hidden>
+      <ellipse cx="8" cy="9.6" rx="3.2" ry="4" {...stroke} />
+      <path d="M6.2 5.9a1.8 1.8 0 0 1 3.6 0" {...stroke} />
+      <path d="M6.8 4.3 5.6 2.6M9.2 4.3l1.2-1.7" {...stroke} />
+      <path d="M4.8 9H2.2M11.2 9h2.6M5 6.8 3.2 5.6M11 6.8l1.8-1.2M5.1 11.7l-1.9 1.4M10.9 11.7l1.9 1.4" {...stroke} />
+      <path d="M8 7.6v6" {...stroke} />
+    </svg>
+  );
+}
+
+/** Rocket: a nose cone with fins, a porthole and a flame. */
+export function RocketGlyph() {
+  return (
+    <svg viewBox="0 0 16 16" aria-hidden>
+      <path d="M8 1.5c2.1 1.6 3.1 4 3.1 6.8v3.3H4.9V8.3c0-2.8 1-5.2 3.1-6.8Z" {...stroke} />
+      <path d="M4.9 9.2 3 11.2v2.3l1.9-1.6M11.1 9.2l1.9 2v2.3l-1.9-1.6" {...stroke} />
+      <circle cx="8" cy="6.4" r="1.2" {...stroke} />
+      <path d="m7 13.6 1 1.4 1-1.4" {...stroke} />
+    </svg>
+  );
+}
+
+/** Package: a box seen from the corner.
+ *
+ * Deliberately flat faces and hard edges, where `CodebaseGlyph` is a rounded
+ * cylinder — that one is a store you keep, this one is a thing you ship. */
+export function PackageGlyph() {
+  return (
+    <svg viewBox="0 0 16 16" aria-hidden>
+      <path d="M8 1.8 13.5 4.8v6.4L8 14.2l-5.5-3V4.8Z" {...stroke} />
+      <path d="M2.5 4.8 8 7.8l5.5-3M8 7.8v6.4" {...stroke} />
+      <path d="m5.2 3.3 5.5 3" {...stroke} />
+    </svg>
+  );
+}
+
+/** Globe: meridian and parallels. Unlike `DiscardGlyph`'s circle, nothing
+ *  crosses it out. */
+export function GlobeGlyph() {
+  return (
+    <svg viewBox="0 0 16 16" aria-hidden>
+      <circle cx="8" cy="8" r="6" {...stroke} />
+      <ellipse cx="8" cy="8" rx="2.6" ry="6" {...stroke} />
+      <path d="M2 8h12M3 5h10M3 11h10" {...stroke} />
+    </svg>
+  );
+}
+
+/** Cloud: three bulges on a flat base. */
+export function CloudGlyph() {
+  return (
+    <svg viewBox="0 0 16 16" aria-hidden>
+      <path d="M4.6 12.5a3 3 0 0 1-.3-6 4 4 0 0 1 7.6 1 2.5 2.5 0 0 1-.1 5Z" {...stroke} />
+    </svg>
+  );
+}
+
+/** Puzzle: one piece, with a knob on the top and the right. */
+export function PuzzleGlyph() {
+  return (
+    <svg viewBox="0 0 16 16" aria-hidden>
+      <path d="M2.5 5.5h3.3a1.7 1.7 0 1 1 3.4 0h3.3v3.3a1.7 1.7 0 1 1 0 3.4V14h-10Z" {...stroke} />
+    </svg>
+  );
+}
+
+/** Flask: a conical beaker with a line of liquid in it. */
+export function FlaskGlyph() {
+  return (
+    <svg viewBox="0 0 16 16" aria-hidden>
+      <path d="M5.8 1.8h4.4" {...stroke} />
+      <path d="M6.8 1.8v4.4L3 12.6a1.1 1.1 0 0 0 1 1.6h8a1.1 1.1 0 0 0 1-1.6L9.2 6.2V1.8" {...stroke} />
+      <path d="M4.6 10h6.8" {...stroke} />
+    </svg>
+  );
+}
+
+/** Bolt: a lightning strike. */
+export function BoltGlyph() {
+  return (
+    <svg viewBox="0 0 16 16" aria-hidden>
+      <path d="M9 1.5 3.5 9h4l-1 5.5L12.5 7h-4Z" {...stroke} />
+    </svg>
+  );
+}
+
+/** The one map from a project's icon to its drawing — card, topbar and picker
+ *  all read it, so a preset cannot look different in two places. */
+export const PROJECT_ICON_GLYPHS: Record<ProjectIcon, () => ReactNode> = {
+  code: CodeGlyph,
+  terminal: TerminalGlyph,
+  bug: BugGlyph,
+  rocket: RocketGlyph,
+  package: PackageGlyph,
+  globe: GlobeGlyph,
+  cloud: CloudGlyph,
+  puzzle: PuzzleGlyph,
+  flask: FlaskGlyph,
+  bolt: BoltGlyph,
+};

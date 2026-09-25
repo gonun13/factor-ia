@@ -787,6 +787,12 @@ class FactorySummary(Base):
 #: The levels the Claude CLI's handshake reports in `supportedEffortLevels`.
 EffortLevel = Literal["low", "medium", "high", "xhigh", "max"]
 
+#: The preset icons a project can wear — a closed set, drawn by the client.
+ProjectIcon = Literal[
+    "code", "terminal", "bug", "rocket", "package",
+    "globe", "cloud", "puzzle", "flask", "bolt",
+]
+
 
 class ProjectSettings(Base):
     """Project-wide defaults an agent node inherits unless it overrides them.
@@ -841,6 +847,7 @@ class Project(Base):
     # file written before this field existed loads with the default and needs
     # no migration and no `schema_version` bump.
     settings: ProjectSettings = Field(default_factory=ProjectSettings)
+    icon: ProjectIcon = "code"
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)
 
@@ -870,6 +877,8 @@ class ProjectUpdate(Base):
     #: "clear this one" without inventing a sentinel. Omitting the key leaves
     #: the project's settings exactly as they were.
     settings: ProjectSettings | None = None
+    #: Omitting the key keeps the project's current icon.
+    icon: ProjectIcon | None = None
 
 
 class FactoryCreate(Base):
