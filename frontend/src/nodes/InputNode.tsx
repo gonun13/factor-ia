@@ -23,9 +23,8 @@ export function InputNode({ id, data }: NodeProps<FlowNode>) {
       note={
         kind === "prd" ? (
           <p>
-            A <code>PRD.md</code> handed over when the run starts. The document
-            goes down the belt whole — the agent reads requirements, not a
-            summary of them.
+            A <code>PRD.md</code> handed over when the run starts, and sent
+            down the belt whole.
           </p>
         ) : (
           <p>

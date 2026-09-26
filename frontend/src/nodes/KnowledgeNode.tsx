@@ -94,10 +94,9 @@ export function KnowledgeNode({ id, data }: NodeProps<FlowNode>) {
               word, not this node's, so nobody can set it from here. */}
           {baseType && <p className="type-note">{KNOWLEDGE_TYPE_NOTE[baseType]}</p>}
           <p>
-            Wire this <em>out</em> to every machine that may consult it, and
-            wire a machine <em>in</em> to let it contribute — the direction is
-            the permission. This is not on the line: it never holds the run up
-            and never stops it. Nothing here is discarded when the run ends.
+            Wire this <em>out</em> to every machine that may consult it, and a
+            machine <em>in</em> to let it contribute. Never holds the run up;
+            nothing here is discarded when the run ends.
           </p>
         </>
       }

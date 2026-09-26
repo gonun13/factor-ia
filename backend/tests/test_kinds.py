@@ -580,14 +580,14 @@ def test_a_factory_starts_with_an_input_and_ends_with_an_output(repo: Path) -> N
                output=node("n-out", "output", "Commit"))
     fed.nodes.append(node("n-req2", "input", "Second request"))
     fed.edges += [belt("n-req2", "n-agent"), belt("n-agent", "n-req2")]
-    assert any("starts with its inputs" in problem for problem in _problems(fed, repo))
+    assert any("is an input, so nothing may feed it" in problem for problem in _problems(fed, repo))
 
     # …and an output may not feed anything.
     feeding = line(inputs=[node("n-req", "input", "Request")],
                    output=node("n-out", "output", "Commit"))
     feeding.nodes.append(node("n-out2", "output", "Second commit"))
     feeding.edges += [belt("n-agent", "n-out2"), belt("n-out2", "n-agent")]
-    assert any("ends with its outputs" in problem for problem in _problems(feeding, repo))
+    assert any("is an output, so it may not feed anything" in problem for problem in _problems(feeding, repo))
 
 
 def test_a_factory_needs_at_least_one_input_and_one_output(repo: Path) -> None:

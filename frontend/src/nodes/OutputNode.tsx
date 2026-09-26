@@ -41,8 +41,7 @@ export function OutputNode({ id, data }: NodeProps<FlowNode>) {
         kind === "discard" ? (
           <p>
             Ends the line and keeps nothing: no commit, and the run&rsquo;s
-            worktrees go when it finishes. For factories that only build
-            knowledge, and for trying a line out.
+            worktrees go when it finishes.
           </p>
         ) : (
           <p>
@@ -72,12 +71,11 @@ export function OutputNode({ id, data }: NodeProps<FlowNode>) {
           {kind === "commit-merge" ? (
             <span className="warn reach-note">
               Fast-forwards the base branch on <code>{remote}</code>. Refused if
-              it has moved — nothing is ever forced.
+              it has moved.
             </span>
           ) : (
             <span className="reach-note">
-              Pushes the run&rsquo;s branch to <code>{remote}</code>. Nothing
-              you depend on moves.
+              Pushes the run&rsquo;s branch to <code>{remote}</code>.
             </span>
           )}
         </div>

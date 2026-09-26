@@ -136,17 +136,11 @@ def run_problems(
         by_type.setdefault(node.definition.type, []).append(node)
 
     if not by_type.get("input"):
-        problems.append(
-            "No input node — a factory starts with one, and a run has nothing "
-            "to submit without it."
-        )
+        problems.append("No input node — add one.")
     if not by_type.get("agent"):
-        problems.append("No agent node — nothing would do any work.")
+        problems.append("No agent node — add one.")
     if not by_type.get("output"):
-        problems.append(
-            "No output node — a factory ends with one, and the run would "
-            "produce nothing without it."
-        )
+        problems.append("No output node — add one.")
     problems += _kind_problems(nodes, label)
     problems += _outcome_problems(nodes, edges, label)
     problems += _duplicate_belt_problems(nodes, edges, label)
@@ -163,7 +157,7 @@ def run_problems(
         elif not attached:
             problems.append(
                 f"Agent “{label(node)}” has no codebase attached — "
-                "an agent cannot run without one."
+                "attach one."
             )
         elif attached not in known:
             problems.append(
@@ -177,9 +171,8 @@ def run_problems(
         if wanted:
             if skills.is_system(wanted):
                 problems.append(
-                    f"Agent “{label(node)}”: {wanted!r} is a system skill, "
-                    "built into a node type — it cannot be worn by a node. "
-                    "Choose another, or clear the plate."
+                    f"Agent “{label(node)}”: {wanted!r} is a system skill — "
+                    "choose another, or clear the plate."
                 )
                 continue
             try:
@@ -208,15 +201,13 @@ def run_problems(
         wanted = str(node.definition.config.get("skill") or "").strip()
         if not wanted:
             problems.append(
-                f"Scope “{label(node)}” has no skill attached — "
-                "a scope node needs one to know what to ask about."
+                f"Scope “{label(node)}” has no skill attached — attach one."
             )
             continue
         if skills.is_system(wanted):
             problems.append(
-                f"Scope “{label(node)}”: {wanted!r} is a system skill, "
-                "built into a node type — it cannot be worn by a node. "
-                "Choose another, or clear the plate."
+                f"Scope “{label(node)}”: {wanted!r} is a system skill — "
+                "choose another, or clear the plate."
             )
             continue
         try:
@@ -269,13 +260,11 @@ def run_problems(
 
         if kind == "input" and node.id in incoming:
             problems.append(
-                f"“{label(node)}” is an input, so nothing may feed it — a factory "
-                "starts with its inputs."
+                f"“{label(node)}” is an input, so nothing may feed it."
             )
         elif kind == "output" and node.id in outgoing:
             problems.append(
-                f"“{label(node)}” is an output, so it may not feed anything — a "
-                "factory ends with its outputs."
+                f"“{label(node)}” is an output, so it may not feed anything."
             )
         elif kind not in ("input", "output"):
             if node.id not in incoming:
@@ -378,9 +367,8 @@ def _outcome_problems(
             if source.definition.type == "agent":
                 problems.append(
                     f"“{label(source)}” is a Worker, which has one way out — its "
-                    f"belt cannot leave by {outcome!r}. A machine that judges what it is "
-                    "given is a Reviewer: drop one from the palette in its place, or "
-                    "remove the belt."
+                    f"belt cannot leave by {outcome!r}. Use a Reviewer in its place, "
+                    "or remove the belt."
                 )
             else:
                 problems.append(
@@ -444,32 +432,27 @@ def _wire_problems(
         if source.definition.type == "memory" and target.definition.type == "memory":
             problems.append(
                 f"“{label(source)}” is wired to “{label(target)}” and both are "
-                "memories — a memory is written by a machine and read by one, so "
-                "there is nothing at either end of this to do it."
+                "memories — wire each to an agent instead."
             )
             continue
         if target.definition.type == "memory":
             if source.definition.type != "agent":
                 problems.append(
                     f"“{label(target)}” is written to by “{label(source)}”, which "
-                    f"is a {source.definition.type} node — what shapes a memory is "
-                    "the contract given to the machine writing it, so only an "
-                    "agent may write one."
+                    f"is a {source.definition.type} node — only an agent may write one."
                 )
             else:
                 writers[target.id].append(source)
             if edge_outcome(wire) != DEFAULT_EDGE_OUTCOME:
                 problems.append(
                     f"the wire from “{label(source)}” to “{label(target)}” leaves "
-                    "by an outcome port — a memory is filed whatever the machine's "
-                    "outcome, so a wire carries no outcome."
+                    "by an outcome port — a wire carries no outcome."
                 )
         elif source.definition.type == "memory":
             if target.definition.type != "agent":
                 problems.append(
                     f"“{label(source)}” is read by “{label(target)}”, which is a "
-                    f"{target.definition.type} node — a memory hands out a "
-                    "reference for a machine to read, so only an agent may read one."
+                    f"{target.definition.type} node — only an agent may read one."
                 )
             else:
                 readers[source.id].append(target)
@@ -495,9 +478,7 @@ def _wire_problems(
                 names = ", ".join(f"“{label(w)}”" for w in writers[node.id])
                 problems.append(
                     f"“{label(reader)}” reads “{label(node)}”, but {names} is not "
-                    "above it on the line — the memory would still be empty when "
-                    "it got there. A wire says where work is filed; the belts "
-                    "decide what has happened yet."
+                    "above it on the line — move the writer above it."
                 )
 
     # A memory nothing reads is wiring that costs a write and saves nothing.
@@ -510,8 +491,7 @@ def _wire_problems(
         if not readers[node.id]:
             problems.append(
                 f"nothing reads “{label(node)}” — wire it to the machine that "
-                "should use it, or delete it. A memory nobody was told about "
-                "saves no work."
+                "should use it, or delete it."
             )
 
     # Two memories on one name would write to one file and overwrite each other
@@ -523,8 +503,7 @@ def _wire_problems(
         if len(sharing) > 1:
             names = ", ".join(f"“{label(node)}”" for node in sharing)
             problems.append(
-                f"{names} all come out as “{slug}”, so they would write to one "
-                "file and overwrite each other. Rename one."
+                f"{names} all come out as “{slug}” — rename one."
             )
         if not is_safe_name(slug):
             problems.append(
@@ -583,9 +562,8 @@ def _knowledge_problems(
         chosen = node_base(node)
         if not chosen:
             problems.append(
-                f"“{label(node)}” has no knowledge base selected — a knowledge "
-                "node is a reference to a base that already exists, so an empty "
-                "one points at nothing. Choose a base, or delete the node."
+                f"“{label(node)}” has no knowledge base selected "
+                "— choose a base, or delete the node."
             )
             continue
         if chosen not in library:
@@ -609,9 +587,8 @@ def _knowledge_problems(
         if len(sharing) > 1:
             names = ", ".join(f"“{label(node)}”" for node in sharing)
             problems.append(
-                f"{names} all select the knowledge base {base_id!r}. One base is "
-                "one shelf with one lock and one index — put every wire on a "
-                "single node, and delete the rest."
+                f"{names} all select the knowledge base {base_id!r} — put every "
+                "wire on a single node, and delete the rest."
             )
 
     reached: set[str] = set()
@@ -630,8 +607,7 @@ def _knowledge_problems(
         if source_kind in ATTACHED_TYPES and target_kind in ATTACHED_TYPES:
             problems.append(
                 f"“{label(source)}” is wired to “{label(target)}” and both are "
-                "storage — a knowledge base is read and written by a machine, so "
-                "there is nothing at either end of this to do it."
+                "storage — wire each to an agent instead."
             )
             continue
 
@@ -645,8 +621,7 @@ def _knowledge_problems(
             if source_kind != "agent":
                 problems.append(
                     f"“{label(target)}” is written to by “{label(source)}”, which "
-                    f"is a {source_kind} node — a base is contributed to by a "
-                    "machine, so only an agent may write to one."
+                    f"is a {source_kind} node — only an agent may write to one."
                 )
                 continue
             if edge_outcome(wire) != DEFAULT_EDGE_OUTCOME:
@@ -655,8 +630,7 @@ def _knowledge_problems(
                 # run where the work happened and the contribution should not.
                 problems.append(
                     f"the wire from “{label(source)}” to “{label(target)}” leaves "
-                    "by an outcome port — a base is contributed to whatever the "
-                    "machine's outcome, so a wire carries no outcome."
+                    "by an outcome port — a wire carries no outcome."
                 )
             reached.add(target.id)
             chosen = selected.get(target.id)
@@ -670,10 +644,8 @@ def _knowledge_problems(
                 # four, the server is the authoritative one.
                 problems.append(
                     f"“{label(source)}” is wired to write to “{label(target)}”, "
-                    f"which is a {library[chosen].type} base. Principles are what "
-                    "the machines are measured against, so nothing may edit them "
-                    "from inside a run — a machine that can edit the standard it "
-                    "is judged by is a machine that can pass its own review."
+                    f"which is a {library[chosen].type} base. Principles are "
+                    "read-only — remove the wire."
                 )
             continue
 
@@ -681,8 +653,7 @@ def _knowledge_problems(
         if target_kind != "agent":
             problems.append(
                 f"“{label(source)}” is read by “{label(target)}”, which is a "
-                f"{target_kind} node — a base hands out what it holds for a "
-                "machine to read, so only an agent may read one."
+                f"{target_kind} node — only an agent may read one."
             )
             continue
         reached.add(source.id)
@@ -697,8 +668,7 @@ def _knowledge_problems(
         if node.id not in reached:
             problems.append(
                 f"nothing is wired to “{label(node)}” — wire it to the machines "
-                "that may consult it, or delete it. A base nobody was given is a "
-                "base nobody can read."
+                "that may consult it, or delete it."
             )
 
     return problems
@@ -923,8 +893,8 @@ def _git_problems(
             continue
         if state.unborn:
             problems.append(
-                f"“{codebase.name}” has no commits yet — a run branches from its "
-                "base branch, so there has to be one."
+                f"“{codebase.name}” has no commits yet — make a first "
+                "commit."
             )
             continue
         if state.dirty:
@@ -937,8 +907,7 @@ def _git_problems(
             problems.append(
                 f"“{codebase.name}” has {state.change_count} uncommitted "
                 f"change{'s' if state.change_count != 1 else ''} ({listed}{more}). "
-                "Commit or stash them — a run branches from the base branch and "
-                "must not be mixed up with work in progress."
+                "Commit or stash them."
             )
     if seen:
         # One identity for the whole run; checked once, and only when something

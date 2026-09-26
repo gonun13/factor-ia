@@ -353,7 +353,7 @@ def test_run_preconditions_are_stricter_than_save_time_validation(workspace: Pat
     assert validate_graph(nodes, edges) == []
     # Running it is not.
     unsaveable = Factory(id="main", project_id="demo", name="main", nodes=nodes, edges=edges)
-    assert any("cannot run without one" in p for p in run_problems(unsaveable, []))
+    assert any("no codebase attached" in p for p in run_problems(unsaveable, []))
 
 
 def test_a_cycle_is_refused_because_the_walk_is_one_pass(workspace: Path) -> None:

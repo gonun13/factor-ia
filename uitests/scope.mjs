@@ -121,7 +121,7 @@ try {
   // ---- a scope node with no skill is refused before the run ---------------
   await page.locator('.node.type-human select[aria-label="skill"]').selectOption("");
   await page.waitForSelector(".node.type-human .warn");
-  check("clearing the skill says why it matters, on the node", await page.locator(".node.type-human .warn").innerText(), "A scope node needs one to know what to ask about.");
+  check("clearing the skill says why it matters, on the node", await page.locator(".node.type-human .warn").innerText(), "Required — attach one.");
   const blocker = page.locator(".problems li", { hasText: "no skill attached" });
   check("…and blocks the run, in the sentence the server refuses it with", await blocker.count(), 1);
   await page.locator('.node.type-human select[aria-label="skill"]').selectOption(SKILL);

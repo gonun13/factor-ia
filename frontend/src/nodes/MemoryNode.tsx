@@ -65,9 +65,8 @@ export function MemoryNode({ id, data }: NodeProps<FlowNode>) {
       report={filed !== null}
       note={
         <p>
-          Wire a machine in to file its answer here, and a machine below it on
-          the line out, to be told to <em>read</em> it. This is not on the line:
-          it never holds the run up and never stops it. Discarded when the run
+          Wire a machine in to file its answer here, and a machine below it out
+          to <em>read</em> it. Never holds the run up; discarded when the run
           ends.
         </p>
       }

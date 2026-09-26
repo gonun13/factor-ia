@@ -8,19 +8,19 @@ import { useHoverNote } from "./NodeNote";
 const NOTES: Record<"entry" | "exit", Record<ConnectorKind, string>> = {
   entry: {
     store:
-      "Memory in — whatever storage the project wires into this factory. Wire it to the agents that should read it.",
+      "Memory in — storage the project wires in. Wire it to the agents that should read it.",
     forward:
-      "Input in — the work the project hands this factory. Draw a belt from here to the first machine.",
+      "Input in — the project’s work. Draw a belt from here to the first machine.",
     loop:
-      "Loopback in — work a judge outside the factory sent back. Draw a belt from here to the machine that should do it again.",
+      "Loopback in — work sent back from outside. Draw a belt from here to the machine that should redo it.",
   },
   exit: {
     store:
-      "Memory out — whatever the agents wired here file is kept in the storage the project wires out of this factory.",
+      "Memory out — what the agents wired here file goes to the storage the project wires out.",
     forward:
-      "Input out — what the factory finished with. The project picks it up from the factory node's input exit.",
+      "Input out — the finished work, handed on by the factory node’s input exit.",
     loop:
-      "Loopback out — work a reviewer inside the factory sent back. Only a reviewer's fail belt may feed it.",
+      "Loopback out — work a reviewer inside sent back. Only a reviewer’s fail belt may feed it.",
   },
 };
 

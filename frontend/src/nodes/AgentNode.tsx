@@ -112,15 +112,14 @@ export function AgentNode({ id, data }: NodeProps<FlowNode>) {
         kind === "reviewer" ? (
           <p>
             Reads what came down the belt and judges it. It leaves by{" "}
-            <em>success</em> or by <em>fail</em>, and a fail belt drawn back up
-            the line sends the work round again — capped, so a disagreement
-            cannot run forever.
+            <em>success</em> or by <em>fail</em>; a fail belt drawn back up the
+            line sends the work round again, a capped number of times.
           </p>
         ) : (
           <p>
             {mode === "factory"
-              ? "Does the work, in the codebase its factory node names. One way out: whatever it produces goes on down the line."
-              : "Does the work, in its own worktree on the attached codebase. One way out: whatever it produces goes on down the line."}
+              ? "Does the work, in the codebase its factory node names. One way out."
+              : "Does the work, in its own worktree on the attached codebase. One way out."}
           </p>
         )
       }
@@ -238,7 +237,7 @@ export function AgentNode({ id, data }: NodeProps<FlowNode>) {
         {staleSkill && (
           <span className="warn">
             {chosenSkill?.system
-              ? "Built into the knowledge node — a node cannot wear it."
+              ? "Built into the knowledge node — choose another."
               : "No longer in _skills/."}
           </span>
         )}
