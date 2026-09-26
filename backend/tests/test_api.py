@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
@@ -220,17 +221,12 @@ def test_missing_project_and_factory_are_404(client: TestClient) -> None:
     assert client.put("/api/projects/nope/factories/main", json=GRAPH).status_code == 404
 
 
-def test_project_delete_unregisters(client: TestClient) -> None:
-    client.post("/api/projects", json={"name": "Demo"})
-    assert client.delete("/api/projects/demo").status_code == 204
-    assert client.get("/api/projects").json() == []
-
-
 def test_project_delete_takes_the_main_factory_with_it(client: TestClient) -> None:
     client.post("/api/projects", json={"name": "Demo"})
     graph = {"nodes": [{"id": "n-in", "definition": {"type": "input", "label": "Request"}}], "edges": []}
     assert client.put("/api/projects/demo/factories/main", json=graph).status_code == 200
     assert client.delete("/api/projects/demo").status_code == 204
+    assert client.get("/api/projects").json() == []
     # Re-creating the project gets a fresh main factory, not the old graph.
     client.post("/api/projects", json={"name": "Demo"})
     assert client.get("/api/projects/demo/factories/main").json()["nodes"] == []
@@ -459,16 +455,29 @@ def test_a_link_to_the_app_from_another_site_still_opens_it(client: TestClient) 
     assert client.get("/", headers={"Sec-Fetch-Site": "cross-site"}).status_code != 403
 
 
-def test_every_mutating_verb_is_covered(client: TestClient) -> None:
+def test_every_mutating_route_refuses_a_foreign_origin(client: TestClient) -> None:
+    """The whole API surface, crawled — not the routes somebody remembered.
+
+    A route added tomorrow is in the crawl without anyone touching this test,
+    which is the only way the claim "no page on another site can change
+    anything" stays true."""
     client.post("/api/projects", json={"name": "Demo"})
     evil = {"Origin": "https://evil.example"}
-    assert client.put(
-        "/api/projects/demo/factories/main", json=GRAPH, headers=evil
-    ).status_code == 403
-    assert client.patch(
-        "/api/projects/demo", json={"name": "Owned"}, headers=evil
-    ).status_code == 403
-    assert client.delete("/api/projects/demo", headers=evil).status_code == 403
+    paths = client.get("/openapi.json").json()["paths"]
+
+    checked = 0
+    for path, operations in paths.items():
+        concrete = re.sub(r"\{[^}]+\}", "demo", path)
+        for method in operations:
+            if method.upper() not in {"POST", "PUT", "PATCH", "DELETE"}:
+                continue
+            response = client.request(method.upper(), concrete, json={}, headers=evil)
+            assert response.status_code == 403, f"{method.upper()} {path}"
+            assert "Cross-origin request refused" in response.json()["detail"]
+            checked += 1
+    assert checked > 20, "the crawl found too few routes to mean anything"
+    # And none of it landed.
+    assert [project["id"] for project in client.get("/api/projects").json()] == ["demo"]
 
 
 def test_configured_origin_is_allowed(

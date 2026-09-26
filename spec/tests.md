@@ -88,6 +88,10 @@ The rule that keeps this tree honest. Specific pairings that must not rot:
 - **No endpoint returns the private key.** `test_sshkeys.py` proves it by
   crawling **every route the app registers** with a real key on disk — not by
   checking the two routes somebody remembered.
+- **No foreign origin changes anything.** `test_api.py` crawls **every
+  mutating route the app registers** with a foreign `Origin` and asserts the
+  refusal's sentence on each — so a route added later is covered without
+  anyone remembering to add a per-route case.
 - **The refusals.** A run check that returns every reason at once is only
   useful if the reasons are right, so each precondition has a test that triggers
   exactly it.

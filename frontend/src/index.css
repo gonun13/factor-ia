@@ -1117,11 +1117,14 @@ button.skill-card.is-system:hover {
 /* ---- palette + panels --------------------------------------------------- */
 
 .panel {
-  background: rgb(19 25 34 / 0.92);
+  background: rgb(19 25 34 / 0.96);
   border: 1px solid var(--edge);
   border-radius: var(--radius);
   box-shadow: var(--shadow);
-  backdrop-filter: blur(6px);
+  /* No `backdrop-filter`, here or on any panel over the sheet. A blur has to
+     be recomputed every time what is under it changes, and under these is the
+     canvas mid-run — at this opacity it was costing the GPU for a difference
+     nobody could see. */
 }
 
 /* A horizontal bar: five category triggers in a row, each dropping its own
@@ -1603,7 +1606,6 @@ button.skill-card.is-system:hover {
   max-height: 50%;
   overflow-y: auto;
   background: color-mix(in srgb, var(--panel) 96%, transparent);
-  backdrop-filter: blur(8px);
   box-shadow: 0 10px 34px rgb(0 0 0 / 50%);
 }
 
@@ -1647,8 +1649,7 @@ button.skill-card.is-system:hover {
   padding: 0.3rem;
   border: 1px solid var(--edge);
   border-radius: 10px;
-  background: color-mix(in srgb, var(--panel) 92%, transparent);
-  backdrop-filter: blur(6px);
+  background: color-mix(in srgb, var(--panel) 96%, transparent);
   box-shadow: 0 6px 24px rgb(0 0 0 / 45%);
 }
 
@@ -1819,7 +1820,6 @@ button.skill-card.is-system:hover {
   gap: 0.5rem;
   padding: 0.6rem;
   background: color-mix(in srgb, var(--panel) 96%, transparent);
-  backdrop-filter: blur(8px);
   box-shadow: 0 10px 34px rgb(0 0 0 / 50%);
 }
 
@@ -1909,8 +1909,7 @@ ul.plain {
   z-index: 40;
   display: grid;
   place-items: center;
-  background: rgb(4 7 11 / 62%);
-  backdrop-filter: blur(2px);
+  background: rgb(4 7 11 / 70%);
 }
 
 .node-log {

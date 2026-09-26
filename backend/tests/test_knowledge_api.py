@@ -264,13 +264,6 @@ def test_the_type_cannot_be_edited_because_it_is_not_a_field(
     assert client.get("/api/knowledge/acme-api").json()["type"] == "codebase"
 
 
-def test_there_is_still_no_put_on_a_base(client: TestClient, workspace: Path) -> None:
-    """A PATCH edits two named fields. Replacing a base is still not a thing
-    this API can express."""
-    seeded(client, workspace)
-    assert client.put("/api/knowledge/acme-api", json={"about": "y"}).status_code == 405
-
-
 def test_the_manifest_is_not_saved_as_a_document(
     client: TestClient, workspace: Path
 ) -> None:

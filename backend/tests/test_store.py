@@ -174,6 +174,9 @@ def test_delete_project_deletes_its_whole_directory(
     memory = workspace / "_factories" / "demo" / "memory"
     memory.mkdir()
     (memory / "notes.md").write_text("# notes\n", encoding="utf-8")
+    # Nothing another project uses lives here any more: a shared factory is a
+    # library factory (`decisions/0029`), and the library is the workspace's.
+    library = test_store.create_library_factory("review", "Review")
     test_store.delete_project("demo")
     assert test_store.list_projects() == []
     # The main factory and the project's memory are the project's own, so a
@@ -181,21 +184,6 @@ def test_delete_project_deletes_its_whole_directory(
     # nothing behind in an operator's workspace after a UI test, either.
     assert not (workspace / "_factories" / "demo").exists()
     assert (workspace / "_factories").is_dir()
-
-
-def test_delete_project_takes_its_whole_directory_and_leaves_the_library(
-    test_store: Store, workspace: Path
-) -> None:
-    """Nothing another project uses lives in a project's directory any more: a
-    shared factory is a library factory (`decisions/0029`), and the library is
-    the workspace's, not the project's."""
-    test_store.create_project(Project(id="demo", name="Demo"))
-    test_store.save_factory(three_node_graph())
-    stray = workspace / "_factories" / "demo" / "shared.json"
-    stray.write_text("{}\n", encoding="utf-8")
-    library = test_store.create_library_factory("review", "Review")
-    test_store.delete_project("demo")
-    assert not (workspace / "_factories" / "demo").exists()
     assert test_store.get_library_factory(library.id).name == "Review"
 
 

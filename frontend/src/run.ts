@@ -137,6 +137,12 @@ export type RunState = {
   busy: boolean;
 };
 
+/**
+ * How often queued envelopes are drawn, at most (`useRun`'s `pending`). Ten
+ * times a second reads as live text; one render per token only warms a laptop.
+ */
+const DRAW_INTERVAL_MS = 100;
+
 const EMPTY: RunState = {
   run: null,
   status: null,
@@ -596,43 +602,91 @@ export function useRun(scope: RunScope) {
     };
   }, []);
 
+  /**
+   * Events that have arrived and not yet been drawn.
+   *
+   * **A machine that is talking sends one envelope per token**, and a render
+   * per envelope re-reduces the run, re-maps every node on the canvas, redraws
+   * the timeline and rebuilds an open log window — dozens of times a second,
+   * for text nobody reads that fast. So envelopes queue here and are drawn in
+   * one go on a short timer. A timer and not `requestAnimationFrame`, because a
+   * background tab gets no frames and the queue would grow for as long as the
+   * operator is looking at something else.
+   */
+  const pending = useRef<RunEvent[]>([]);
+  const flushTimer = useRef<number | null>(null);
+  /** The newest `seq` drawn, so `resume` can pick the stream up after it.
+   * Drawn, not received: `disconnect` drops the queue, and what it dropped
+   * has to come round again. */
+  const lastSeq = useRef(0);
+
+  const flush = useCallback(() => {
+    if (flushTimer.current !== null) {
+      window.clearTimeout(flushTimer.current);
+      flushTimer.current = null;
+    }
+    const batch = pending.current;
+    if (batch.length === 0) return;
+    pending.current = [];
+    for (const event of batch) lastSeq.current = Math.max(lastSeq.current, event.seq);
+    setState((previous) => batch.reduce(reduceRunEvent, previous));
+    // After the reducer, never inside it: `setState`'s updater is called
+    // twice under StrictMode, and a tap that ran in there would append
+    // every event to an open log window twice. Every `setState` a tap makes
+    // here lands in the same render as the one above.
+    for (const event of batch) for (const tap of taps.current) tap(event);
+    // The server has nothing left to say once the newest status is terminal.
+    // Closing is what stops `EventSource` from reconnecting to a finished run
+    // forever. **Asked of the batch's last status, not of the first terminal
+    // one to arrive**: the catch-up replays a run from seq 1, and a run that
+    // was stopped and resumed has a `stopped` in the middle of its history —
+    // closing on that drops the rest of the replay and strands the page on a
+    // run that is still going.
+    let status: RunEvent | undefined;
+    for (const event of batch) if (event.type === "run.status") status = event;
+    if (status?.type === "run.status" && isTerminal(status.status)) {
+      source.current?.close();
+      source.current = null;
+    }
+  }, []);
+
+  // Drops what is queued rather than drawing it: every caller is about to
+  // reset the state (a new run, a re-attach) or unmount, and a late envelope
+  // from the stream being closed would be reduced onto the state replacing it.
   const disconnect = useCallback(() => {
     source.current?.close();
     source.current = null;
+    if (flushTimer.current !== null) window.clearTimeout(flushTimer.current);
+    flushTimer.current = null;
+    pending.current = [];
   }, []);
 
+  /** Stream `runId` from after `from` — 0, the whole log, unless the state
+   * already holds the start of it (`resume`). */
   const watch = useCallback(
-    (runId: string) => {
+    (runId: string, from = 0) => {
       disconnect();
-      const stream = new EventSource(`/api/runs/${runId}/events`);
+      lastSeq.current = from;
+      const stream = new EventSource(
+        from > 0 ? `/api/runs/${runId}/events?from=${from}` : `/api/runs/${runId}/events`,
+      );
       source.current = stream;
       const onEvent = (message_: MessageEvent<string>) => {
         const event = JSON.parse(message_.data) as RunEvent;
-        setState((previous) => {
-          const next = reduceRunEvent(previous, event);
-          if (event.type === "run.status" && isTerminal(event.status)) {
-            // The server has nothing left to say. Closing here is what stops
-            // `EventSource` from reconnecting to a finished run forever.
-            stream.close();
-            if (source.current === stream) source.current = null;
-          }
-          return next;
-        });
-        // After the reducer, never inside it: `setState`'s updater is called
-        // twice under StrictMode, and a tap that ran in there would append
-        // every event to an open log window twice.
-        for (const tap of taps.current) tap(event);
+        pending.current.push(event);
+        flushTimer.current ??= window.setTimeout(flush, DRAW_INTERVAL_MS);
       };
       for (const type of RUN_EVENT_TYPES) stream.addEventListener(type, onEvent as EventListener);
       stream.onerror = () => {
         // Not fatal: this is also what a reconnect looks like from here, and
         // the browser is already retrying with `Last-Event-ID`.
         if (stream.readyState === EventSource.CLOSED) {
+          flush();
           setState((previous) => ({ ...previous, error: "the event stream closed" }));
         }
       };
     },
-    [disconnect],
+    [disconnect, flush],
   );
 
   useEffect(() => disconnect, [disconnect]);
@@ -833,8 +887,10 @@ export function useRun(scope: RunScope) {
       const run = await api.resumeRun(runId);
       setState((previous) => ({ ...previous, run, status: run.status, busy: false }));
       // The same run id, so the same log: the stream reconnects and carries on
-      // appending rather than starting a second account of one run.
-      watch(run.id);
+      // appending rather than starting a second account of one run — from
+      // after the last event already on screen, so the first walk is not
+      // reduced onto itself a second time.
+      watch(run.id, lastSeq.current);
     } catch (cause) {
       // 409 is the ordinary answer here, and it is a sentence: the run was not
       // blocked, or the factory has changed under it, or something else is in

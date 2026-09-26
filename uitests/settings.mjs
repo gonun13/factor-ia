@@ -111,10 +111,10 @@ try {
     true,
   );
   const container = (await api("/api/agent/status").then((r) => r.json())).default_provider;
+  const PROVIDER_LABELS = { claude: "Claude", cursor: "Cursor", fake: "Fake (dry run)" };
   check("the inherit option names the container's real provider", await page.locator("#project-provider option").allInnerTexts(), [
-    `${container === "fake" ? "Fake (dry run)" : "Claude"} (default)`,
-    "Claude",
-    "Fake (dry run)",
+    `${PROVIDER_LABELS[container]} (default)`,
+    ...Object.values(PROVIDER_LABELS),
   ]);
   const cliDefault = (await api("/api/agent/status").then((r) => r.json())).handshake.default_model;
   check("the inherit option names the CLI's real default model", (await page.locator("#project-model option").first().innerText()).trim(), `${cliDefault} (default)`);
@@ -144,6 +144,15 @@ try {
 
   check("the node's inherit option now names the project's model", (await inherited()).trim(), `${chosenLabel} (default)`);
   check("project settings leave the canvas's dirty pill exactly as it was", await page.locator(".savebar .pill").innerText(), pillBefore);
+
+  // ---- the per-node override ----------------------------------------------
+  // Before the project moves to the fake below: that greys this select out,
+  // which is asserted there.
+  const override = (await select.locator("option").all()).at(-1);
+  const value = await override.getAttribute("value");
+  await select.selectOption(value);
+  check("an override wins over the default the option names", await select.inputValue(), value);
+  check("a node edit belongs to the factory, so the canvas goes dirty", await page.locator(".savebar .pill").innerText(), "unsaved changes");
 
   // ---- a provider that reports its own model id ---------------------------
   // The list is per provider (`/api/agent/status` → `providers`), so choosing
@@ -201,13 +210,6 @@ try {
   check("…on its own preset's tile colour", (await tileOf()) !== codeTile, true);
   check("the icon persisted", (await api(`/api/projects/${PROJECT}`).then((r) => r.json())).icon, "rocket");
   check("…and leaves the canvas's dirty pill exactly as it was", await page.locator(".savebar .pill").innerText(), pillBefore);
-
-  // ---- the per-node override ----------------------------------------------
-  const override = (await select.locator("option").all()).at(-1);
-  const value = await override.getAttribute("value");
-  await select.selectOption(value);
-  check("an override wins over the default the option names", await select.inputValue(), value);
-  check("a node edit belongs to the factory, so the canvas goes dirty", await page.locator(".savebar .pill").innerText(), "unsaved changes");
 } finally {
   await browser.close();
   // Cleaning up is part of the test, so it is checked like the rest: a run that

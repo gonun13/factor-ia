@@ -431,8 +431,14 @@
 }
 
 /* ---- belts --------------------------------------------------------------
-   Two strokes: a dark casing and a dashed tread that crawls along it. The
-   metaphor is the point — material moving down a line. */
+   Two strokes: a dark casing and a dashed tread along it. The metaphor is the
+   point — a conveyor, not a wire — and the dashes carry it standing still.
+
+   **The tread used to crawl, and does not any more.** An endless
+   `stroke-dashoffset` animation on every belt repainted the canvas every frame
+   whether or not anything was running, and every blurred panel over it had to
+   be re-blurred with it; that was most of what a run cost the GPU. Direction is
+   the arrowhead's job, and what is running is the pip's. */
 
 .belt-casing {
   stroke: var(--belt-casing);
@@ -446,7 +452,6 @@
   stroke-width: 3;
   stroke-dasharray: 5 9;
   fill: none;
-  animation: belt 900ms linear infinite;
 }
 
 .react-flow__edge.selected .belt-casing {
@@ -488,13 +493,10 @@
 }
 
 /* The return conveyor. A loop's belt runs the other way round the canvas, but
-   the tread on it still crawls *towards the target* — material moves from the
-   reviewer back to the machine it is being sent back to, which is the whole
-   point of the loop. No `animation-direction` here: `returnPath` in
-   `BeltEdge.tsx` is authored from source to target like any other belt, so the
-   shared `belt` keyframe already crawls the right way, the same way the
-   arrowhead points. Reversing it a second time sends the tread against the
-   arrow. */
+   it still points *towards the target* — material moves from the reviewer back
+   to the machine it is being sent back to, which is the whole point of the
+   loop. `returnPath` in `BeltEdge.tsx` is authored from source to target like
+   any other belt, so the arrowhead already says so. */
 .belt-back .belt-tread {
   stroke-dasharray: 5 9;
 }
@@ -504,14 +506,7 @@
   opacity: 0.85;
 }
 
-@keyframes belt {
-  to {
-    stroke-dashoffset: -14;
-  }
-}
-
 @media (prefers-reduced-motion: reduce) {
-  .belt-tread,
   .pip {
     animation: none;
   }

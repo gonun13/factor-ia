@@ -182,7 +182,12 @@ try {
 
   // System first, then everything by name — so the shipped four are a block
   // at the top and an import has a stable place to start.
-  const order = await page.locator(".skill-grid .skill-card .name").allInnerTexts();
+  // The knowledge library reuses `.skill-grid` and `.skill-card`, so its cards
+  // are excluded by their own class. The badge sits inside `.name`, so the name
+  // is its first text node, not the element's whole text.
+  const order = await page
+    .locator(".skill-grid .skill-card:not(.knowledge-card) .name")
+    .evaluateAll((els) => els.map((el) => el.firstChild.textContent.trim()));
   const shipped = ["commit-message", "knowledge-codebase", "knowledge-general", "knowledge-project"];
   check("the system skills sort to the top",
     shipped.every((name) => order.slice(0, shipped.length).includes(name)), true);

@@ -286,13 +286,6 @@ def test_a_run_reads_the_saved_file_not_the_canvas(runnable: TestClient) -> None
     assert [node["id"] for node in saved["nodes"]] == ["n-in", "n-agent", "n-out"]
 
 
-def test_runs_are_not_startable_cross_origin(runnable: TestClient) -> None:
-    refused = runnable.post(
-        "/api/projects/demo/factories/main/runs", headers={"origin": "https://evil.example"}
-    )
-    assert refused.status_code == 403
-
-
 def test_missing_run_is_404_everywhere(runnable: TestClient) -> None:
     assert runnable.get("/api/runs/run-nope").status_code == 404
     assert runnable.get("/api/runs/run-nope/events").status_code == 404
@@ -807,9 +800,12 @@ def test_a_succeeded_run_is_neither_resumable_nor_cancellable(
         "/api/projects/demo/factories/main/runs"
     ).json()
     runnable.post(f"/api/runs/{started['id']}/input", json={"text": "go"})
-    record = runnable.get(f"/api/runs/{started['id']}").json()
-    if record["status"] != "succeeded":  # pragma: no cover - guard, not the claim
-        pytest.skip(f"run ended {record['status']}")
+    for _ in range(100):
+        record = runnable.get(f"/api/runs/{started['id']}").json()
+        if record["status"] != "running":
+            break
+        time.sleep(0.05)
+    assert record["status"] == "succeeded"
     assert runnable.post(f"/api/runs/{record['id']}/resume").status_code == 409
     assert runnable.post(f"/api/runs/{record['id']}/cancel").status_code == 409
 
@@ -902,15 +898,6 @@ def test_housekeeping_discards_only_what_the_preview_offered(
     # The spared run is untouched, and still says it failed.
     assert client.get("/api/runs/run-keeper").json()["status"] == "failed"
     assert client.get("/api/runs/run-doomed").json()["status"] == "cancelled"
-
-
-def test_housekeeping_is_not_reachable_cross_origin(client: TestClient) -> None:
-    refused = client.post(
-        "/api/housekeeping",
-        json={"fingerprint": "whatever0000"},
-        headers={"origin": "https://evil.example"},
-    )
-    assert refused.status_code == 403
 
 
 def test_tidying_is_refused_while_a_run_is_in_flight(runnable: TestClient) -> None:

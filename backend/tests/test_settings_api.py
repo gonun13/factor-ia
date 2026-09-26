@@ -103,12 +103,6 @@ def test_the_sign_in_round_trip(stubbed, client: TestClient) -> None:
     assert client.get("/api/agent/status").json()["account"]["authenticated"] is True
 
 
-def test_sign_in_is_refused_cross_origin(stubbed, client: TestClient) -> None:
-    response = client.post("/api/agent/login", headers={"Origin": "https://evil.example"})
-    assert response.status_code == 403
-    assert login._flow is None
-
-
 def test_the_ssh_key_lifecycle(stubbed, client: TestClient) -> None:
     assert client.get("/api/ssh/key").json()["exists"] is False
     created = client.post("/api/ssh/key")

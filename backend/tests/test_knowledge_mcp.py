@@ -223,15 +223,6 @@ def test_a_write_lands_and_is_visible_to_the_next_read(workspace: Path) -> None:
     assert "v4 in September" in read["content"]
 
 
-def test_the_journal_records_a_successful_write(workspace: Path, tmp_path: Path) -> None:
-    journal = tmp_path / "journal.jsonl"
-    server = make_server(workspace, ("acme", "codebase", True), journal=journal)
-    server.call("knowledge_append", {"base": "acme", "path": "notes.md", "content": "x"})
-    entry = json.loads(journal.read_text(encoding="utf-8").splitlines()[0])
-    assert entry["ok"] is True and entry["tool"] == "knowledge_append"
-    assert entry["base"] == "acme" and entry["node_id"] == "n1"
-
-
 def test_the_journal_records_a_refused_write(workspace: Path, tmp_path: Path) -> None:
     """This is the line that fails the node. Without it a machine told to record
     a decision could report success while recording nothing."""
@@ -273,6 +264,8 @@ def test_a_write_is_journaled_as_a_write(workspace: Path, tmp_path: Path) -> Non
 
     entry = json.loads(journal.read_text(encoding="utf-8").splitlines()[0])
     assert entry["kind"] == "write" and entry["ok"] is True
+    assert entry["tool"] == "knowledge_append"
+    assert entry["base"] == "acme" and entry["node_id"] == "n1"
 
 
 # ---- the tool names the spawn has to agree with ----------------------------

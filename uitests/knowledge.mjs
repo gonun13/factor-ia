@@ -136,7 +136,9 @@ try {
   check("the shipped base is in the library", await page.locator(".knowledge-card.is-system").count() >= 1, true);
   check(
     "…and says so on the card",
-    (await shipped.locator(".skill-badge").innerText()).trim(),
+    // `textContent`, not `innerText`: CSS uppercases the badge, and innerText
+    // applies that only once the card has laid out.
+    (await shipped.locator(".skill-badge").textContent()).trim(),
     "system",
   );
   check(
@@ -501,12 +503,16 @@ try {
   await about.fill("Rewritten from the library.");
   check("…and an edit to the prose enables it", await saveButton.isDisabled(), false);
   await saveButton.click();
-  await page.waitForSelector(".knowledge-editor .skill-editor-foot button.primary:disabled");
+  // Waits on the card itself, not on Save going grey: Save is disabled for the
+  // whole of the request, so that read the card before the library refreshed.
   check(
     "saving the prose lands on the card behind the editor",
-    (await page.locator(`.knowledge-card:has-text("${TIMELINE}") .desc`).innerText()).includes(
-      "Rewritten from the library",
-    ),
+    await page
+      .locator(`.knowledge-card:has-text("${TIMELINE}") .desc`, {
+        hasText: "Rewritten from the library",
+      })
+      .waitFor({ timeout: 15_000 })
+      .then(() => true, () => false),
     true,
   );
 

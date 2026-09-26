@@ -171,6 +171,12 @@ happening — each with one job:
   machine currently working gets one more line — the tool it is on and the tail
   of what it is saying. It never takes more than 80% of the width
   and never grows taller than a row; a long run scrolls sideways instead.
+- **Live, but not busy.** What streams in is drawn at most ten times a second,
+  however fast a machine is talking (`run.ts`, `DRAW_INTERVAL_MS`). The only
+  thing that moves is the pulse on something running — a machine's pip, the
+  tool it is on, a base that is filing. Belts are dashed and still, and no
+  panel over the sheet blurs what is under it: a canvas that animates when
+  nothing is happening is a laptop fan for no information.
 - **The node log** opens from the icon in front of a machine's name, or from its
   card on the timeline: one machine's whole story, in a window sized for
   reading. What arrived, what left, the agent's words, every tool with its

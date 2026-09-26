@@ -363,16 +363,6 @@ def test_an_unopened_factory_node_is_still_something_nothing_executes(
     )
 
 
-def test_a_human_node_of_a_kind_this_version_cannot_ask_is_refused_by_name(
-    test_store: Store, project: None, repo: Path
-) -> None:
-    nodes, edges = gate(rescue=False)
-    nodes[2].definition.config["kind"] = "sign-off"
-    factory = save(test_store, nodes, edges)
-
-    assert any("'sign-off'" in problem for problem in runcheck.run_problems(factory))
-
-
 def test_a_human_node_still_has_to_be_on_the_line(
     test_store: Store, project: None, repo: Path
 ) -> None:

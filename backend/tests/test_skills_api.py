@@ -108,17 +108,6 @@ def test_unknown_fields_are_refused(client: TestClient, workspace: Path) -> None
     assert response.status_code == 422
 
 
-def test_cross_origin_import_and_delete_are_refused(client: TestClient, workspace: Path) -> None:
-    """The mutations are POST and DELETE precisely so the Origin check sees
-    them (`security.py`)."""
-    client.post("/api/skills", json={"text": TEMPLATE})
-    evil = {"Origin": "https://evil.example"}
-    assert client.post("/api/skills", json={"text": TEMPLATE}, headers=evil).status_code == 403
-    assert client.delete("/api/skills/repo-recon", headers=evil).status_code == 403
-    # ...and the skill is still there.
-    assert client.get("/api/skills/repo-recon").status_code == 200
-
-
 def test_deleting_a_system_skill_is_405_and_says_why(
     client: TestClient, workspace: Path
 ) -> None:
