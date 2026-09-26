@@ -11,6 +11,12 @@
  * belongs to nothing — any agent in any factory in any project can wear one —
  * so the only screen that can honestly hold it is the one above them all.
  *
+ * **Factories come straight after the projects**, and before the libraries,
+ * because they are what a project is built from: reusable, fully automated
+ * blocks any project drops onto its line as a factory node (`decisions/0029`).
+ * Like a skill, a factory belongs to no project — the workspace owns it — so
+ * this is the one screen that can hold it.
+ *
  * The knowledge library sits beside it for exactly the same reason, and the
  * two are deliberately not merged: a skill tells an agent *how to behave* and
  * is unconditional once attached; a base holds *what is durably true* and is a
@@ -21,7 +27,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { ApiError, api } from "../api";
-import { PROJECT_ICON_GLYPHS, TrashGlyph } from "../nodes/Glyphs";
+import { FactoryGlyph, PROJECT_ICON_GLYPHS, TrashGlyph } from "../nodes/Glyphs";
 import {
   KNOWLEDGE_FILE_MAX_BYTES,
   KNOWLEDGE_TYPES,
@@ -33,6 +39,7 @@ import {
   type KnowledgeEntry,
   type KnowledgeEntryText,
   type KnowledgeType,
+  type LibraryFactorySummary,
   type Project,
   type Skill,
   type SkillNote,
@@ -43,7 +50,13 @@ import {
  *  Mirrored from `knowledge.store.MANIFEST_NAME`. */
 const MANIFEST = "manifest.md";
 
-export function ProjectList({ onOpen }: { onOpen: (projectId: string) => void }) {
+export function ProjectList({
+  onOpen,
+  onOpenFactory,
+}: {
+  onOpen: (projectId: string) => void;
+  onOpenFactory: (factoryId: string) => void;
+}) {
   const [projects, setProjects] = useState<Project[] | null>(null);
   const [codebases, setCodebases] = useState<Codebase[]>([]);
   const [health, setHealth] = useState<Health | null>(null);
@@ -258,6 +271,7 @@ export function ProjectList({ onOpen }: { onOpen: (projectId: string) => void })
             </div>
           )}
 
+          <FactoryLibrary onOpen={onOpenFactory} />
           <SkillLibrary />
           <KnowledgeLibrary />
 
@@ -292,6 +306,224 @@ export function ProjectList({ onOpen }: { onOpen: (projectId: string) => void })
   );
 }
 
+
+/**
+ * The factory library: every reusable block in `_factories/_library/`, and the
+ * way to make one.
+ *
+ * Laid out like the projects above it — same cards, same inline create, same
+ * inline delete — because a factory is built on the same canvas and opened the
+ * same way. What a card adds is what a factory is to the projects: whether it
+ * is usable yet, and which projects use it. **A delete a project still depends
+ * on is refused by the server with the projects' names**, and that sentence is
+ * shown as it came.
+ */
+function FactoryLibrary({ onOpen }: { onOpen: (factoryId: string) => void }) {
+  const [factories, setFactories] = useState<LibraryFactorySummary[] | null>(null);
+  const [creating, setCreating] = useState(false);
+  const [name, setName] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [confirmingDelete, setConfirmingDelete] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const nameInput = useRef<HTMLInputElement | null>(null);
+  const cancelDeleteButton = useRef<HTMLButtonElement | null>(null);
+
+  useEffect(() => {
+    let live = true;
+    api
+      .library()
+      .then((loaded) => live && setFactories(loaded))
+      .catch((cause: unknown) => {
+        if (!live) return;
+        setFactories([]);
+        setError(cause instanceof Error ? cause.message : String(cause));
+      });
+    return () => {
+      live = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (creating) nameInput.current?.focus();
+  }, [creating]);
+
+  useEffect(() => {
+    if (confirmingDelete) cancelDeleteButton.current?.focus();
+  }, [confirmingDelete]);
+
+  function cancelCreate() {
+    setCreating(false);
+    setName("");
+    setError(null);
+  }
+
+  async function create(event: React.FormEvent) {
+    event.preventDefault();
+    const trimmed = name.trim();
+    if (!trimmed || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const factory = await api.createLibraryFactory(trimmed);
+      setName("");
+      setCreating(false);
+      onOpen(factory.id);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function remove(factoryId: string) {
+    if (deleting) return;
+    setDeleting(factoryId);
+    setError(null);
+    try {
+      await api.deleteLibraryFactory(factoryId);
+      setFactories((current) =>
+        current === null ? current : current.filter((one) => one.id !== factoryId),
+      );
+      setConfirmingDelete(null);
+    } catch (cause) {
+      // A 409 names the projects still using it; shown as the server said it.
+      setError(cause instanceof Error ? cause.message : String(cause));
+      setConfirmingDelete(null);
+    } finally {
+      setDeleting(null);
+    }
+  }
+
+  return (
+    <section className="factories-section" aria-labelledby="factories-heading">
+      <h2 id="factories-heading">Factories</h2>
+      <p className="lede">
+        A factory is a block of machines that runs by itself — agents and
+        storage between three ways in and three ways out. Build one here, then
+        drop it onto any project's line as a single node.
+      </p>
+
+      {error && <div className="error">{error}</div>}
+
+      {factories === null ? (
+        <p className="lede">Loading…</p>
+      ) : (
+        <div className="project-grid factory-grid">
+          {creating ? (
+            <form className="project-card project-card-new is-editing" onSubmit={create}>
+              <input
+                ref={nameInput}
+                value={name}
+                onChange={(event) => setName(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Escape") cancelCreate();
+                }}
+                onBlur={() => {
+                  if (!name.trim() && !busy) cancelCreate();
+                }}
+                placeholder="Factory name"
+                aria-label="New factory name"
+                maxLength={80}
+              />
+              <span className="new-project-actions">
+                <button className="primary" type="submit" disabled={!name.trim() || busy}>
+                  {busy ? "Creating…" : "Create"}
+                </button>
+                <button type="button" className="link-button" onClick={cancelCreate}>
+                  Cancel
+                </button>
+              </span>
+            </form>
+          ) : (
+            <button
+              className="project-card project-card-new factory-card-new"
+              onClick={() => setCreating(true)}
+            >
+              <span className="new-project-icon">+</span>
+              <span className="name">New factory</span>
+            </button>
+          )}
+
+          {factories.map((factory) =>
+            confirmingDelete === factory.id ? (
+              <div
+                key={factory.id}
+                className="project-card is-confirming"
+                onKeyDown={(event) => {
+                  if (event.key === "Escape" && !deleting) setConfirmingDelete(null);
+                }}
+              >
+                <span className="name">Delete {factory.name}?</span>
+                <span className="meta">
+                  Deletes <code>_factories/_library/{factory.id}.json</code>. A
+                  factory a project still uses cannot be deleted.
+                </span>
+                <span className="card-actions">
+                  <button
+                    type="button"
+                    className="destructive"
+                    onClick={() => remove(factory.id)}
+                    disabled={deleting !== null}
+                  >
+                    {deleting === factory.id ? "Deleting…" : "Delete"}
+                  </button>
+                  <button
+                    ref={cancelDeleteButton}
+                    type="button"
+                    className="link-button"
+                    onClick={() => setConfirmingDelete(null)}
+                    disabled={deleting !== null}
+                  >
+                    Cancel
+                  </button>
+                </span>
+              </div>
+            ) : (
+              <div key={factory.id} className="project-slot">
+                <button className="project-card factory-card" onClick={() => onOpen(factory.id)}>
+                  <span className="name">
+                    <span className="project-icon factory-icon" aria-hidden>
+                      <FactoryGlyph />
+                    </span>
+                    {factory.name}
+                  </span>
+                  <span className="meta mono">{factory.id}</span>
+                  <span className="meta">
+                    {Math.max(0, factory.node_count - 6)} machine
+                    {factory.node_count - 6 === 1 ? "" : "s"}
+                    {" · "}
+                    {factory.used_by.length === 0
+                      ? "used by no project"
+                      : `used by ${factory.used_by.length} project${factory.used_by.length === 1 ? "" : "s"}`}
+                  </span>
+                  {factory.problems.length > 0 && (
+                    <span className="meta warn" title={factory.problems.join("\n")}>
+                      not usable yet — {factory.problems.length} thing
+                      {factory.problems.length === 1 ? "" : "s"} to fix
+                    </span>
+                  )}
+                </button>
+                <button
+                  type="button"
+                  className="card-delete"
+                  aria-label={`Delete ${factory.name}`}
+                  title="Delete factory"
+                  onClick={() => {
+                    setError(null);
+                    setConfirmingDelete(factory.id);
+                  }}
+                >
+                  ×
+                </button>
+              </div>
+            ),
+          )}
+        </div>
+      )}
+    </section>
+  );
+}
 
 /**
  * The workspace's skill library: what is in `_skills/`, and the way to put

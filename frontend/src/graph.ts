@@ -63,6 +63,21 @@ export const WIRE_EDGE = "wire";
 /** Node types attached to the line rather than standing on it. `models.ATTACHED_TYPES`. */
 export const ATTACHED_TYPES = new Set<string>(["memory", "knowledge"]);
 
+/** A library factory's connector types (`models.CONNECTOR_TYPES`). */
+export const CONNECTOR_TYPES = new Set<string>(["entry", "exit"]);
+
+/**
+ * Whether a node is attached to the line rather than standing on it —
+ * `models.is_attached`. Storage, and a library factory's **memory connectors**:
+ * storage by what they stand for, so an edge touching one is a wire. Asked of
+ * the node rather than of its type, because a connector is attached or not by
+ * its kind.
+ */
+export function isAttached(definition: NodeDefinition): boolean {
+  if (ATTACHED_TYPES.has(definition.type)) return true;
+  return CONNECTOR_TYPES.has(definition.type) && nodeKind(definition) === "store";
+}
+
 /**
  * **The three ways in.** An agent and a human node split the single unnamed
  * target handle they used to draw into named entries, top to bottom: storage
@@ -92,7 +107,7 @@ export function isWire(
 ): boolean {
   for (const id of [edge.source, edge.target]) {
     const definition = definitions.get(id);
-    if (definition && ATTACHED_TYPES.has(definition.type)) return true;
+    if (definition && isAttached(definition)) return true;
   }
   return false;
 }
@@ -103,6 +118,10 @@ export function toFlowNode(node: GraphNode): FlowNode {
     type: node.definition.type,
     position: { ...node.definition.position },
     data: { definition: node.definition, runtime: node.runtime },
+    // A connector is a library factory's way in or out, created with the
+    // factory and required by its save rules — so it cannot be deleted from the
+    // canvas, only wired.
+    ...(CONNECTOR_TYPES.has(node.definition.type) ? { deletable: false } : {}),
   };
 }
 
@@ -156,7 +175,10 @@ export function toFlowEdge(
       id: edge.id,
       source: edge.source,
       target: edge.target,
-      sourceHandle: from?.type === "knowledge" ? "read" : null,
+      // A base's read handle and a factory node's memory exit are the two
+      // named sources a wire can leave; every other end is unnamed.
+      sourceHandle:
+        from?.type === "knowledge" ? "read" : from?.type === "factory-ref" ? "store" : null,
       targetHandle: entries?.get(edge.id) ?? edge.target_handle,
       type: WIRE_EDGE,
       data: { kind: edge.payload.kind, outcome: DEFAULT_EDGE_OUTCOME },
@@ -230,7 +252,7 @@ export function loadGraph(factory: Factory): {
  * `target_handle` that names an entry its node *does* render is left alone, and
  * nothing here invents a port. The next save writes the resolved names back, so
  * a file heals itself rather than being normalised again on every open —
- * `FactoryCanvas` takes its dirty-check baseline *after* this runs, so an
+ * `GraphEditor` takes its dirty-check baseline *after* this runs, so an
  * untouched factory does not open dirty.
  *
  * Computed once for the whole graph rather than per edge, because deciding
@@ -363,7 +385,7 @@ export function knowledgeWritable(baseType: string | undefined): boolean {
  * while the server goes on treating it as live. So switching a node's base to
  * one of `principles` type must **normalise the write wires away**, visibly
  * and with a notice, rather than leaving wires pointing at a handle that has
- * gone. An invisible wire is worse than a refused one. `FactoryCanvas` is where
+ * gone. An invisible wire is worse than a refused one. `GraphEditor` is where
  * that normalisation happens; this is the predicate both it and `NodeShell`
  * read.
  */
@@ -394,6 +416,8 @@ export function hasWriteHandle(
 export function hasOutcomePorts(definition: NodeDefinition): boolean {
   if (definition.type === "human") return true;
   if (definition.type === "agent") return nodeKind(definition) === "reviewer";
+  // A factory node: `success` is its input exit, `fail` its loopback exit.
+  if (definition.type === "factory-ref") return true;
   return false;
 }
 
@@ -408,7 +432,13 @@ export function hasOutcomePorts(definition: NodeDefinition): boolean {
  * but the line.
  */
 export function hasEntryPorts(definition: NodeDefinition): boolean {
-  return definition.type === "agent" || definition.type === "human";
+  // A factory node is entered the same three ways a machine is — its memory,
+  // input and loopback entries are these three handles.
+  return (
+    definition.type === "agent" ||
+    definition.type === "human" ||
+    definition.type === "factory-ref"
+  );
 }
 
 /**
@@ -426,7 +456,9 @@ export function hasEntryPorts(definition: NodeDefinition): boolean {
  * agent puts them, so the rows still line up across a canvas.
  */
 export function hasStoreEntry(definition: NodeDefinition): boolean {
-  return definition.type === "agent";
+  // A factory node relays storage to the machines inside, so it takes a wire
+  // the way an agent does.
+  return definition.type === "agent" || definition.type === "factory-ref";
 }
 
 /**
@@ -523,7 +555,16 @@ export function isLoopBelt(
 ): boolean {
   if (sourceHandle !== "fail" || !hasOutcomePorts(definition)) return false;
   if (definition.type === "agent") return true;
+  // A factory node's loopback exit is fed only by a reviewer inside it, so its
+  // fail belt is a judge's (`runcheck.back_edges`, `decisions/0031`).
+  if (definition.type === "factory-ref") return true;
   return definition.type === "human" && nodeKind(definition) === "approval";
+}
+
+/** Whether this node is a library factory's loopback entry: whatever it feeds
+ * arrives as work sent back, on a machine's loop entry. */
+function isLoopbackEntry(definition: NodeDefinition): boolean {
+  return definition.type === "entry" && nodeKind(definition) === "loop";
 }
 
 /**
@@ -568,14 +609,18 @@ export function entryAccepts(
   // unrestricted behaviour it has always had.
   if (!hasEntryPorts(target)) return true;
 
-  const fromStorage = ATTACHED_TYPES.has(source.type);
+  const fromStorage = isAttached(source);
   if (entry === ENTRY_STORE) return hasStoreEntry(target) && fromStorage;
   // A wire has exactly one place to land. Letting one sit on `forward` would put
   // a dashed attachment in the slot that means "this is what runs next".
   if (fromStorage) return false;
 
   const belts = edges.filter((edge) => !isWire(edge, byId));
-  const loops = isLoopBelt(source, sourceHandle) && closesLoop(nodes, belts, sourceId, targetId);
+  // Work coming in through a factory's loopback entry is work sent back, and
+  // lands where work sent back lands — whatever shape the factory has.
+  const loops =
+    isLoopbackEntry(source) ||
+    (isLoopBelt(source, sourceHandle) && closesLoop(nodes, belts, sourceId, targetId));
   if (entry === ENTRY_LOOP) return loops;
   if (entry === ENTRY_FORWARD) return !loops;
   return false;
@@ -608,9 +653,10 @@ export function entryFor(
   // **visible** to be refused: an entry the node does not render would drop the
   // wire off the canvas and leave the operator a file they cannot fix from it.
   // So it lands on `forward`, where the validator can point at it.
-  if (ATTACHED_TYPES.has(source.type)) {
+  if (isAttached(source)) {
     return hasStoreEntry(target) ? ENTRY_STORE : ENTRY_FORWARD;
   }
+  if (isLoopbackEntry(source)) return ENTRY_LOOP;
   return isLoopBelt(source, sourceHandle) && closesLoop(nodes, belts, sourceId, targetId)
     ? ENTRY_LOOP
     : ENTRY_FORWARD;
@@ -665,7 +711,38 @@ export function newNode(
   kind?: string,
   /** What is already on the canvas, so a memory can be numbered past it. */
   existing: FlowNode[] = [],
+  /** A factory node's name — the library factory's — numbered past the factory
+   * nodes already on the canvas. */
+  name?: string,
 ): FlowNode {
+  if (type === "factory-ref") {
+    // **A factory node's kind is the factory it stands for**, carried on the
+    // drag as `factory-ref:<id>` — every library factory is its own palette
+    // entry, so which block this is was chosen before it was dropped. Its label
+    // is numbered like a memory's, and for a related reason: the memories
+    // inside it are filed under `<label> › <memory>`, so two factory nodes on
+    // one name would file into one document.
+    return {
+      id: localId("n"),
+      type,
+      position,
+      selected: true,
+      data: {
+        definition: {
+          type,
+          label: unusedLabel(
+            name || "Factory",
+            existing.filter((node) => node.data.definition.type === "factory-ref"),
+          ),
+          position,
+          codebase_id: null,
+          config: {},
+          factory_ref: kind || null,
+        },
+        runtime: null,
+      },
+    };
+  }
   // Written into `config` even when it is the default, so a factory file says
   // out loud what its output node does. "This one only commits" is exactly the
   // sentence a reviewer reading `main.json` in a pull request wants, and

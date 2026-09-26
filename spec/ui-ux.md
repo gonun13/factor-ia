@@ -7,19 +7,23 @@ away. You lay down machines and then you watch those same machines work.
 
 ## The screens
 
-There are three, and two of them are lists.
+There are three kinds, and the canvas is one component wearing two jobs.
 
-- **Project list** — the entry point. Projects, each card showing the
-  project's icon beside its name, and a **Settings** link top right.
-- **Canvas** — where everything happens. One factory, whole.
+- **The main page** — the entry point. **Projects**, each card showing the
+  project's icon beside its name; then **Factories**, the workspace's library of
+  reusable blocks; then the skill and knowledge libraries; and a **Settings**
+  link top right.
+- **Canvas** — where everything happens. One factory, whole: a project's main
+  factory (`#/p/<project>`), or a library factory (`#/f/<factory>`), on the same
+  editor with a different palette and a different run panel.
 - **Settings** — a deliberately small, plain screen. Sign-in and the git key.
   Not a second canvas.
 
 ## The canvas
 
 A palette in the top-left corner, machines on the sheet, belts between them.
-The palette is a one-row bar of five categories — **Input**, **Output**,
-**Agents**, **Human**, **Storage** — each carrying its node type's glyph in its
+The palette is a one-row bar of categories — **Input**, **Output**, **Agents**,
+**Human**, **Storage** and **Factories** on a project's canvas — each carrying its node type's glyph in its
 node type's colour, and each dropping its machines over the canvas two across. A
 category is a folder, not a kind picker: every kind is still its own entry,
 chosen before a node is placed, so nobody drops a generic output and discovers
@@ -242,6 +246,45 @@ up, never silently resumed — the panel offers Resume and Cancel, and nothing
 moves until one of them is pressed. It is `stopped` rather than `failed`
 because nothing about the work went wrong, and the word is what decides which
 buttons the operator is given.
+
+## Factories
+
+A factory is a block of machines that runs by itself — agents and storage
+between three ways in and three ways out — built once and dropped onto any
+project's line as one node. See [`behaviour/factories.md`](behaviour/factories.md).
+
+**On the main page, after the projects.** The same cards as a project's: **New
+factory** creates one inline and opens it; a card says how many machines it
+holds, which projects use it, and — when it cannot be used yet — how many things
+there are to fix. Its **×** asks inline before deleting, and a factory a project
+still uses is refused with the projects named, in the server's own sentence.
+
+**Its editor is the canvas, narrowed.** The palette offers **Agents** and
+**Storage** and nothing else — no input, output or human node, and no factory
+inside a factory. A worker in a factory draws no codebase plate: it works in the
+one its factory node names. Down the left stand the three entries and down the
+right the three exits — **memory**, **input** and **loopback** each way — small,
+quiet, and undeletable. A belt drawn from the loopback entry lands on a
+machine's loop entry.
+
+**Simulate, not Run.** The run panel picks the codebase the simulation works in
+and offers **Simulate**; the input is typed into the chat like any request.
+While it runs the only button is **Stop**, which discards it — a simulation keeps
+nothing, so there is no Resume and no Cancel beside it. Before it starts, the
+panel warns in a sentence when the factory writes to a knowledge base, because
+those writes are real. What came out is read off the connectors: each one lights
+up as work passes through it, and its log is what arrived there.
+
+**On a project's canvas, a factory node is one block.** It draws a machine's
+three entries and three exits of its own, the factory's name, and a codebase
+plate — the codebase every agent inside works in. The **Factories** folder of the
+palette holds one entry per library factory. During a run the node lights up as
+the sum of the machines inside it, which the project canvas never draws; its
+**Watch inside ↗** button, or its card on the timeline, opens the **drill-in
+view**: the factory's own canvas, read-only, lit by the same run, over the
+project's canvas so unsaved edits there survive. **Esc** or **← project** comes
+back out. Before a node has run, the same button opens the factory's editor, and
+asks first when the project canvas has unsaved changes.
 
 ## Settings
 

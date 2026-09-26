@@ -30,6 +30,8 @@ backend/     FastAPI app, uv-managed  (factoria.main:app)
              discovery.py  codebase scan · store.py  atomic JSON store
              api.py  REST · security.py  Host and Origin gate · tests/
              orchestrator.py  the walk, the state machine, cancel, the sweep
+             expand.py  factory nodes opened into one flat graph; a factory's
+                        own rules; the simulation harness
              gitwork.py  every git command, behind an allowlist
              worktree.py  one worktree per run, and its cleanup policy
              housekeeping.py  that policy applied later, as a preview
@@ -54,7 +56,9 @@ backend/     FastAPI app, uv-managed  (factoria.main:app)
                proc.py  spawn/killpg
                cli.py  version, auth status, initialize · login.py  sign-in
 frontend/    Vite + React + TypeScript + React Flow v12, built at image build time
-             screens/  project list · canvas   nodes/  node + belt components
+             screens/  project list · GraphEditor (the one canvas) wrapped as
+                       ProjectCanvas and FactoryEditor · RunBox · SimulateBox
+             nodes/  node + belt components   factoryRun.ts  a factory node's run
              run.ts  the EventSource client and the runtime reducer
              graph.ts  API graph <-> React Flow   validation.ts  run preconditions
 bin/         host-side setup and housekeeping (bootstrap, up, down, demo, tidy, walkthrough)
@@ -70,6 +74,13 @@ docs/        BUILD_STATE.md, SECURITY_PRD.md — operator-local, gitignored
 CRUD on `/api/projects` ·
 `GET`/`PUT` on `/api/projects/{id}/factories/{factory}`, plus per-node and
 per-edge endpoints under it.
+
+Factory library ([`behaviour/factories.md`](behaviour/factories.md)):
+`GET`/`POST /api/factories` (the list carries each factory's `ports`, its
+structural `problems` and the projects that use it) · `GET`/`PUT`/`DELETE
+/api/factories/{id}` (`DELETE` refused `409`, naming the projects, while one
+uses it) · `POST /api/factories/{id}/simulations` (`{codebase_id}`; refused like
+a run start, then fed through `/api/runs/{id}/input`).
 
 Runs: `POST /api/projects/{id}/factories/{factory}/runs` (start — refused 422
 with every reason if the graph cannot run, 409 if one is already in flight) ·
@@ -131,8 +142,9 @@ no repeat.
 
 ## Storage
 
-Storage rules in full are in [`data.md`](data.md); the summary is that factory definitions land in `_factories/<project>/main.json` — indented, stable
-key order, one file per factory, meant to be reviewed in a pull request. The
+Storage rules in full are in [`data.md`](data.md); the summary is that factory definitions land in `_factories/<project>/main.json`, and library
+factories in `_factories/_library/<id>.json` — indented, stable key order, one
+file per factory, meant to be reviewed in a pull request. The
 machine-local project registry lives apart from them in `/data/projects.json`,
 on a volume, untracked. Writes go through an atomic JSON store.
 
@@ -154,9 +166,13 @@ models that wrote it) and a `summary.md`.
 ## Node kinds, and the shape of a factory
 
 `NodeType` is four things that execute — `input`, `agent`, `output`, `human` —
-plus `factory-ref`, which is in the union with no UI and no execution so that
-nesting is a later UI change rather than a file-format change. `human` was in
-the union on the same terms until stage 8 gave it both.
+two kinds of storage — `memory`, `knowledge` — and the three that make factories:
+**`factory-ref`**, a factory node standing for a library factory, and a library
+factory's connectors, **`entry`** and **`exit`**. A factory node never executes
+itself: `expand.py` opens it into its factory's nodes before a run is checked,
+and the belt connectors run as pass-through machines
+([`decisions/0030`](decisions/0030-a-factory-runs-by-expansion.md)). See
+[`behaviour/factories.md`](behaviour/factories.md).
 
 **A `human` node has two kinds** (`models.HumanKind`), and they are the same
 machine asked for different amounts. `approval` is a **gate**: one question
@@ -170,7 +186,7 @@ do nothing but read and ask, enforced server-side whatever its skill says. It is
 also the feature [`PROJECT.md`](PROJECT.md) reserved the right to move off SSE for, and did
 not: a question is an event down and an answer is a POST up. See [`behaviour/human-nodes.md`](behaviour/human-nodes.md).
 
-**A `reviewer` and a `human` node leave by one of two ports**, `success` or
+**A `reviewer`, a `human` and a factory node leave by one of two ports**, `success` or
 `fail` (`models.EdgeOutcome`), carried on the belt's `source_handle` — a field
 React Flow already set and the factory file already round-tripped, so outcome
 routing arrived without moving `schema_version`. `null` means success, which is
@@ -247,7 +263,7 @@ source handle on an output, so neither is reachable by dragging — but
 `main.json` is a file people edit in a pull request, and a rule the UI merely
 makes awkward is not a rule.
 
-### An agent and a human node are entered by three named handles
+### An agent, a human and a factory node are entered by three named handles
 
 `store`, `forward` and `loop`, drawn top to bottom on the left of the chassis
 (`NodeShell.tsx`) and landing in `Edge.target_handle`. A read wire from a memory
@@ -255,18 +271,23 @@ or a knowledge base arrives at `store`, a belt running down the line at
 `forward`, and a judge's `fail` belt coming back round at `loop` — a reviewer's
 or a sign-off's. A human node
 draws two of the three: only an agent may read a memory or a base, so there is no
-`store` entry for a wire that would be refused to land on.
+`store` entry for a wire that would be refused to land on. A factory node draws
+all three — its memory, input and loopback entries — and three exits of its own:
+`store` (a wire's source), `success` (its input exit) and `fail` (its loopback
+exit).
 
 **The server never reads `target_handle`.** Every routing decision is taken off
 `source_handle` — `models.edge_outcome`, `orchestrator._carries`,
 `runcheck.back_edges` — so which entry an edge arrives at changes what a canvas
 draws and what a reviewer can read, and changes nothing about how a factory runs.
 The rule is therefore enforced on the client alone, as it is drawn
-(`FactoryCanvas.isValidConnection`) and afterwards for a hand-edited file
+(`GraphEditor.isValidConnection`) and afterwards for a hand-edited file
 (`validation.ts`, as notices rather than blockers). It is the one rule in
 `validation.ts` with no mirror in `runcheck.py`, and
 [`decisions/0012`](decisions/0012-three-entry-handles.md) says why that is
-deliberate.
+deliberate. Which entry a belt into a factory node arrives at is likewise
+decided by shape, never by that field: `expand` asks `back_edges` over the
+project graph ([`decisions/0031`](decisions/0031-connectors-are-nodes.md)).
 
 ### Inputs are submitted per node
 
@@ -375,7 +396,9 @@ a preview an operator acts on, never a retention rule that runs on its own
 offered, at any age. See `behaviour/run-execution.md`.
 
 One run at a time — a second one is refused with the id of the run holding the
-slot.
+slot. A **simulation** of a library factory holds the same slot, and differs in
+what it leaves behind: a detached worktree, so no branch, removed however it
+ends ([`decisions/0032`](decisions/0032-a-simulation-leaves-nothing-behind.md)).
 
 ## The adapter seam
 
@@ -554,6 +577,9 @@ broker, no external database.
 - **API (FastAPI).** CRUD over projects, factories, nodes, edges; run control;
   provider sign-in; the SSE event stream. Also serves the built frontend, so
   there's one port and one container.
+- **Expansion.** Opens every factory node into its library factory's nodes, so
+  the orchestrator walks one flat graph; checks a factory's own drawing; wraps a
+  factory for a simulation (`expand.py`).
 - **Orchestrator.** Walks the graph, decides what's runnable, drives node state
   machines (`pending → waiting_input → running → succeeded/failed`), and emits
   every transition onto an event bus. In-process `asyncio`, with one active run

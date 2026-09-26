@@ -217,6 +217,14 @@ Memory follows the worktree policy exactly:
 A failed run keeps its memory because what the agents believed they knew is the
 first question a post-mortem asks.
 
+**Inside a factory.** A memory in a library factory is an ordinary memory once
+the factory node is opened, filed under its flat label — `<factory node> ›
+<memory>` — which is why the canvas numbers a second factory node's label. A
+factory's **memory connectors are not memories**: storage wired to a factory node
+is re-wired to the agents inside that the connector reached. In a simulation the
+memory exit stands in as a scratch memory, and goes with the simulation like
+everything else it made ([`factories.md`](factories.md)).
+
 ## Where the code is
 
 | | |

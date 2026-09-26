@@ -1,5 +1,7 @@
 import type { EdgeTypes, NodeTypes } from "@xyflow/react";
 import { AgentNode } from "./AgentNode";
+import { ConnectorNode } from "./ConnectorNode";
+import { FactoryNode } from "./FactoryNode";
 import { HumanNode } from "./HumanNode";
 import { BeltEdge } from "./BeltEdge";
 import { WireEdge } from "./WireEdge";
@@ -17,6 +19,9 @@ export const nodeTypes: NodeTypes = {
   memory: MemoryNode,
   knowledge: KnowledgeNode,
   output: OutputNode,
+  "factory-ref": FactoryNode,
+  entry: ConnectorNode,
+  exit: ConnectorNode,
 };
 
 export const edgeTypes: EdgeTypes = { [BELT_EDGE]: BeltEdge, [WIRE_EDGE]: WireEdge };

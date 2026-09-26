@@ -13,6 +13,7 @@ import type {
   Codebase,
   CodebaseGit,
   KnowledgeBaseSummary,
+  LibraryFactorySummary,
   ModelOffer,
   NodeDefinition,
   ProjectSettings,
@@ -136,7 +137,7 @@ export type CanvasContextValue = {
    * Here rather than computed in the node, because `NodeShell` needs the whole
    * graph to answer it (a loop is a question about all of it) and putting the
    * node and edge arrays into the context would make every node re-render on
-   * every drag of every other. `FactoryCanvas` holds them already and hands down
+   * every drag of every other. `GraphEditor` holds them already and hands down
    * the one answer.
    *
    * **The same function the canvas's `isValidConnection` calls.** Two copies of
@@ -163,6 +164,24 @@ export type CanvasContextValue = {
    * drawn on a node the run has reached.
    */
   openLog: (nodeId: string) => void;
+  /**
+   * Which canvas this is: a project's main factory, or a library factory.
+   *
+   * What differs on a node is small and all of it is about the codebase: a
+   * machine inside a factory carries none — it works in the one its factory
+   * node names — so an agent there draws no codebase plate.
+   */
+  mode: "project" | "factory";
+  /** The factory library, by id, for the factory nodes on a project canvas:
+   * each draws its factory's name and which of its optional connectors the
+   * factory uses. Empty until `/api/factories` answers. */
+  factories: Map<string, LibraryFactorySummary>;
+  /**
+   * Open the factory a factory node stands for — into the run, when the node
+   * has run, so the machines inside can be watched (`ui-ux.md`, Factories);
+   * otherwise into its editor.
+   */
+  openFactory: (nodeId: string) => void;
 };
 
 export const CanvasContext = createContext<CanvasContextValue>({
@@ -183,6 +202,9 @@ export const CanvasContext = createContext<CanvasContextValue>({
   // take.
   entryAccepts: () => false,
   openLog: () => {},
+  mode: "project",
+  factories: new Map(),
+  openFactory: () => {},
 });
 
 export const useCanvas = () => useContext(CanvasContext);

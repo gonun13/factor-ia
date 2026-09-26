@@ -90,6 +90,7 @@ from typing import Any
 from . import (
     commit_pass,
     config,
+    expand,
     gitwork,
     housekeeping,
     machine,
@@ -136,8 +137,10 @@ from .models import (
     RunMemory,
     RunStatus,
     RunWorktree,
-    ATTACHED_TYPES,
+    CONNECTOR_TYPES,
+    RunKind,
     edge_outcome,
+    is_attached,
     split_edges,
     has_outcome_ports,
     KnowledgeBase,
@@ -686,98 +689,177 @@ class Orchestrator:
 
         Raises `NotRunnable` (→ 422) or `RunBusy` (→ 409). Nothing is written
         until both checks pass, so a refused run leaves no directory behind.
+
+        **What runs is the main factory with every factory node opened**
+        (`expand.py`, `decisions/0030`): one flat graph, checked as a whole and
+        walked by the ordinary walk. The run record describes that graph, and
+        each machine that came from a library factory says which factory node
+        it ran inside.
         """
         async with self._lock:
             if self._active_run_id is not None:
                 raise RunBusy(self._active_run_id)
-            factory = await asyncio.to_thread(
+            main = await asyncio.to_thread(
                 self.store.get_factory, project_id, factory_id
             )
             try:
                 project = await asyncio.to_thread(self.store.get_project, project_id)
                 settings = project.settings
             except NotFound:
-                # A factory file outliving its registry entry is a shape this
-                # store creates on purpose — `delete_project` unregisters and
-                # leaves `_factories/` alone. Running one of those is not the
+                # A factory file outliving its registry entry is a shape a
+                # failed delete can leave. Running one of those is not the
                 # moment to start failing; it just has no project defaults.
                 settings = ProjectSettings()
             codebases = await asyncio.to_thread(discover_codebases)
             # In a thread: the clean-repo precondition shells out to git once
             # per attached codebase, and the event loop is also serving an SSE
             # stream for whatever ran before this.
-            problems = await asyncio.to_thread(runcheck.run_problems, factory, codebases)
+            expanded, problems = await asyncio.to_thread(
+                expand.project_problems,
+                main,
+                self.store.get_library_factory,
+                codebases,
+            )
             if problems:
                 raise NotRunnable(problems)
-
-            run_id = _new_run_id()
-            run = Run(
-                id=run_id,
+            state = self._open_run(
+                expanded.factory,
                 project_id=project_id,
                 factory_id=factory_id,
-                factory_name=factory.name,
-                status="waiting_input",
-                # Named before any work starts so the canvas can show the branch
-                # from the first frame; the ref itself is created with the first
-                # worktree (`DESIGN.md`, Assumptions).
-                branch=worktree.branch_name(factory_id, run_id),
-                adapter=_run_adapter_id(factory, settings),
-                dangerous=run_is_dangerous(factory),
-                node_runs=[
-                    NodeRun(
-                        node_id=node.id,
-                        type=node.definition.type,
-                        # Frozen here, not re-read later: the factory file is
-                        # editable while a run is in flight, and a run record
-                        # has to describe the run that actually happened.
-                        kind=node_kind(node),
-                        label=node.definition.label or node.id,
-                        prompt=node_prompt(node),
-                        # What the graph asked for. `session.init` overwrites it
-                        # with what the CLI actually chose, which is the answer
-                        # worth keeping — but a run that dies before that event
-                        # still says what it was reaching for.
-                        model=model_for(node, settings),
-                        # Frozen for the same reason as the rest, and worth
-                        # keeping for a stronger one: standing instructions
-                        # shape what an agent did more than the model id does,
-                        # and a run log that cannot say which applied cannot
-                        # explain its own output.
-                        skill=skill_for(node),
-                    )
-                    # **Only what stands on the line.** A memory is attached to
-                    # it (`models.ATTACHED_TYPES`): it never runs, so it has no
-                    # status, no lap and no outcome, and inventing a `NodeRun`
-                    # saying "pending" for one would put a machine in the run's
-                    # table that the walk is never going to reach. What a memory
-                    # did is recorded on `run.memory` instead.
-                    for node in factory.nodes
-                    if node.definition.type not in ATTACHED_TYPES
-                ],
-            )
-            channel = RunChannel(run.id)
-            self._channels[run.id] = channel
-            state = ActiveRun(
-                run=run,
-                factory=factory,
-                channel=channel,
+                kind="run",
                 settings=settings,
-                workspaces=RunWorkspaces(run_id=run.id, branch=run.branch or ""),
+                within=expanded.within,
             )
-            self._active[run.id] = state
-            self._active_run_id = run.id
+        return await self._announce(state)
 
+    async def simulate(self, factory_id: str, codebase_id: str) -> Run:
+        """Create a simulation of one library factory and wait for its input.
+
+        The factory editor's Simulate button (`decisions/0032`). The factory is
+        wrapped in an input and a `discard` output (`expand.harness`), every
+        agent works in `codebase_id`, and from there it is an ordinary run in
+        every respect but three: it works in a **detached** worktree and so
+        never makes a branch, it keeps nothing however it ends, and it cannot be
+        resumed. It holds the same one run slot as any run.
+
+        Raises `NotRunnable` (→ 422) or `RunBusy` (→ 409), exactly as `start`.
+        """
+        async with self._lock:
+            if self._active_run_id is not None:
+                raise RunBusy(self._active_run_id)
+            body = await asyncio.to_thread(self.store.get_library_factory, factory_id)
+            codebases = await asyncio.to_thread(discover_codebases)
+            graph, problems = await asyncio.to_thread(
+                expand.simulation_problems, body, codebase_id, codebases
+            )
+            if problems:
+                raise NotRunnable(problems)
+            # No project, so no project defaults: every machine runs on its own
+            # settings and then the CLI's. `ProjectSettings()` still carries the
+            # effort default, which guesses nothing the CLI owns (`0026`).
+            state = self._open_run(
+                graph,
+                project_id=None,
+                factory_id=factory_id,
+                kind="simulation",
+                settings=ProjectSettings(),
+                within={},
+            )
+        return await self._announce(state)
+
+    def _open_run(
+        self,
+        factory: Factory,
+        *,
+        project_id: str | None,
+        factory_id: str,
+        kind: RunKind,
+        settings: ProjectSettings,
+        within: dict[str, str],
+    ) -> ActiveRun:
+        """Create a run's record and in-process half, and take the slot.
+
+        Called under `self._lock`, with every check already passed — the one
+        shared step between a project run and a simulation, so the two cannot
+        disagree about what a run record holds.
+        """
+        run_id = _new_run_id()
+        simulation = kind == "simulation"
+        run = Run(
+            id=run_id,
+            project_id=project_id,
+            factory_id=factory_id,
+            factory_name=factory.name,
+            kind=kind,
+            status="waiting_input",
+            # Named before any work starts so the canvas can show the branch
+            # from the first frame; the ref itself is created with the first
+            # worktree (`DESIGN.md`, Assumptions). A simulation makes none.
+            branch=None if simulation else worktree.branch_name(factory_id, run_id),
+            adapter=_run_adapter_id(factory, settings),
+            dangerous=run_is_dangerous(factory),
+            node_runs=[
+                NodeRun(
+                    node_id=node.id,
+                    type=node.definition.type,
+                    # Frozen here, not re-read later: the factory file is
+                    # editable while a run is in flight, and a run record
+                    # has to describe the run that actually happened.
+                    kind=node_kind(node),
+                    label=node.definition.label or node.id,
+                    prompt=node_prompt(node),
+                    # What the graph asked for. `session.init` overwrites it
+                    # with what the CLI actually chose, which is the answer
+                    # worth keeping — but a run that dies before that event
+                    # still says what it was reaching for.
+                    model=model_for(node, settings),
+                    # Frozen for the same reason as the rest, and worth
+                    # keeping for a stronger one: standing instructions
+                    # shape what an agent did more than the model id does,
+                    # and a run log that cannot say which applied cannot
+                    # explain its own output.
+                    skill=skill_for(node),
+                    within=within.get(node.id),
+                )
+                # **Only what stands on the line.** A memory is attached to
+                # it (`models.is_attached`): it never runs, so it has no
+                # status, no lap and no outcome, and inventing a `NodeRun`
+                # saying "pending" for one would put a machine in the run's
+                # table that the walk is never going to reach. What a memory
+                # did is recorded on `run.memory` instead.
+                for node in factory.nodes
+                if not is_attached(node)
+            ],
+        )
+        channel = RunChannel(run.id)
+        self._channels[run.id] = channel
+        state = ActiveRun(
+            run=run,
+            factory=factory,
+            channel=channel,
+            settings=settings,
+            workspaces=RunWorkspaces(
+                run_id=run.id, branch=run.branch or "", detached=simulation
+            ),
+        )
+        self._active[run.id] = state
+        self._active_run_id = run.id
+        return state
+
+    async def _announce(self, state: ActiveRun) -> Run:
+        """Write a new run down and raise its input forms."""
+        run = state.run
         await self._persist(state)
-        await channel.emit(
+        await state.channel.emit(
             RunStatusEvent(run_id=run.id, status="waiting_input", detail="waiting for the request")
         )
         # Declare the run's node set up front, each one `pending`. Redundant as
         # a *transition* — they are already pending — but it is what tells a
         # viewer which nodes belong to this run, so a canvas that joined late
         # can tell "not started yet" from "not part of the run".
-        for node in factory.nodes:
+        for node in state.factory.nodes:
             await self._set_node(state, node.id, "pending")
-        for node in factory.nodes:
+        for node in state.factory.nodes:
             if node.definition.type == "input":
                 await self._set_node(
                     state, node.id, "waiting_input", _waiting_detail(node_kind(node))
@@ -982,8 +1064,14 @@ class Orchestrator:
         one place that does it. A stopped run keeps its worktrees
         (`RunWorkspaces.cleanup`), keeps any block it was carrying, and is
         offered a Resume; a cancelled run is discarded (`decisions/0024`).
+
+        **A simulation has nothing to keep**, so stopping one discards it
+        (`decisions/0032`): it has no branch, no Resume, and a worktree that
+        goes whatever happens.
         """
-        return await self._halt(run_id, discard=False)
+        state = self._active.get(run_id)
+        simulation = state is not None and state.run.kind == "simulation"
+        return await self._halt(run_id, discard=simulation)
 
     async def cancel(self, run_id: str) -> Run:
         """Discard the run and everything it spawned.
@@ -1025,7 +1113,9 @@ class Orchestrator:
                 f"run {run_id} already finished as {run.status}"
             )
 
-        workspaces = RunWorkspaces(run_id=run.id, branch=run.branch or "")
+        workspaces = RunWorkspaces(
+            run_id=run.id, branch=run.branch or "", detached=run.kind == "simulation"
+        )
         workspaces.adopt(run.worktrees)
         kept = workspaces.cleanup("cancelled")
         run.worktrees = workspaces.all or run.worktrees
@@ -1220,6 +1310,13 @@ class Orchestrator:
             run = self._runs.read(run_id)
             if run is None:
                 raise RunConflict(f"no such run: {run_id}")
+            if run.kind == "simulation":
+                # Nothing to pick back up: its worktree went when it ended, and
+                # it never had a branch to re-attach (`decisions/0032`).
+                raise RunConflict(
+                    "a simulation is not picked back up — nothing it did was kept. "
+                    "Simulate again."
+                )
             if from_node_id is None:
                 # **Any run that halted without finishing** (`decisions/0024`):
                 # stopped by the button, stopped by a restart, or failed. What
@@ -1246,13 +1343,27 @@ class Orchestrator:
                     "can be restarted from a node"
                 )
             try:
-                factory = await asyncio.to_thread(
+                main = await asyncio.to_thread(
                     self.store.get_factory, run.project_id, run.factory_id
                 )
             except NotFound as exc:
                 raise RunConflict(
                     f"the factory {run.factory_id} this run came from is gone"
                 ) from exc
+            # Opened again from the files as they are now, the way `start`
+            # opened them — deterministic, so the same factories give the same
+            # ids back (`expand.expand`). A factory node that no longer opens is
+            # a run that can no longer be walked as it was.
+            expanded = await asyncio.to_thread(
+                expand.expand, main, self.store.get_library_factory
+            )
+            if expanded.unopened:
+                raise RunConflict(
+                    "a factory node of this run can no longer be opened — "
+                    + "; ".join(expanded.problems[:3])
+                    + " — start a fresh run instead"
+                )
+            factory = expanded.factory
             live = {node.id: node for node in factory.nodes}
             if from_node_id is None and run.blocked_node_id and run.blocked_node_id not in live:
                 raise RunConflict(
@@ -1265,7 +1376,7 @@ class Orchestrator:
                     "the node to restart from must still be on the canvas"
                 )
             missing = [
-                node_run.node_id
+                f"“{node_run.label or node_run.node_id}”"
                 for node_run in run.node_runs
                 if node_run.node_id not in live
             ]
@@ -1784,7 +1895,7 @@ class Orchestrator:
         # record follows the same way: `kept` is the policy's answer written
         # down, never re-derived by a reader (`models.RunMemory`).
         for record in state.run.memory:
-            record.kept = status == "failed"
+            record.kept = status == "failed" and state.run.kind != "simulation"
         if kept and detail:
             detail = f"{detail} — worktree kept at {kept[0].path}"
 
@@ -1831,10 +1942,18 @@ class Orchestrator:
             await self._run_output(state, node, incoming)
         elif kind == "human":
             await self._run_human(state, node, incoming)
-        else:
+        elif kind in CONNECTOR_TYPES:
+            # **A connector passes on exactly what arrived** (`expand.py`). It
+            # is on the line so the record can say what came into a factory and
+            # what went out of it — the question a person watching one asks —
+            # and it does nothing else, so it costs nothing and cannot fail.
             if node_run is not None:
                 node_run.output_text = incoming
             await self._set_node(state, node.id, "succeeded")
+        else:
+            # Only a factory node could land here, and one never reaches the
+            # walk: `start` opens every factory node before the run exists.
+            raise RuntimeError(f"nothing executes a {kind} node")
 
     def _rehydrate_memories(self, state: ActiveRun) -> None:
         """Rebuild the memory documents a resumed run already wrote.
@@ -2095,13 +2214,13 @@ class Orchestrator:
             if filed:
                 continue
 
-            relative = knowledge_filing.entry_path(state.run.project_id, label)
+            relative = knowledge_filing.entry_path(_filing_owner(state.run), label)
             root = knowledge_store.base_path(base.id)
             existed = (root / relative).exists()
             entry = knowledge_filing.render_entry(
                 body,
                 label=label,
-                project=state.run.project_id,
+                project=_filing_owner(state.run),
                 run_id=state.run.id,
                 lap=lap,
                 when=utcnow(),
@@ -3643,7 +3762,7 @@ class Orchestrator:
             body,
             base_id=base.id,
             label=label,
-            project=state.run.project_id,
+            project=_filing_owner(state.run),
         )
         why = "it wrote nothing"
         adapter = adapter_for(shelf, state.settings, lap=lap)
@@ -4069,7 +4188,15 @@ class Orchestrator:
                 continue
             log = RunChannel(run.id).log
             seq = log.last_seq()
-            detail = "interrupted by a restart — resume it or cancel it"
+            simulation = run.kind == "simulation"
+            # A simulation cannot be resumed, so an interrupted one is over: it
+            # is discarded the way its Stop button would have discarded it
+            # (`decisions/0032`), rather than parked on an offer nobody can take.
+            detail = (
+                "interrupted by a restart — simulations are not resumed"
+                if simulation
+                else "interrupted by a restart — resume it or cancel it"
+            )
             for node_run in run.node_runs:
                 if node_run.status in ("running", "waiting_input"):
                     node_run.status = "failed"
@@ -4085,11 +4212,23 @@ class Orchestrator:
                             detail=detail,
                         )
                     )
-            run.status = "stopped"
+            run.status = "cancelled" if simulation else "stopped"
             run.detail = detail
             run.ended_at = run.ended_at or utcnow()
+            if simulation:
+                workspaces = RunWorkspaces(
+                    run_id=run.id, branch=run.branch or "", detached=True
+                )
+                workspaces.adopt(run.worktrees)
+                workspaces.cleanup("cancelled")
+                for made in run.worktrees:
+                    made.kept = False
+                for record in run.memory:
+                    record.kept = False
             seq += 1
-            log.append(RunStatusEvent(seq=seq, run_id=run.id, status="stopped", detail=detail))
+            log.append(
+                RunStatusEvent(seq=seq, run_id=run.id, status=run.status, detail=detail)
+            )
             self._runs.write(run)
             # An interrupted run keeps its worktree, like any other stop: the
             # process that owned it is gone, and the directory it left is both
@@ -4098,6 +4237,12 @@ class Orchestrator:
             summary.write(run)
             interrupted.append(run.id)
         return interrupted
+
+
+def _filing_owner(run: Run) -> str:
+    """Whose name a filing is made under in a base: the project, or — for a
+    simulation, which has none — the factory being simulated."""
+    return run.project_id or run.factory_id
 
 
 def _waiting_detail(kind: str) -> str:

@@ -5,9 +5,14 @@ lives):
 
 - `/data/projects.json` — the machine-local registry, on a named volume,
   never git-tracked.
-- `/workspace/_factories/<project>/<factory>.json` — the factory definition,
-  in the team-owned repo under the workspace. Per-project subdirectory, open
+- `/workspace/_factories/<project>/main.json` — a project's main factory, in
+  the team-owned repo under the workspace. Per-project subdirectory, open
   question 1 answered "per-project now".
+- `/workspace/_factories/_library/<id>.json` — a library factory: a reusable,
+  fully automated block any project can drop in as a factory node. Owned by the
+  workspace rather than by a project (`decisions/0029`), and underscore-prefixed
+  so it can never be mistaken for a project directory — a project id is a
+  `Slug`, which cannot start with one.
 
 Everything a human reads lands in the second one, so it is written to be
 diffed: indented, key order fixed by the model's field order (every write goes
@@ -34,11 +39,19 @@ from typing import Any
 from pydantic import BaseModel, ValidationError
 
 from . import config
-from .models import Factory, FactorySummary, Project, ProjectRegistry, utcnow
+from .models import (
+    Factory,
+    FactorySummary,
+    Project,
+    ProjectRegistry,
+    library_connectors,
+    utcnow,
+)
 from .paths import PathEscape, is_inside_workspace, safe_name, workspace_join
 
 FACTORIES_DIRNAME = "_factories"
 MAIN_FACTORY_ID = "main"
+LIBRARY_DIRNAME = "_library"
 
 
 class StoreError(RuntimeError):
@@ -132,8 +145,15 @@ class Store:
         """
         return workspace_join(FACTORIES_DIRNAME, project_id, root=self._workspace)
 
-    def factory_path(self, project_id: str, factory_id: str) -> Path:
-        directory = self.factories_dir(project_id)
+    def library_dir(self) -> Path:
+        """`/workspace/_factories/_library/`, containment-checked."""
+        return workspace_join(FACTORIES_DIRNAME, LIBRARY_DIRNAME, root=self._workspace)
+
+    def factory_path(self, project_id: str | None, factory_id: str) -> Path:
+        """Where a factory file lives. `project_id=None` is the library."""
+        directory = (
+            self.library_dir() if project_id is None else self.factories_dir(project_id)
+        )
         path = directory / f"{safe_name(factory_id, 'factory id')}.json"
         if not is_inside_workspace(path, self._workspace):
             raise PathEscape("factory path escapes the workspace")
@@ -203,11 +223,9 @@ class Store:
         no use to anyone once the project is gone. So the whole
         `_factories/<project>/` directory goes.
 
-        The exception is a nested factory (stage 6): those are shared surfaces
-        that other projects can point at, so if any factory file other than
-        `main.json` is still in the directory, the directory stays and only the
-        main factory is removed. Deleting one project must never take a factory
-        another project runs.
+        Nothing another project uses lives there. A factory that is shared is a
+        library factory, under `_factories/_library/`, and deleting a project
+        leaves the library alone (`decisions/0029`).
         """
         with self._lock:
             registry = self.load_registry()
@@ -225,23 +243,7 @@ class Store:
         """
         try:
             directory = self.factories_dir(project_id)
-            main = self.factory_path(project_id, MAIN_FACTORY_ID)
         except PathEscape:
-            return
-        try:
-            main.unlink(missing_ok=True)
-        except OSError:
-            return
-        try:
-            shared = [
-                path
-                for path in directory.glob("*.json")
-                if not path.name.startswith(".")
-            ]
-        except OSError:
-            return
-        if shared:
-            # Nested factories live here too and outlive the project.
             return
         try:
             shutil.rmtree(directory)
@@ -303,6 +305,89 @@ class Store:
                 factory.updated_at = utcnow()
             self._write_factory(factory)
             return factory
+
+    # ---- the library -----------------------------------------------------
+
+    def list_library(self) -> list[Factory]:
+        """Every library factory that loads, in id order. A file that does not
+        is skipped here and refused by name when it is opened."""
+        try:
+            directory = self.library_dir()
+        except PathEscape:
+            return []
+        if not directory.is_dir():
+            return []
+        found: list[Factory] = []
+        for path in sorted(directory.glob("*.json")):
+            if path.name.startswith("."):
+                continue
+            try:
+                found.append(self._read_factory(path))
+            except (Corrupt, NotFound):
+                continue
+        return found
+
+    def get_library_factory(self, factory_id: str) -> Factory:
+        path = self.factory_path(None, factory_id)
+        try:
+            return self._read_factory(path)
+        except NotFound:
+            raise NotFound(f"no such factory in the library: {factory_id}") from None
+
+    def create_library_factory(self, factory_id: str, name: str) -> Factory:
+        """A new library factory, holding its six connectors and nothing else.
+
+        The connectors are written by the server rather than drawn by the
+        canvas, so every library file has them from its first byte — a factory
+        missing one is a hand edit, and is refused by name at save time.
+        """
+        factory = Factory(
+            id=factory_id,
+            project_id=None,
+            name=name,
+            nodes=library_connectors(),
+        )
+        return self.create_factory(factory)
+
+    def references(self, factory_id: str) -> list[Project]:
+        """The projects whose main factory has a factory node standing for
+        `factory_id`, in registry order. A main factory that does not load is
+        skipped — it references nothing anyone can run."""
+        found: list[Project] = []
+        for project in self.list_projects():
+            try:
+                main = self.get_factory(project.id, MAIN_FACTORY_ID)
+            except (NotFound, Corrupt, PathEscape):
+                continue
+            if any(
+                node.definition.type == "factory-ref"
+                and node.definition.factory_ref == factory_id
+                for node in main.nodes
+            ):
+                found.append(project)
+        return found
+
+    def delete_library_factory(self, factory_id: str) -> None:
+        """Remove a library factory, unless a project still uses it.
+
+        **Refused while referenced, never cascaded.** Deleting a block out from
+        under a project would leave that project's canvas with a node standing
+        for nothing and a run that is refused for a reason its operator did not
+        cause. The refusal names every project, so the fix is in the sentence.
+        """
+        with self._lock:
+            path = self.factory_path(None, factory_id)
+            if not path.exists():
+                raise NotFound(f"no such factory in the library: {factory_id}")
+            users = self.references(factory_id)
+            if users:
+                names = ", ".join(f"“{project.name}”" for project in users)
+                raise Conflict(
+                    f"{names} still use{'s' if len(users) == 1 else ''} this "
+                    "factory — remove its factory nodes from "
+                    f"{'that project' if len(users) == 1 else 'those projects'} first."
+                )
+            path.unlink()
 
     def _write_factory(self, factory: Factory) -> None:
         path = self.factory_path(factory.project_id, factory.id)

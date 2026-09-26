@@ -71,7 +71,9 @@ class Discardable(Base):
     """A kept run directory an operator may choose to give up."""
 
     run_id: str
-    project_id: str
+    #: `None` only for a simulation, which never keeps a worktree to offer —
+    #: typed to match `Run.project_id` rather than to serve a case that occurs.
+    project_id: str | None = None
     factory_id: str
     factory_name: str = ""
     status: str
@@ -263,9 +265,11 @@ def survey(
     # **Protection is computed before any filter.** A project filter narrows
     # what is offered, never what is safe: the newest resumable run of a factory
     # is spared whether or not this caller was looking at its project.
-    newest: dict[tuple[str, str], Run] = {}
+    newest: dict[tuple[str | None, str], Run] = {}
     for run in runs:
-        if run.status not in HOLDS_A_WORKTREE:
+        # A simulation keeps nothing however it ends (`decisions/0032`), so it
+        # is neither protected nor offered: there is no worktree to give up.
+        if run.status not in HOLDS_A_WORKTREE or run.kind == "simulation":
             continue
         key = (run.project_id, run.factory_id)
         if key not in newest or _when(run) > _when(newest[key]):
@@ -280,6 +284,8 @@ def survey(
 
     for run in runs:
         if run.status not in HOLDS_A_WORKTREE or not run.is_terminal:
+            continue
+        if run.kind == "simulation":
             continue
         if project_id is not None and run.project_id != project_id:
             continue

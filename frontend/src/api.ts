@@ -16,6 +16,7 @@ import type {
   KnowledgeEntryText,
   MemoryDocument,
   KnowledgeBaseSummary,
+  LibraryFactorySummary,
   LoginState,
   Project,
   NodeEventPage,
@@ -160,9 +161,8 @@ export const api = {
       body: JSON.stringify({ name, codebase_ids: codebaseIds }),
     }),
   project: (id: string) => request<Project>(`/api/projects/${id}`),
-  /** Unregisters the project and deletes its `_factories/<project>/` directory,
-      sparing any nested factory shared with another project — that is the
-      server's call, and the confirmation says so. */
+  /** Unregisters the project and deletes its `_factories/<project>/` directory.
+      Library factories it used are the workspace's and stay. */
   deleteProject: (id: string) =>
     request<void>(`/api/projects/${id}`, { method: "DELETE" }),
   /** Sparse: an omitted key means *unchanged*. `settings` is the exception and
@@ -185,6 +185,31 @@ export const api = {
     request<Factory>(`/api/projects/${projectId}/factories/${factoryId}`, {
       method: "PUT",
       body: JSON.stringify(graph),
+    }),
+
+  /* The factory library: reusable, fully automated blocks a project drops in
+     as a factory node (`decisions/0029`). Saved whole, like a main factory. */
+  library: () => request<LibraryFactorySummary[]>("/api/factories"),
+  createLibraryFactory: (name: string) =>
+    request<Factory>("/api/factories", {
+      method: "POST",
+      body: JSON.stringify({ name }),
+    }),
+  libraryFactory: (id: string) =>
+    request<Factory>(`/api/factories/${encodeURIComponent(id)}`),
+  saveLibraryFactory: (id: string, graph: GraphWrite) =>
+    request<Factory>(`/api/factories/${encodeURIComponent(id)}`, {
+      method: "PUT",
+      body: JSON.stringify(graph),
+    }),
+  /** Refused with a sentence naming the projects while any uses it. */
+  deleteLibraryFactory: (id: string) =>
+    request<void>(`/api/factories/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  /** Starts a simulation, which then waits for its input like any run. */
+  startSimulation: (factoryId: string, codebaseId: string) =>
+    request<Run>(`/api/factories/${encodeURIComponent(factoryId)}/simulations`, {
+      method: "POST",
+      body: JSON.stringify({ codebase_id: codebaseId }),
     }),
 
   /* The settings surface. Sign-in is polled rather than streamed: SSE is

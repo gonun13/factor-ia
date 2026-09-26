@@ -57,6 +57,13 @@ kinds do:
   (`worktree.RunWorkspaces.cleanup`), so a discard run that **fails** still
   keeps its worktree for the post-mortem like any other failed run.
 
+**A simulation ends at a discard too**, and leaves even less: its worktree is a
+**detached** checkout (`gitwork.add_detached_worktree`), so no branch is ever
+made, and it is removed however the simulation ends
+([`../decisions/0032`](../decisions/0032-a-simulation-leaves-nothing-behind.md)).
+Since nothing here deletes a ref, not making one is the only way a discarded run
+leaves no branch behind.
+
 ### What it leaves behind, and why
 
 **An empty branch, at the commit it was cut from.** `git worktree add -b` made

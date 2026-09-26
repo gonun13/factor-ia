@@ -25,7 +25,7 @@ When specs disagree, respect them in this order (higher wins on conflict):
 | `spec/architecture.md` | Structure, components, boundaries, the API, storage, the adapter seam, the stack, and the security requirements. |
 | `spec/ui-ux.md` | The canvas, the run experience, settings, and the copy rules. |
 | `spec/data.md` | Contracts, file formats, persistence, concurrency. |
-| `spec/behaviour/` | One file per system: `run-execution`, `review-loops`, `git-output`, `human-nodes`, `knowledge`, `memory`. |
+| `spec/behaviour/` | One file per system: `run-execution`, `review-loops`, `git-output`, `human-nodes`, `knowledge`, `memory`, `factories`. |
 | `spec/decisions/` | Numbered records for choices that outlive their diff. Read `decisions/README.md` before adding one. |
 | `spec/tests.md` | How this project is verified, and what acceptance means. |
 

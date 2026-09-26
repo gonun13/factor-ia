@@ -8,10 +8,10 @@ Shapes only what stages 1-3 need, but in the shape the rest of `DESIGN.md`
   merges in over SSE. Keeping the split in the type — rather than promising to
   add it later — is what makes "building and operating are the same surface"
   mechanical instead of a matter of discipline.
-- **Five node types from day one.** `human` and `factory-ref` have no UI and no
-  execution, but nesting has to be accommodated in the model now
-  (`DESIGN.md`, MVP scope / Later), and a type union widened later is a file
-  format change.
+- **`factory-ref` from day one.** It had no UI and no execution for a long
+  time, but nesting had to be accommodated in the model early (`DESIGN.md`, MVP
+  scope / Later), and a type union widened later is a file format change. It
+  is now a factory node standing for a library factory (`expand.py`).
 - **Freeform edge payloads** (open question 4, "start freeform"), behind a
   small object rather than a bare string so a typed payload is an added field
   and not a changed one.
@@ -47,11 +47,30 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 SCHEMA_VERSION = 1
 
 NodeType = Literal[
-    "input", "agent", "output", "human", "memory", "knowledge", "factory-ref"
+    "input",
+    "agent",
+    "output",
+    "human",
+    "memory",
+    "knowledge",
+    "factory-ref",
+    "entry",
+    "exit",
 ]
-"""`input`/`agent`/`output`/`human`/`memory`/`knowledge` are live.
-`factory-ref` exists in the union with no UI and no execution support — see
-module docstring.
+"""Every member is live.
+
+`factory-ref` is a **factory node**: it stands for a factory from the workspace
+library (`NodeDefinition.factory_ref`) and is expanded into that factory's
+nodes when a run starts (`expand.py`, `decisions/0030`). Nothing executes a
+`factory-ref` itself — the walk never sees one.
+
+`entry` and `exit` are a library factory's **connectors**, three of each, told
+apart by `ConnectorKind` in `config["kind"]` (`decisions/0031`). They are nodes
+rather than handles so that whether an edge is a wire and whether a belt closes
+a loop stay questions about *what an edge touches*, which the server answers
+from the drawing without ever reading `Edge.target_handle` (`decisions/0012`).
+The belt connectors survive expansion as pass-through machines, which is what
+lets a run record say what arrived at each one; the memory connectors do not.
 
 `memory` and `knowledge` are the two members added since this file was written,
 and both are members rather than kinds for the reason the kind vocabularies
@@ -158,6 +177,27 @@ format change rather than a config key.
 an agent node written before this existed has no `kind`, and what it has always
 done is work.
 """
+
+ConnectorKind = Literal["store", "forward", "loop"]
+"""Which of a library factory's three ways in — or three ways out — a connector
+is.
+
+The vocabulary of the entry handles an agent node already draws
+(`decisions/0012`), because a factory node *is* entered the same three ways:
+
+- `store` — storage wired in (an `entry`) or out (an `exit`). The canvas calls it
+  **memory**. A connector of this kind is **attached**, like a memory node: an
+  edge touching it is a wire (`is_attached`), and expansion collapses it into
+  the wires it stands for rather than keeping it on the line.
+- `forward` — the belt running down the line. The canvas calls it **input**. An
+  `exit` of this kind is the factory node's `success` port.
+- `loop` — a judge's `fail` belt. The canvas calls it **loopback**. An `entry`
+  of this kind takes work a judge outside the factory sent back; an `exit` of
+  this kind is the factory node's `fail` port, fed by a judge inside.
+"""
+
+CONNECTOR_KINDS: frozenset[str] = frozenset({"store", "forward", "loop"})
+CONNECTOR_TYPES: frozenset[str] = frozenset({"entry", "exit"})
 
 DEFAULT_INPUT_KIND: InputKind = "request"
 DEFAULT_OUTPUT_KIND: OutputKind = "commit"
@@ -490,16 +530,17 @@ class NodeDefinition(Base):
     type: NodeType
     label: str = ""
     position: Position = Field(default_factory=Position)
-    # The agent's workspace requirement, by discovered codebase id. Only
-    # meaningful on `agent` nodes; an agent without one is invalid to *run*
-    # (stage 3 blocks it) but perfectly valid to save while still drawing.
+    # The agent's workspace requirement, by discovered codebase id. Meaningful
+    # on `agent` nodes and on `factory-ref` nodes — a factory node's codebase is
+    # handed to every agent inside it, which carry none of their own. Either
+    # without one is invalid to *run* but perfectly valid to save while drawing.
     codebase_id: str | None = None
     # Per-type settings — model override, prompt template, output branch
     # prefix. Freeform while the node types are still moving; each type earns
     # its own model once stage 5 has opinions about it.
     config: dict[str, Any] = Field(default_factory=dict)
-    # Set on `factory-ref` nodes: the factory this node stands for. Unused by
-    # the MVP, present so nesting is a UI change rather than a format change.
+    # Set on `factory-ref` nodes: the id of the library factory this node
+    # stands for (`/workspace/_factories/_library/<id>.json`).
     factory_ref: str | None = None
 
 
@@ -554,6 +595,11 @@ def has_outcome_ports(node_or_definition: "Node | NodeDefinition") -> bool:
         return True
     if definition.type == "agent":
         return node_kind(definition) == "reviewer"
+    if definition.type == "factory-ref":
+        # `success` is the factory's input exit and `fail` its loopback exit.
+        # Asked of the project graph only — expansion replaces the node with
+        # the connectors those ports stand for before anything walks it.
+        return True
     return False
 
 
@@ -715,6 +761,23 @@ class Edge(Base):
 ATTACHED_TYPES: frozenset[str] = frozenset({"memory", "knowledge"})
 
 
+def is_attached(node: "Node") -> bool:
+    """Whether this node is attached to the line rather than standing on it.
+
+    Every `ATTACHED_TYPES` node, and a library factory's **memory connectors**
+    (`ConnectorKind` `store`): an entry that hands a machine the storage wired
+    into the factory, and an exit that files a machine's answer into the storage
+    wired out of it. Both are storage by what they stand for, so an edge
+    touching one is a wire — still a fact about what the edge touches, which is
+    the one reading nobody can disagree with. The belt connectors are not
+    attached; they stand on the line.
+    """
+    kind = node.definition.type
+    if kind in ATTACHED_TYPES:
+        return True
+    return kind in CONNECTOR_TYPES and node_kind(node) == "store"
+
+
 def is_wire(edge: "Edge", by_id: dict[str, "Node"]) -> bool:
     """Whether this edge attaches storage rather than carrying the line.
 
@@ -724,7 +787,7 @@ def is_wire(edge: "Edge", by_id: dict[str, "Node"]) -> bool:
     """
     for node_id in (edge.source, edge.target):
         node = by_id.get(node_id)
-        if node is not None and node.definition.type in ATTACHED_TYPES:
+        if node is not None and is_attached(node):
             return True
     return False
 
@@ -750,10 +813,13 @@ def split_edges(
 
 
 class Port(Base):
-    """A factory's declared input or output.
+    """A factory's declared input or output — **not used, and not planned to be**.
 
-    Empty in the MVP. It is what a `factory-ref` node's handles are derived
-    from, so the field has to exist before nesting does.
+    Written when a factory node's handles were expected to be derived from
+    typed, named ports. They are not: every library factory has the same six
+    connectors (`ConnectorKind`), and a factory node's handles are those
+    (`decisions/0031`). Kept only so a file carrying `inputs`/`outputs` still
+    loads; both lists are always empty.
     """
 
     name: str
@@ -761,11 +827,17 @@ class Port(Base):
 
 
 class Factory(Base):
-    """A named subgraph. One per file under `/workspace/_factories/<project>/`."""
+    """A named graph. A project's **main factory** lives at
+    `/workspace/_factories/<project>/main.json`; a **library factory** — a
+    reusable, fully automated block a project drops in as a factory node — at
+    `/workspace/_factories/_library/<id>.json`, with `project_id` null
+    (`decisions/0029`)."""
 
     schema_version: int = SCHEMA_VERSION
     id: Slug
-    project_id: Slug
+    #: `None` for a library factory, which belongs to the workspace rather than
+    #: to any project.
+    project_id: Slug | None = None
     name: str
     inputs: list[Port] = Field(default_factory=list)
     outputs: list[Port] = Field(default_factory=list)
@@ -777,11 +849,93 @@ class Factory(Base):
 
 class FactorySummary(Base):
     id: Slug
-    project_id: Slug
+    project_id: Slug | None = None
     name: str
     node_count: int
     edge_count: int
     updated_at: datetime
+
+
+#: A library factory's connectors, as `(type, kind, label)`, in the order a new
+#: factory is created with them. Their ids are `<type>-<kind>`, so a flat run
+#: graph reads `<factory node>.entry-forward` and a simulation's runtimes land
+#: on the connector the editor drew.
+CONNECTORS: tuple[tuple[str, str, str], ...] = (
+    ("entry", "store", "Memory in"),
+    ("entry", "forward", "Input in"),
+    ("entry", "loop", "Loopback in"),
+    ("exit", "store", "Memory out"),
+    ("exit", "forward", "Input out"),
+    ("exit", "loop", "Loopback out"),
+)
+
+
+def connector_id(type_: str, kind: str) -> str:
+    return f"{type_}-{kind}"
+
+
+def library_connectors() -> list[Node]:
+    """The six connector nodes every new library factory starts with.
+
+    Entries down the left, exits down the right, in the order the canvas draws a
+    machine's entries (store, forward, loop).
+    """
+    nodes: list[Node] = []
+    for type_, kind, label in CONNECTORS:
+        row = ("store", "forward", "loop").index(kind)
+        nodes.append(
+            Node(
+                id=connector_id(type_, kind),
+                definition=NodeDefinition(
+                    type=type_,  # type: ignore[arg-type]
+                    label=label,
+                    position=Position(
+                        x=0.0 if type_ == "entry" else 900.0, y=80.0 + row * 160.0
+                    ),
+                    config={"kind": kind},
+                ),
+            )
+        )
+    return nodes
+
+
+def connector_of(nodes: list[Node], type_: str, kind: str) -> Node | None:
+    """The connector of this type and kind, found by what it is, not by id."""
+    for node in nodes:
+        if node.definition.type == type_ and node_kind(node) == kind:
+            return node
+    return None
+
+
+class FactoryPorts(Base):
+    """Which of a library factory's optional ways in and out it actually uses.
+
+    What a factory node on a project canvas needs to know about the factory it
+    stands for without opening it: whether a loop may come back into it, whether
+    it can fail out, and whether storage wired to it would reach anything. The
+    input entry and input exit are not here — every usable factory has both.
+    """
+
+    #: `entry-loop` feeds a machine: a judge outside may send work back in.
+    loop_in: bool = False
+    #: A judge inside feeds `exit-loop`: the factory can fail out.
+    fail_out: bool = False
+    #: `entry-store` feeds a machine: storage wired in is read.
+    reads: bool = False
+    #: A machine feeds `exit-store`: storage wired out is written.
+    writes: bool = False
+
+
+class LibraryFactorySummary(FactorySummary):
+    """A library factory as the main page and a project canvas list it."""
+
+    ports: FactoryPorts = Field(default_factory=FactoryPorts)
+    #: Why this factory cannot be used yet, from `expand.body_problems` —
+    #: structural only, so listing the library never shells out to git.
+    problems: list[str] = Field(default_factory=list)
+    #: The projects whose main factory has a factory node standing for this
+    #: one. Deleting the factory is refused while this is not empty.
+    used_by: list[str] = Field(default_factory=list)
 
 
 #: The levels the Claude CLI's handshake reports in `supportedEffortLevels`.
@@ -886,6 +1040,14 @@ class FactoryCreate(Base):
     id: Slug | None = None
 
 
+class SimulationStart(Base):
+    """What Simulate asks for before the input: the codebase every agent in the
+    factory works in for this one simulation (a factory node in a project names
+    its own)."""
+
+    codebase_id: str = Field(min_length=1, max_length=200)
+
+
 class GraphWrite(Base):
     """A whole-graph save: exactly what the canvas holds, nothing else.
 
@@ -987,6 +1149,12 @@ class NodeRun(Base):
     #: Never reset, including when an outer loop un-settles this node — which is
     #: what makes `_walk`'s termination argument a bound rather than a hope.
     lap: int = 0
+    #: The factory node this machine ran inside, when it came from a library
+    #: factory (`expand.py`). Its `node_id` is then `<within>.<inner id>`, but
+    #: a reader asks this field rather than parsing the dot — a node id in a
+    #: hand-edited file may contain one. `None` for a machine the project drew,
+    #: and for every machine of a simulation, whose ids are the factory's own.
+    within: str | None = None
 
 
 class RunWorktree(Base):
@@ -1069,14 +1237,33 @@ class RunMemory(Base):
     kept: bool = False
 
 
+RunKind = Literal["run", "simulation"]
+"""What a run is for.
+
+- `run` — a project's main factory, walked with every factory node expanded.
+  Commits, pushes, keeps a worktree when it stops — everything `spec/` says a run
+  does.
+- `simulation` — one library factory walked on its own, fed a sentence and
+  watched, from the factory editor's Simulate button. It works in a **detached**
+  worktree, so it never creates a branch; its worktree is removed however it
+  ends; and it cannot be resumed (`decisions/0032`). Recorded rather than
+  inferred from `project_id`, because the two differ in what they are allowed
+  to leave behind, and that is not a question to answer from an absence.
+"""
+
+
 class Run(Base):
     """One execution of a factory. `/data/runs/<run_id>/run.json`."""
 
     schema_version: int = SCHEMA_VERSION
     id: str
-    project_id: Slug
+    #: `None` for a simulation, which runs a library factory with no project.
+    project_id: Slug | None = None
     factory_id: Slug
     factory_name: str = ""
+    #: Additive: a `run.json` written before simulations existed loads as `run`,
+    #: which is what it was.
+    kind: RunKind = "run"
     status: RunStatus = "pending"
     detail: str | None = None
     #: The one-shot request (open question 2). `None` until it is submitted.

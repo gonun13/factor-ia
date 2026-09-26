@@ -135,11 +135,16 @@ direction when asked to build it.
   by scanning `/workspace` for git repos, never typed in as host paths.
 - **One project, one main factory, one attached codebase.** The data model
   allows many of each; the UI attaches one.
-- **Six live node types** — `input`, `agent`, `output`, `human`, `memory`,
-  `knowledge` — plus `factory-ref`, which is in the type union with no UI and no
-  execution so that nesting is a later UI change rather than a file-format
-  change. Four of the six vary by a **kind** carried in the node's freeform
-  `config` rather than by a type of its own: see [`domain.md`](domain.md).
+- **Nine node types** — `input`, `agent`, `output`, `human`, `memory`,
+  `knowledge`, the **factory node** `factory-ref`, and a library factory's two
+  connector types, `entry` and `exit`. Six of them vary by a **kind** carried in
+  the node's freeform `config` rather than by a type of its own: see
+  [`domain.md`](domain.md).
+- **A factory library.** Reusable, fully automated blocks — agents and storage
+  between three ways in and three ways out — listed on the main page after the
+  projects, built on the same canvas with Simulate in place of Run, and dropped
+  onto any project's line as one factory node. See
+  [`behaviour/factories.md`](behaviour/factories.md).
 - **A factory starts with an input and ends with an output**, and needs at least
   one of each. Stated as two rules about the ends of the line — every node with
   no incoming belt is an input, every node with no outgoing belt is an output —
@@ -194,8 +199,14 @@ behind it, roughly in the order the design anticipates them. Struck-through
 entries were on this list and have since shipped; they are kept because the
 notes under them record how the thing was actually settled.
 
-- **Nested factories** — a factory as a node inside another factory. The data
-  model accommodates this from day one (see below) even though the UI won't.
+- ~~**Nested factories**~~ — *done, as factories.* Settled one level deep and
+  shared rather than per project: a **library factory** is a reusable, fully
+  automated block owned by the workspace, built on the same canvas and listed
+  after the projects, and a project's main factory uses one as a **factory
+  node** with three ways in and three ways out. A factory node runs by expansion
+  into the project's one run, and a library factory on its own is simulated,
+  keeping nothing ([`behaviour/factories.md`](behaviour/factories.md),
+  `decisions/0029`–`0032`). Factories do not contain factories.
 - **Multiple codebases per project.**
 - ~~**Human-in-the-middle nodes**~~ — *done (stage 8, extended in stage 10).* A
   `human` node stops the line and routes on approve/reject. Its second kind,

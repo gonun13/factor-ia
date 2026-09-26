@@ -454,8 +454,8 @@ def test_editing_the_project_mid_run_does_not_rewrite_the_record(
 def test_a_run_whose_project_was_unregistered_still_starts(
     orch: Orchestrator, factory: Factory, test_store: Store
 ) -> None:
-    """A factory file can outlive its registry entry — a nested factory shared
-    from a project someone deleted, or a registry restored from a backup.
+    """A factory file can outlive its registry entry — a delete whose file
+    removal failed, or a registry restored from a backup.
 
     Running one of those is not the moment to start failing — it simply has no
     project defaults to inherit.

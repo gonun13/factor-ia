@@ -1,4 +1,5 @@
-"""The REST surface: projects, factories, nodes, edges, codebase discovery.
+"""The REST surface: projects, factories, the factory library, nodes, edges,
+codebase discovery.
 
 **Shape:** the canvas is the client, and a canvas loads one factory whole and
 saves it whole. React Flow holds the entire graph in memory, applies node
@@ -29,6 +30,9 @@ from fastapi import APIRouter, Depends, HTTPException, Response, status
 from . import gitwork
 from .discovery import discover_codebases, find_codebase
 from .models import (
+    CONNECTOR_KINDS,
+    CONNECTOR_TYPES,
+    CONNECTORS,
     Codebase,
     CodebaseGit,
     Edge,
@@ -37,6 +41,7 @@ from .models import (
     FactoryCreate,
     FactorySummary,
     GraphWrite,
+    LibraryFactorySummary,
     Node,
     NodeCreate,
     NodeUpdate,
@@ -65,12 +70,12 @@ StoreDep = Depends(store_dep)
 _SLUG_STRIP = re.compile(r"[^a-z0-9]+")
 
 
-def slugify(name: str) -> str:
+def slugify(name: str, prefix: str = "project") -> str:
     slug = _SLUG_STRIP.sub("-", name.strip().lower()).strip("-")[:64].strip("-")
     if not slug or not slug[0].isalnum():
         # Names are free text and may be entirely non-ASCII; the id has to stay
         # a filesystem-safe segment, so fall back rather than fail the create.
-        slug = f"project-{uuid.uuid4().hex[:8]}"
+        slug = f"{prefix}-{uuid.uuid4().hex[:8]}"
     return slug
 
 
@@ -109,9 +114,12 @@ def validate_graph(nodes: list[Node], edges: list[Edge]) -> list[str]:
             problems.append(f"duplicate node id: {node.id}")
         seen.add(node.id)
         definition = node.definition
-        if definition.codebase_id is not None and definition.type != "agent":
+        if definition.codebase_id is not None and definition.type not in (
+            "agent",
+            "factory-ref",
+        ):
             problems.append(
-                f"node {node.id}: only agent nodes carry a codebase attachment"
+                f"node {node.id}: only agent and factory nodes carry a codebase attachment"
             )
         if definition.factory_ref is not None and definition.type != "factory-ref":
             problems.append(f"node {node.id}: only factory-ref nodes carry a factory_ref")
@@ -140,8 +148,79 @@ def validate_graph(nodes: list[Node], edges: list[Edge]) -> list[str]:
     return problems
 
 
-def _reject_invalid(nodes: list[Node], edges: list[Edge]) -> None:
+def validate_project_graph(nodes: list[Node], edges: list[Edge]) -> list[str]:
+    """`validate_graph`, plus what a project's main factory may not hold.
+
+    **No connectors.** A connector is a library factory's way in or out, and a
+    main factory has neither — its ways in are input nodes and its ways out are
+    output nodes. One on a project canvas could only have been pasted there.
+    """
     problems = validate_graph(nodes, edges)
+    for node in nodes:
+        if node.definition.type in CONNECTOR_TYPES:
+            problems.append(
+                f"node {node.id}: a {node.definition.type} connector belongs to a "
+                "library factory, not to a project"
+            )
+    return problems
+
+
+#: What a library factory may not contain, and why, in the operator's words.
+_NOT_IN_A_FACTORY: dict[str, str] = {
+    "input": "a factory is fed through its input entry, not an input node",
+    "output": "a factory hands its work on through its input exit, not an output node",
+    "human": "a factory is fully automated — a person belongs on the project's line",
+    "factory-ref": "a factory cannot contain another factory",
+}
+
+
+def validate_library_graph(nodes: list[Node], edges: list[Edge]) -> list[str]:
+    """`validate_graph`, plus the shape every library factory file must have.
+
+    Refused at save time, unlike the wiring rules (`expand.body_problems`),
+    because these describe a file that could not be *loaded back as a factory*:
+    a factory missing its input entry has no way in at all, and a factory
+    holding an input node would ask a person for something in the middle of
+    somebody else's run. A half-drawn factory still saves; a malformed one
+    does not.
+    """
+    problems = validate_graph(nodes, edges)
+    for node in nodes:
+        why = _NOT_IN_A_FACTORY.get(node.definition.type)
+        if why:
+            problems.append(f"node {node.id}: {why}")
+        if node.definition.codebase_id is not None:
+            problems.append(
+                f"node {node.id}: a machine inside a factory carries no codebase — "
+                "it works in the one its factory node names"
+            )
+    for type_, kind, label in CONNECTORS:
+        matching = [
+            node
+            for node in nodes
+            if node.definition.type == type_
+            and str(node.definition.config.get("kind") or "") == kind
+        ]
+        if not matching:
+            problems.append(f"the factory is missing its “{label}” connector")
+        elif len(matching) > 1:
+            problems.append(f"the factory has {len(matching)} “{label}” connectors — keep one")
+    for node in nodes:
+        kind = str(node.definition.config.get("kind") or "")
+        if node.definition.type in CONNECTOR_TYPES and kind not in CONNECTOR_KINDS:
+            problems.append(
+                f"node {node.id}: a connector of kind {kind!r} is not one this "
+                f"version knows ({', '.join(sorted(CONNECTOR_KINDS))})"
+            )
+    return problems
+
+
+def _reject_invalid(nodes: list[Node], edges: list[Edge], *, library: bool = False) -> None:
+    problems = (
+        validate_library_graph(nodes, edges)
+        if library
+        else validate_project_graph(nodes, edges)
+    )
     if problems:
         raise HTTPException(UNPROCESSABLE, problems)
 
@@ -256,9 +335,8 @@ def update_project(
 @router.delete("/projects/{project_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_project(project_id: str, store: Store = StoreDep) -> Response:
     """Unregisters the project and deletes its `_factories/<project>/` directory
-    — main factory and memory both belong to the project. A nested factory
-    (stage 6) can be shared with other projects, so if one is in there, it and
-    the directory stay and only the main factory goes."""
+    — main factory and memory both belong to the project. Library factories the
+    project used are the workspace's and stay (`decisions/0029`)."""
     try:
         store.delete_project(project_id)
     except Exception as exc:
@@ -274,28 +352,6 @@ def list_factories(project_id: str, store: Store = StoreDep) -> list[FactorySumm
     try:
         store.get_project(project_id)
         return store.list_factories(project_id)
-    except Exception as exc:
-        raise _translate(exc) from exc
-
-
-@router.post(
-    "/projects/{project_id}/factories",
-    response_model=Factory,
-    status_code=status.HTTP_201_CREATED,
-)
-def create_factory(
-    project_id: str, body: FactoryCreate, store: Store = StoreDep
-) -> Factory:
-    """Nested factories have no UI yet; the endpoint exists because a factory is
-    a file and the model already allows more than one per project."""
-    try:
-        store.get_project(project_id)
-        factory = Factory(
-            id=body.id or slugify(body.name),
-            project_id=project_id,
-            name=body.name,
-        )
-        return store.create_factory(factory)
     except Exception as exc:
         raise _translate(exc) from exc
 
@@ -331,6 +387,98 @@ def put_factory(
         return store.save_factory(factory)
     except Exception as exc:
         raise _translate(exc) from exc
+
+
+# ---- the factory library ---------------------------------------------------
+#
+# Reusable, fully automated blocks: agents and storage between six connectors,
+# owned by the workspace, dropped into any project as a factory node
+# (`decisions/0029`). Saved whole, like a main factory, through the same store.
+
+
+def _library_summary(factory: Factory, used_by: list[str]) -> LibraryFactorySummary:
+    from . import expand
+
+    return LibraryFactorySummary(
+        id=factory.id,
+        project_id=None,
+        name=factory.name,
+        node_count=len(factory.nodes),
+        edge_count=len(factory.edges),
+        updated_at=factory.updated_at,
+        ports=expand.factory_ports(factory),
+        problems=expand.body_problems(factory),
+        used_by=used_by,
+    )
+
+
+@router.get("/factories", response_model=list[LibraryFactorySummary])
+def list_library(store: Store = StoreDep) -> list[LibraryFactorySummary]:
+    """Every library factory, with what a factory node needs to draw it."""
+    try:
+        library = store.list_library()
+        users: dict[str, list[str]] = {}
+        for project in store.list_projects():
+            try:
+                main = store.get_factory(project.id, "main")
+            except (NotFound, Corrupt, PathEscape):
+                continue
+            for node in main.nodes:
+                ref = node.definition.factory_ref
+                if node.definition.type == "factory-ref" and ref:
+                    named = users.setdefault(ref, [])
+                    if project.id not in named:
+                        named.append(project.id)
+        return [_library_summary(factory, users.get(factory.id, [])) for factory in library]
+    except Exception as exc:
+        raise _translate(exc) from exc
+
+
+@router.post("/factories", response_model=Factory, status_code=status.HTTP_201_CREATED)
+def create_library_factory(body: FactoryCreate, store: Store = StoreDep) -> Factory:
+    """A new library factory, holding its six connectors and nothing else."""
+    try:
+        return store.create_library_factory(body.id or slugify(body.name, "factory"), body.name)
+    except Exception as exc:
+        raise _translate(exc) from exc
+
+
+@router.get("/factories/{factory_id}", response_model=Factory)
+def get_library_factory(factory_id: str, store: Store = StoreDep) -> Factory:
+    try:
+        return store.get_library_factory(factory_id)
+    except Exception as exc:
+        raise _translate(exc) from exc
+
+
+@router.put("/factories/{factory_id}", response_model=Factory)
+def put_library_factory(
+    factory_id: str, body: GraphWrite, store: Store = StoreDep
+) -> Factory:
+    """The whole graph, as `put_factory`, under the library's save rules."""
+    try:
+        factory = store.get_library_factory(factory_id)
+    except Exception as exc:
+        raise _translate(exc) from exc
+    _reject_invalid(body.nodes, body.edges, library=True)
+    if body.name is not None:
+        factory.name = body.name
+    factory.nodes = body.nodes
+    factory.edges = body.edges
+    try:
+        return store.save_factory(factory)
+    except Exception as exc:
+        raise _translate(exc) from exc
+
+
+@router.delete("/factories/{factory_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_library_factory(factory_id: str, store: Store = StoreDep) -> Response:
+    """Refused with `409` and the projects' names while any project uses it."""
+    try:
+        store.delete_library_factory(factory_id)
+    except Exception as exc:
+        raise _translate(exc) from exc
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 # ---- nodes and edges -------------------------------------------------------

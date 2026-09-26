@@ -3,7 +3,8 @@ import { nodeKind, type FlowNode } from "../graph";
 import { NO_OFFER, providerInForce, useCanvas } from "../canvasContext";
 import { useHoverNote } from "./NodeNote";
 import { NodeShell } from "./NodeShell";
-import { CodebaseGlyph, ModelGlyph, SkillGlyph } from "./Glyphs";
+import { CodebasePlate } from "./CodebasePlate";
+import { ModelGlyph, SkillGlyph } from "./Glyphs";
 
 /**
  * The machine. Its one required setting is the codebase, and the codebase is
@@ -39,23 +40,9 @@ import { CodebaseGlyph, ModelGlyph, SkillGlyph } from "./Glyphs";
  * plate when there is a reason to set it per node.
  */
 export function AgentNode({ id, data }: NodeProps<FlowNode>) {
-  const {
-    codebases,
-    gitStates,
-    patch,
-    providers,
-    containerProvider,
-    projectSettings,
-    skills,
-  } = useCanvas();
+  const { patch, providers, containerProvider, projectSettings, skills, mode } = useCanvas();
   const kind = nodeKind(data.definition);
   const attachedId = data.definition.codebase_id;
-  const attached = codebases.find((codebase) => codebase.id === attachedId);
-  const missing = attachedId !== null && attached === undefined;
-  const git = attachedId ? gitStates[attachedId] : undefined;
-  // Git's answer where there is one, the workspace's otherwise — a checkout
-  // someone switched under you is exactly what this line is here to show.
-  const branch = attached ? (git?.branch ?? attached.branch) : null;
   const nodeModel = (data.definition.config.model as string | undefined) ?? "";
   // The provider that will actually drive *this* machine, and what it offers.
   // Not the CLI's list: a node a fake runs is offered five Claude ids it will
@@ -131,76 +118,17 @@ export function AgentNode({ id, data }: NodeProps<FlowNode>) {
           </p>
         ) : (
           <p>
-            Does the work, in its own worktree on the attached codebase. One
-            way out: whatever it produces goes on down the line.
+            {mode === "factory"
+              ? "Does the work, in the codebase its factory node names. One way out: whatever it produces goes on down the line."
+              : "Does the work, in its own worktree on the attached codebase. One way out: whatever it produces goes on down the line."}
           </p>
         )
       }
     >
-      <div className={`slot${attachedId ? "" : " empty"}`}>
-        <span className="slot-head">
-          <CodebaseGlyph />
-          codebase · required
-        </span>
-        <select
-          className="nodrag nowheel"
-          value={attachedId ?? ""}
-          aria-label="attached codebase"
-          onChange={(event) =>
-            patch(id, { codebase_id: event.target.value || null })
-          }
-        >
-          <option value="">— none attached —</option>
-          {missing && (
-            <option value={attachedId}>{attachedId} (not in workspace)</option>
-          )}
-          {codebases.map((codebase) => (
-            <option key={codebase.id} value={codebase.id}>
-              {codebase.name}
-            </option>
-          ))}
-        </select>
-        {/* **Branch and state, on one line.** Where the checkout sits on the
-            host is the picker's business — the plate already names the
-            codebase, and a path repeated under every agent attached to it is a
-            line of noise that answers a question nobody asks of a machine.
-            What is worth the room is what changes under you, and the two
-            halves of that are one fact: `main · clean` reads as the state of a
-            branch, where a branch stacked above a status read as two.
-
-            DESIGN.md accepts host-side git activity during a run as its
-            residual risk and names visibility as the mitigation — so this sits
-            on the node that owns it, not in a status bar somewhere else.
-
-            **And nothing else.** The plate is the codebase's answer to "which
-            checkout, in what state", and that is a two-word answer. What a run
-            did to it — the worktree it cut, the branch it worked on, the commit
-            it left — belongs to the run, and the run panel is where a run is
-            read; the file names behind a dirty count belong there too. A
-            machine that grows a line every time something happens stops being
-            readable at a glance, which is the only thing a canvas is for. */}
-        {(branch || git) && (
-          <span className="branch-state">
-            {branch && <span className="branch mono">{branch}</span>}
-            {branch && git && (
-              <span className="branch-sep" aria-hidden="true">
-                ·
-              </span>
-            )}
-            {git && (
-              <span className={`gitstate${git.dirty ? " dirty" : ""}`}>
-                {!git.is_repo
-                  ? git.detail || "not a git repository"
-                  : git.dirty
-                    ? `${git.change_count} uncommitted change${
-                        git.change_count === 1 ? "" : "s"
-                      }`
-                    : "clean"}
-              </span>
-            )}
-          </span>
-        )}
-      </div>
+      {/* A machine inside a library factory carries no codebase: it works in
+          the one its factory node names, or the one a simulation is started
+          in. So on a factory canvas there is no plate to fill. */}
+      {mode === "project" && <CodebasePlate id={id} attachedId={attachedId} />}
 
       {/* Never `.empty`. An unset model is the normal, correct state — it means
           "inherit" — unlike an unattached codebase, which is a hole. */}

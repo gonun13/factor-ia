@@ -48,7 +48,7 @@ Two rules follow from the volumes and are easy to break by accident:
 
 ```
 /workspace/_factories/<project>/main.json           # the main factory — shared via git
-/workspace/_factories/<project>/<name>.json         # nested factories          (not built)
+/workspace/_factories/_library/<id>.json            # library factories — shared via git
 /workspace/_skills/<name>.md                        # standing instructions — shared via git
 /workspace/_knowledge/<id>/manifest.md              # a knowledge base — the long-term memory
 /workspace/_knowledge/<id>/**/*.md                  # its content
@@ -89,8 +89,17 @@ ever receives the commits a run produces.
 
 ### The factory file
 
-`/workspace/_factories/<project>/main.json`, and the most contract-bound file in
-the system, because it is the one a human reads in a diff.
+`/workspace/_factories/<project>/main.json` — and, for a library factory,
+`/workspace/_factories/_library/<id>.json` with `project_id: null`
+([`decisions/0029`](decisions/0029-factories-are-a-workspace-library.md)). The
+most contract-bound files in the system, because they are the ones a human reads
+in a diff. `_library` can never be a project's directory: a project id is a
+`Slug`, which cannot start with an underscore.
+
+A library factory's file holds its six connector nodes (`entry`/`exit`, ids
+`<type>-<kind>`) from its first write. Its `inputs` and `outputs` — the typed
+ports the file format carried for nesting — are always empty; a factory node's
+handles are the connectors ([`decisions/0031`](decisions/0031-connectors-are-nodes.md)).
 
 - **`schema_version: 1`** from the first write, in both file kinds.
 - **Key order is the model's field order, not alphabetical**, with a test
@@ -152,6 +161,19 @@ the node's `kind`, `label` and `prompt` at the moment the run was created,
 because the factory file is editable while a run is in flight and a second tab
 watching the run has no canvas to read them off.
 
+**It describes the graph that ran**, which for a project with factory nodes is
+the flat one (`expand.py`, [`decisions/0030`](decisions/0030-a-factory-runs-by-expansion.md)).
+A machine that came from a library factory has `node_id`
+`<factory node>.<inner id>` and says which factory node it ran inside in
+`NodeRun.within` — the field a reader asks, never the dot. A factory's belt
+connectors have `NodeRun`s of their own, whose `output_text` is what passed
+through them.
+
+`Run.kind` is `run` or `simulation` ([`decisions/0032`](decisions/0032-a-simulation-leaves-nothing-behind.md)).
+A simulation has `project_id` null, `factory_id` the library factory's, `branch`
+null and worktrees with an empty `branch`. Both fields are additive: a `run.json`
+written before them loads as a `run` of the project it names.
+
 `RunWorktree` and `RunMemory` are persisted with the run because they **outlive
 the process**: a failed run leaves its worktree and its memory documents on disk
 for the operator to inspect, and `run.json` is where the paths are written down.
@@ -195,7 +217,8 @@ replayable back into the models that wrote it.
 text is what travels along a belt today.
 
 A typed artifact — a diff, a file set, a structured result — is what would make
-nested factories composable. The union has one member precisely so that adding
+factories composable beyond text: a factory node today hands on text, like any
+machine. The union has one member precisely so that adding
 a second is an added field rather than a changed format. `PROJECT.md` open
 question 4 names this as the thing most likely to be regretted for being left
 latest.

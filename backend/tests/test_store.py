@@ -183,22 +183,20 @@ def test_delete_project_deletes_its_whole_directory(
     assert (workspace / "_factories").is_dir()
 
 
-def test_delete_project_spares_a_nested_factory_and_its_directory(
+def test_delete_project_takes_its_whole_directory_and_leaves_the_library(
     test_store: Store, workspace: Path
 ) -> None:
+    """Nothing another project uses lives in a project's directory any more: a
+    shared factory is a library factory (`decisions/0029`), and the library is
+    the workspace's, not the project's."""
     test_store.create_project(Project(id="demo", name="Demo"))
     test_store.save_factory(three_node_graph())
-    # Stands in for a nested factory (stage 6): a shared surface another project
-    # can point at, so deleting this project must not take it — nor the
-    # directory it lives in, nor the memory that factory still reads.
-    nested = workspace / "_factories" / "demo" / "shared.json"
-    nested.write_text("{}\n", encoding="utf-8")
-    memory = workspace / "_factories" / "demo" / "memory"
-    memory.mkdir()
+    stray = workspace / "_factories" / "demo" / "shared.json"
+    stray.write_text("{}\n", encoding="utf-8")
+    library = test_store.create_library_factory("review", "Review")
     test_store.delete_project("demo")
-    assert not (workspace / "_factories" / "demo" / "main.json").exists()
-    assert nested.is_file()
-    assert memory.is_dir()
+    assert not (workspace / "_factories" / "demo").exists()
+    assert test_store.get_library_factory(library.id).name == "Review"
 
 
 def test_delete_project_survives_a_missing_factory_file(test_store: Store) -> None:

@@ -925,3 +925,79 @@
   min-width: 0;
   flex: 1 1 auto;
 }
+
+/* ---- the factory node ----------------------------------------------------
+   A library factory on a project's line. Its three ways in are the three
+   entries every machine draws; its three ways out sit in the same rows on the
+   right — memory, input, loopback — so a factory node reads left to right
+   exactly like the machine it stands in for. */
+
+.react-flow__handle.handle-store-out {
+  height: 14px;
+  top: 24%;
+  background: color-mix(in srgb, var(--memory) 45%, var(--belt-casing));
+}
+
+.react-flow__handle.handle-store-out:hover {
+  background: var(--memory);
+}
+
+.react-flow__handle.handle-success.handle-factory-out {
+  top: 50%;
+}
+
+.react-flow__handle.handle-fail.handle-factory-out {
+  top: 76%;
+}
+
+.factory-slot {
+  border-color: color-mix(in srgb, var(--factory) 40%, var(--edge));
+}
+
+.factory-slot .factory-name {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.factory-slot .factory-uses {
+  color: var(--ink-dim);
+  font-size: 0.72rem;
+}
+
+.factory-slot .factory-open {
+  justify-self: start;
+  font-size: 0.75rem;
+}
+
+/* ---- a factory's connectors ----------------------------------------------
+   Doors, not machines: narrower than a chassis, quieter than one, and fixed —
+   they come with the factory and cannot be deleted. Each still lights up when
+   work passes through it, because what came in and what went out is the thing
+   a person watching a factory wants to know. */
+
+.node.connector {
+  width: 9.5rem;
+  color: var(--connector);
+}
+
+.node.connector.kind-store {
+  color: var(--memory);
+}
+
+.node.connector.kind-loop {
+  color: color-mix(in srgb, var(--danger) 75%, var(--connector));
+}
+
+.node.connector .connector-label {
+  font-weight: 600;
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.node.connector .node-body {
+  padding-bottom: 0.55rem;
+}

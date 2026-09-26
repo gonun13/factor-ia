@@ -431,6 +431,9 @@ class RunWorkspaces:
     run_id: str
     branch: str
     root: Path | None = None
+    #: A simulation's: every worktree is a detached checkout, on no branch, and
+    #: `cleanup` removes it however the run ended (`decisions/0032`).
+    detached: bool = False
 
     def __post_init__(self) -> None:
         self._made: dict[str, RunWorktree] = {}
@@ -589,7 +592,7 @@ class RunWorkspaces:
                 f"“{codebase.name}” has no commits yet — a run needs a commit to "
                 "branch from"
             )
-        if gitwork.branch_exists(repo, self.branch):
+        if not self.detached and gitwork.branch_exists(repo, self.branch):
             raise WorktreeError(f"branch {self.branch} already exists in {codebase.name}")
 
         base = base_ref(repo)
@@ -605,7 +608,10 @@ class RunWorkspaces:
         # fail; prune first so a stale admin entry cannot either.
         gitwork.prune_worktrees(repo)
         try:
-            gitwork.add_worktree(repo, path, self.branch, base.commit)
+            if self.detached:
+                gitwork.add_detached_worktree(repo, path, base.commit)
+            else:
+                gitwork.add_worktree(repo, path, self.branch, base.commit)
         except gitwork.GitError as error:
             raise WorktreeError(str(error)) from error
 
@@ -614,7 +620,7 @@ class RunWorkspaces:
             codebase_name=codebase.name,
             repo_path=str(repo),
             path=str(path),
-            branch=self.branch,
+            branch="" if self.detached else self.branch,
             base_commit=base.commit,
             base_branch=base.branch,
             base_source=base.source,
@@ -696,7 +702,11 @@ class RunWorkspaces:
         # checkout would make resuming cost a re-attach at best and the whole
         # run at worst. A *cancel* still clears up: that one is a decision that
         # the work is not wanted.
-        keep = status in ("failed", "stopped")
+        #
+        # **A simulation keeps nothing**, whatever its status (`decisions/0032`):
+        # it has no branch to go back to and no Resume, so a kept checkout
+        # would be a directory nobody is ever offered anything about.
+        keep = status in ("failed", "stopped") and not self.detached
         kept: list[RunWorktree] = []
         for made in self._made.values():
             if keep:

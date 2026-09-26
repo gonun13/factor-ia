@@ -11,13 +11,14 @@
  */
 
 import {
-  ATTACHED_TYPES,
+  CONNECTOR_TYPES,
   ENTRY_FORWARD,
   ENTRY_LOOP,
   ENTRY_STORE,
   entryAccepts,
   hasEntryPorts,
   hasOutcomePorts,
+  isAttached,
   isLoopBelt,
   isWire,
   knowledgeBase,
@@ -36,6 +37,7 @@ import {
   type Codebase,
   type CodebaseGit,
   type KnowledgeBaseSummary,
+  type LibraryFactorySummary,
 } from "./types";
 
 export type Problem = {
@@ -74,6 +76,32 @@ function leavesByOutcome(wire: FlowEdge): boolean {
   return handle !== "" && handle !== DEFAULT_EDGE_OUTCOME;
 }
 
+/**
+ * Which canvas is being checked.
+ *
+ * - `project` — a main factory. Starts with an input, ends with an output, and
+ *   may hold **factory nodes**, each checked against the library entry it
+ *   stands for (`factories`): the machines inside are the server's to check,
+ *   once it has opened them (`expand.project_problems`), and what the canvas can
+ *   say is what a factory node's own wiring asks of its factory.
+ * - `factory` — a library factory. No input, output or human node, and six
+ *   connectors in their place; its machines carry no codebase. Mirrors
+ *   `expand.body_problems`, sentence for sentence.
+ */
+export type ValidationOptions = {
+  mode?: "project" | "factory";
+  /** The library, by id. Empty until `/api/factories` answers, which
+   *  suppresses the rules that need it rather than failing every factory node. */
+  factories?: Map<string, LibraryFactorySummary>;
+  factoriesLoaded?: boolean;
+};
+
+/** Machines that read and write storage: an agent, and a factory node, which
+ * relays it to the machines inside through its memory connectors. */
+function storageMachine(type: string): boolean {
+  return type === "agent" || type === "factory-ref";
+}
+
 export function runProblems(
   nodes: FlowNode[],
   edges: FlowEdge[],
@@ -85,9 +113,11 @@ export function runProblems(
    *  than on the Run button. Empty when it has not loaded yet, which suppresses
    *  the base-specific rules rather than failing every node that uses one. */
   bases: KnowledgeBaseSummary[] = [],
+  options: ValidationOptions = {},
 ): Problem[] {
   const problems: Problem[] = [];
   const label = (node: FlowNode) => node.data.definition.label || node.id;
+  const factoryMode = options.mode === "factory";
 
   if (nodes.length === 0) {
     return [{
@@ -99,6 +129,7 @@ export function runProblems(
 
   const byType = (type: string) => nodes.filter((n) => n.data.definition.type === type);
   const agents = byType("agent");
+  const refs = byType("factory-ref");
 
   // **Belts, not every edge.** Everything below was written before memory
   // existed and means *the line*. A wire attaches a memory and decides nothing
@@ -110,16 +141,21 @@ export function runProblems(
   const wires = allEdges.filter((e) => isWire(e, definitions));
   edges = allEdges.filter((e) => !isWire(e, definitions));
 
-  if (byType("input").length === 0) {
+  if (!factoryMode && byType("input").length === 0) {
     problems.push({
       message: "No input node — a factory starts with one, and a run has nothing to submit.",
       nodeIds: [],
     });
   }
-  if (agents.length === 0) {
+  if (factoryMode && agents.length === 0) {
+    problems.push({
+      message: "No agent node — nothing inside the factory would do any work.",
+      nodeIds: [],
+    });
+  } else if (agents.length === 0 && refs.length === 0) {
     problems.push({ message: "No agent node — nothing would do any work.", nodeIds: [] });
   }
-  if (byType("output").length === 0) {
+  if (!factoryMode && byType("output").length === 0) {
     problems.push({
       message: "No output node — a factory ends with one, and the run would produce nothing.",
       nodeIds: [],
@@ -127,7 +163,11 @@ export function runProblems(
   }
 
   const known = new Set(codebases.map((c) => c.id));
-  const unattached = agents.filter((n) => !n.data.definition.codebase_id);
+  // A factory's machines carry no codebase: they work in the one their factory
+  // node names, or the one a simulation is started in. So none of the codebase
+  // rules apply on a factory canvas.
+  const holders = factoryMode ? [] : [...agents, ...refs];
+  const unattached = (factoryMode ? [] : agents).filter((n) => !n.data.definition.codebase_id);
   if (unattached.length > 0) {
     problems.push({
       message:
@@ -137,7 +177,7 @@ export function runProblems(
       nodeIds: unattached.map((n) => n.id),
     });
   }
-  const stale = agents.filter(
+  const stale = holders.filter(
     (n) => n.data.definition.codebase_id && !known.has(n.data.definition.codebase_id),
   );
   if (stale.length > 0) {
@@ -171,13 +211,13 @@ export function runProblems(
   // the same thing before the operator reaches for Run. Reported once per
   // codebase however many agents share it.
   const reported = new Set<string>();
-  for (const node of agents) {
+  for (const node of holders) {
     const id = node.data.definition.codebase_id;
     if (!id || reported.has(id) || !known.has(id)) continue;
     const state = gitStates[id];
     if (!state) continue;
     reported.add(id);
-    const owners = agents.filter((n) => n.data.definition.codebase_id === id).map((n) => n.id);
+    const owners = holders.filter((n) => n.data.definition.codebase_id === id).map((n) => n.id);
     if (!state.is_repo) {
       problems.push({
         // The detail carried through: git's own words beat ours when the answer
@@ -238,7 +278,7 @@ export function runProblems(
       continue;
     }
     if (targetIsMemory) {
-      if (source.data.definition.type !== "agent") {
+      if (!storageMachine(source.data.definition.type)) {
         problems.push({
           message: `“${label(target)}” is written to by “${label(source)}”, which is a ${source.data.definition.type} node — what shapes a memory is the contract given to the machine writing it, so only an agent may write one.`,
           nodeIds: [target.id, source.id],
@@ -253,7 +293,7 @@ export function runProblems(
         });
       }
     } else if (sourceIsMemory) {
-      if (target.data.definition.type !== "agent") {
+      if (!storageMachine(target.data.definition.type)) {
         problems.push({
           message: `“${label(source)}” is read by “${label(target)}”, which is a ${target.data.definition.type} node — a memory hands out a reference for a machine to read, so only an agent may read one.`,
           nodeIds: [source.id, target.id],
@@ -388,7 +428,7 @@ export function runProblems(
       // Storage does not talk to storage; a machine is always in between. Named
       // ahead of the direction rule below, because "you drew this backwards" is
       // unhelpful advice about a wire that has no right end.
-      if (ATTACHED_TYPES.has(sourceType) && ATTACHED_TYPES.has(targetType)) {
+      if (isAttached(source.data.definition) && isAttached(target.data.definition)) {
         problems.push({
           message: `“${label(source)}” is wired to “${label(target)}” and both are storage — a knowledge base is read and written by a machine, so there is nothing at either end of this to do it.`,
           nodeIds: [source.id, target.id],
@@ -400,7 +440,7 @@ export function runProblems(
       // consultation. So there is no handle to check and no wrong direction —
       // both are meaningful, and which one you drew is what you asked for.
       if (targetType === "knowledge") {
-        if (sourceType !== "agent") {
+        if (!storageMachine(sourceType)) {
           problems.push({
             message: `“${label(target)}” is written to by “${label(source)}”, which is a ${sourceType} node — a base is contributed to by a machine, so only an agent may write to one.`,
             nodeIds: [target.id, source.id],
@@ -424,7 +464,7 @@ export function runProblems(
         }
         continue;
       }
-      if (targetType !== "agent") {
+      if (!storageMachine(targetType)) {
         problems.push({
           message: `“${label(source)}” is read by “${label(target)}”, which is a ${targetType} node — a base hands out what it holds for a machine to read, so only an agent may read one.`,
           nodeIds: [source.id, target.id],
@@ -453,7 +493,10 @@ export function runProblems(
     if (type === "output") return !hasIncoming.has(n.id);
     // Storage is attached to the line, never on it — it has no belts by
     // construction, so this rule would refuse it for being what it is.
-    if (ATTACHED_TYPES.has(type)) return false;
+    if (isAttached(n.data.definition)) return false;
+    // A connector is the edge of a factory: an entry is fed from outside and
+    // an exit feeds what is outside. Whether each is wired is the body rules'.
+    if (CONNECTOR_TYPES.has(type)) return false;
     return !hasIncoming.has(n.id) || !hasOutgoing.has(n.id);
   });
   if (orphans.length > 0) {
@@ -717,12 +760,274 @@ export function runProblems(
     }
   }
 
+  if (factoryMode) {
+    problems.push(...bodyProblems(nodes, edges, allEdges, label));
+  } else {
+    problems.push(...factoryNodeProblems(refs, edges, wires, byId, label, options));
+  }
+
   if (dirty) {
     problems.push({
-      message: "Unsaved changes — a run reads the saved factory file, not the canvas.",
+      message: factoryMode
+        ? "Unsaved changes — a simulation reads the saved factory file, not the canvas."
+        : "Unsaved changes — a run reads the saved factory file, not the canvas.",
       nodeIds: [],
     });
   }
 
+  return problems;
+}
+
+/**
+ * What a factory node's wiring asks of the factory it stands for — mirrors
+ * `expand._ref_problems` and the factory-node half of `expand.project_problems`.
+ *
+ * Read off the library listing (`ports`, `problems`) rather than the factory
+ * itself, so a project canvas never has to open one to say whether a loop
+ * drawn into it would turn.
+ */
+function factoryNodeProblems(
+  refs: FlowNode[],
+  belts: FlowEdge[],
+  wires: FlowEdge[],
+  byId: Map<string, FlowNode>,
+  label: (node: FlowNode) => string,
+  options: ValidationOptions,
+): Problem[] {
+  const problems: Problem[] = [];
+  const library = options.factories ?? new Map<string, LibraryFactorySummary>();
+  for (const ref of refs) {
+    const name = label(ref);
+    const wanted = ref.data.definition.factory_ref ?? "";
+    if (!wanted) {
+      problems.push({
+        message: `“${name}” does not say which factory it stands for — choose one from the library, or delete the node.`,
+        nodeIds: [ref.id],
+      });
+      continue;
+    }
+    if (!ref.data.definition.codebase_id) {
+      problems.push({
+        message: `“${name}” has no codebase selected — every agent inside a factory works in the codebase its factory node names.`,
+        nodeIds: [ref.id],
+      });
+    }
+    if (!options.factoriesLoaded) continue;
+    const factory = library.get(wanted);
+    if (!factory) {
+      problems.push({
+        message: `“${name}” stands for the factory “${wanted}”, which is no longer in the library — choose another, or delete the node.`,
+        nodeIds: [ref.id],
+      });
+      continue;
+    }
+    for (const line of factory.problems) {
+      problems.push({ message: `“${name}” (factory “${factory.name}”): ${line}`, nodeIds: [ref.id] });
+    }
+    const into = belts.filter((belt) => belt.target === ref.id);
+    const out = belts.filter((belt) => belt.source === ref.id);
+    const loopsIn = into.filter((belt) => {
+      const source = byId.get(belt.source);
+      return (
+        source !== undefined &&
+        isLoopBelt(source.data.definition, belt.sourceHandle) &&
+        loopBody([...byId.values()], belts, belt.source, belt.target).has(belt.source)
+      );
+    });
+    if (into.length === loopsIn.length) {
+      problems.push({
+        message: `Nothing feeds “${name}” — draw a belt into its input entry.`,
+        nodeIds: [ref.id],
+      });
+    }
+    if (!out.some((belt) => (belt.sourceHandle ?? DEFAULT_EDGE_OUTCOME) === DEFAULT_EDGE_OUTCOME)) {
+      problems.push({
+        message: `Nothing leaves “${name}” by its input exit — draw a belt from it to what comes next.`,
+        nodeIds: [ref.id],
+      });
+    }
+    if (!factory.ports.loop_in) {
+      for (const belt of loopsIn) {
+        const judge = byId.get(belt.source);
+        problems.push({
+          message: `“${judge ? label(judge) : belt.source}” sends work back into “${name}”, but nothing inside “${factory.name}” takes work back — its loopback entry feeds nothing.`,
+          nodeIds: [ref.id, belt.source],
+        });
+      }
+    }
+    if (!factory.ports.fail_out && out.some((belt) => belt.sourceHandle === "fail")) {
+      problems.push({
+        message: `“${name}” has a belt on its loopback exit, but nothing inside “${factory.name}” ever fails out to it.`,
+        nodeIds: [ref.id],
+      });
+    }
+    for (const wire of wires) {
+      if (wire.target === ref.id && !factory.ports.reads) {
+        const store = byId.get(wire.source);
+        problems.push({
+          message: `“${store ? label(store) : wire.source}” is wired into “${name}”, but nothing inside “${factory.name}” reads its memory entry.`,
+          nodeIds: [ref.id, wire.source],
+        });
+      }
+      if (wire.source === ref.id && !factory.ports.writes) {
+        const store = byId.get(wire.target);
+        problems.push({
+          message: `“${name}” is wired to “${store ? label(store) : wire.target}”, but nothing inside “${factory.name}” writes to its memory exit.`,
+          nodeIds: [ref.id, wire.target],
+        });
+      }
+    }
+  }
+  return problems;
+}
+
+/** A library factory's connector of one type and kind, found by what it is. */
+function connectorOf(nodes: FlowNode[], type: string, kind: string): FlowNode | undefined {
+  return nodes.find(
+    (node) => node.data.definition.type === type && nodeKind(node.data.definition) === kind,
+  );
+}
+
+/**
+ * The rules for a library factory's own drawing — `expand.body_problems`,
+ * sentence for sentence, and the server's is the one that counts.
+ */
+function bodyProblems(
+  nodes: FlowNode[],
+  belts: FlowEdge[],
+  allEdges: FlowEdge[],
+  label: (node: FlowNode) => string,
+): Problem[] {
+  const problems: Problem[] = [];
+  const forbidden: Record<string, string> = {
+    input: "a factory is fed through its input entry, not an input node",
+    output: "a factory hands its work on through its input exit, not an output node",
+    human: "a factory is fully automated — a person belongs on the project's line",
+    "factory-ref": "a factory cannot contain another factory",
+  };
+  for (const node of nodes) {
+    const why = forbidden[node.data.definition.type];
+    if (why) problems.push({ message: `“${label(node)}” cannot be here — ${why}.`, nodeIds: [node.id] });
+  }
+  const entryForward = connectorOf(nodes, "entry", "forward");
+  const entryLoop = connectorOf(nodes, "entry", "loop");
+  const entryStore = connectorOf(nodes, "entry", "store");
+  const exitForward = connectorOf(nodes, "exit", "forward");
+  const exitLoop = connectorOf(nodes, "exit", "loop");
+  const exitStore = connectorOf(nodes, "exit", "store");
+  if (!entryForward || !entryLoop || !entryStore || !exitForward || !exitLoop || !exitStore) {
+    problems.push({
+      message: "The factory is missing a connector — it has to have all six, three in and three out.",
+      nodeIds: [],
+    });
+    return problems;
+  }
+  const byId = new Map(nodes.map((node) => [node.id, node]));
+
+  for (const belt of belts) {
+    const target = byId.get(belt.target);
+    const source = byId.get(belt.source);
+    if (target?.data.definition.type === "entry") {
+      problems.push({
+        message: `“${label(target)}” is an entry, so nothing inside the factory may feed it — it is fed from the project.`,
+        nodeIds: [target.id],
+      });
+    }
+    if (source?.data.definition.type === "exit") {
+      problems.push({
+        message: `“${label(source)}” is an exit, so it may not feed anything inside the factory — what reaches it leaves for the project.`,
+        nodeIds: [source.id],
+      });
+    }
+  }
+  if (!belts.some((belt) => belt.source === entryForward.id)) {
+    problems.push({
+      message: `Nothing is fed from “${label(entryForward)}” — draw a belt from it to the first machine.`,
+      nodeIds: [entryForward.id],
+    });
+  }
+  const exitFed = belts.some((belt) => belt.target === exitForward.id);
+  if (!exitFed) {
+    problems.push({
+      message: `Nothing reaches “${label(exitForward)}” — draw a belt from the last machine to it, so the factory has a way out.`,
+      nodeIds: [exitForward.id],
+    });
+  }
+
+  // Reachable without the loopback entry: a run in which nothing is sent back
+  // still has to reach every machine it feeds, and the way out.
+  const forward = new Map<string, string[]>();
+  for (const belt of belts) {
+    if (belt.source === entryLoop.id) continue;
+    forward.set(belt.source, [...(forward.get(belt.source) ?? []), belt.target]);
+  }
+  const reached = new Set<string>();
+  const stack = [entryForward.id];
+  while (stack.length > 0) {
+    const current = stack.pop()!;
+    if (reached.has(current)) continue;
+    reached.add(current);
+    stack.push(...(forward.get(current) ?? []));
+  }
+  if (exitFed && !reached.has(exitForward.id)) {
+    problems.push({
+      message: `“${label(exitForward)}” cannot be reached from “${label(entryForward)}” — follow the belts from one to the other and close the gap.`,
+      nodeIds: [entryForward.id, exitForward.id],
+    });
+  }
+  for (const belt of belts) {
+    if (belt.source !== entryLoop.id) continue;
+    const target = byId.get(belt.target);
+    if (!target) continue;
+    if (target.data.definition.type !== "agent") {
+      problems.push({
+        message: `“${label(entryLoop)}” feeds “${label(target)}” — work sent back goes to a machine, which does it again.`,
+        nodeIds: [entryLoop.id, target.id],
+      });
+    } else if (!reached.has(target.id)) {
+      problems.push({
+        message: `“${label(target)}” is reached only from “${label(entryLoop)}”, so it would never run when nothing is sent back — feed it from “${label(entryForward)}”'s line as well.`,
+        nodeIds: [target.id],
+      });
+    }
+  }
+  for (const belt of belts) {
+    if (belt.target !== exitLoop.id) continue;
+    const source = byId.get(belt.source);
+    if (!source) continue;
+    const judged =
+      source.data.definition.type === "agent" &&
+      nodeKind(source.data.definition) === "reviewer" &&
+      belt.sourceHandle === "fail";
+    if (!judged) {
+      problems.push({
+        message: `“${label(source)}” feeds “${label(exitLoop)}”, and only a reviewer's fail belt may — the loopback exit is how a factory says the work should go back.`,
+        nodeIds: [source.id, exitLoop.id],
+      });
+    }
+  }
+  for (const wire of allEdges) {
+    const source = byId.get(wire.source);
+    const target = byId.get(wire.target);
+    if (!source || !target) continue;
+    if (source.id === entryStore.id && target.data.definition.type !== "agent") {
+      problems.push({
+        message: `“${label(entryStore)}” is wired to “${label(target)}” — what is wired into the factory is read by a machine, so only an agent may take it.`,
+        nodeIds: [entryStore.id, target.id],
+      });
+    }
+    if (target.id === exitStore.id && source.data.definition.type !== "agent") {
+      problems.push({
+        message: `“${label(source)}” is wired to “${label(exitStore)}” — what the factory files is a machine's answer, so only an agent may write it.`,
+        nodeIds: [source.id, exitStore.id],
+      });
+    }
+    if (target.id === entryStore.id || source.id === exitStore.id) {
+      problems.push({
+        message: `The wire between “${label(source)}” and “${label(target)}” runs the wrong way — storage comes in through the memory entry and goes out through the memory exit.`,
+        nodeIds: [source.id, target.id],
+      });
+    }
+  }
   return problems;
 }

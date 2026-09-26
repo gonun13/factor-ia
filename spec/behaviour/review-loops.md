@@ -108,6 +108,17 @@ The same function hands the walk the **loop body** it resets, so *what is
 refused* and *what is re-run* cannot drift. One function, two callers, no
 possibility of disagreement.
 
+**Across a factory's boundary, nothing changes**, because the walk sees the flat
+graph a project run opens its factory nodes into (`expand.py`). A reviewer inside
+a factory failing out through its loopback exit to a machine upstream closes a
+loop whose body runs through the factory; a judge outside sending work back
+through a factory's loopback entry closes one whose body starts at the machine
+that entry feeds. Before expansion, on the project graph, a **factory node's own
+`fail` belt counts as a judge's** — only a reviewer inside may feed its loopback
+exit — which is how `expand` tells a loop into a factory from a forward belt
+([`../decisions/0031`](../decisions/0031-connectors-are-nodes.md),
+[`factories.md`](factories.md)).
+
 ### A body stops at the loop it closes
 
 `back_edges` answers two questions, and it answers them over two different

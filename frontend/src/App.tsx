@@ -1,61 +1,85 @@
 /**
- * Two screens and a hash for the route between them — a router dependency for
- * `#/p/<id>` would be more library than product. The hash keeps reload working,
- * which is the whole point of stage 3's verification.
+ * The screens and a hash for the route between them — a router dependency for
+ * a handful of routes would be more library than product. The hash keeps
+ * reload working, which is the whole point of stage 3's verification.
+ *
+ *   #/                     the main page: projects, then factories
+ *   #/settings             sign-in and the ssh key
+ *   #/p/<project>          a project's main factory
+ *   #/p/<project>/f/<node> …looking inside one of its factory nodes
+ *   #/f/<factory>          a library factory's editor
  */
 
 import { useEffect, useState } from "react";
-import { FactoryCanvas } from "./screens/FactoryCanvas";
+import { FactoryEditor } from "./screens/FactoryEditor";
+import { ProjectCanvas } from "./screens/ProjectCanvas";
 import { ProjectList } from "./screens/ProjectList";
 import { Settings } from "./screens/Settings";
 
-function currentProject(): string | null {
-  const match = /^#\/p\/([^/]+)/.exec(window.location.hash);
-  return match ? decodeURIComponent(match[1]) : null;
+type Route =
+  | { screen: "list" }
+  | { screen: "settings" }
+  | { screen: "project"; projectId: string; drill: string | null }
+  | { screen: "factory"; factoryId: string };
+
+function parse(hash: string): Route {
+  if (hash.startsWith("#/settings")) return { screen: "settings" };
+  const factory = /^#\/f\/([^/]+)/.exec(hash);
+  if (factory) return { screen: "factory", factoryId: decodeURIComponent(factory[1]) };
+  const project = /^#\/p\/([^/]+)(?:\/f\/([^/]+))?/.exec(hash);
+  if (project) {
+    return {
+      screen: "project",
+      projectId: decodeURIComponent(project[1]),
+      drill: project[2] ? decodeURIComponent(project[2]) : null,
+    };
+  }
+  return { screen: "list" };
+}
+
+function go(hash: string): void {
+  window.location.hash = hash;
 }
 
 export default function App() {
-  const [projectId, setProjectId] = useState<string | null>(currentProject);
-  const [route, setRoute] = useState(() => window.location.hash);
+  const [route, setRoute] = useState<Route>(() => parse(window.location.hash));
 
   useEffect(() => {
-    const onHashChange = () => {
-      setProjectId(currentProject());
-      setRoute(window.location.hash);
-    };
+    const onHashChange = () => setRoute(parse(window.location.hash));
     window.addEventListener("hashchange", onHashChange);
     return () => window.removeEventListener("hashchange", onHashChange);
   }, []);
 
   // Its own route rather than a modal over the canvas: signing in is a
   // once-per-machine errand, not something done mid-run.
-  if (route.startsWith("#/settings")) {
+  if (route.screen === "settings") return <Settings onBack={() => go("")} />;
+
+  if (route.screen === "factory") {
     return (
-      <Settings
-        onBack={() => {
-          window.location.hash = "";
-        }}
-      />
+      <FactoryEditor key={route.factoryId} factoryId={route.factoryId} onBack={() => go("")} />
     );
   }
 
-  if (projectId === null) {
+  if (route.screen === "project") {
+    const base = `#/p/${encodeURIComponent(route.projectId)}`;
     return (
-      <ProjectList
-        onOpen={(id) => {
-          window.location.hash = `#/p/${encodeURIComponent(id)}`;
-        }}
+      <ProjectCanvas
+        // Keyed by the project only: looking inside a factory node and back out
+        // must not remount the project canvas and lose its unsaved edits.
+        key={route.projectId}
+        projectId={route.projectId}
+        drill={route.drill}
+        onBack={() => go("")}
+        onDrill={(refId) => go(refId ? `${base}/f/${encodeURIComponent(refId)}` : base)}
+        onEditFactory={(factoryId) => go(`#/f/${encodeURIComponent(factoryId)}`)}
       />
     );
   }
 
   return (
-    <FactoryCanvas
-      key={projectId}
-      projectId={projectId}
-      onBack={() => {
-        window.location.hash = "";
-      }}
+    <ProjectList
+      onOpen={(id) => go(`#/p/${encodeURIComponent(id)}`)}
+      onOpenFactory={(id) => go(`#/f/${encodeURIComponent(id)}`)}
     />
   );
 }

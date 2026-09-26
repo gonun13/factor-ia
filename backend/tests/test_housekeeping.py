@@ -340,3 +340,19 @@ def test_describe_outcome_always_says_branches_are_untouched() -> None:
     said = housekeeping.describe_outcome(done)
     assert said.startswith("discarded 2 runs · swept 1 empty run directory")
     assert said.endswith("Branches untouched.")
+
+
+def test_a_simulation_is_neither_offered_nor_protected(workspace):
+    """A simulation keeps nothing however it ends (`decisions/0032`), so there is
+    no worktree to give up — and it must not stand in for a real run of its
+    factory as "the newest resumable one"."""
+    simulation = run_of("sim-failed", project_id="acme", days_ago=400)
+    simulation.kind = "simulation"
+    simulation.project_id = None
+    real_old = run_of("run-old", days_ago=400)
+    real_new = run_of("run-new", days_ago=300)
+
+    report = survey([simulation, real_old, real_new], workspace)
+
+    assert [item.run_id for item in report.discardable] == ["run-old"]
+    assert "sim-failed" not in [item.run_id for item in report.spared]

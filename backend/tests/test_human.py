@@ -347,16 +347,20 @@ def test_a_human_node_is_no_longer_something_nothing_executes(
     assert problems == [], problems
 
 
-def test_a_factory_ref_node_is_still_something_nothing_executes(
+def test_an_unopened_factory_node_is_still_something_nothing_executes(
     test_store: Store, project: None, repo: Path
 ) -> None:
-    """Stage 8 widened what runs by one type, not by two."""
+    """A factory node runs as its factory's nodes, opened before the check
+    (`expand.py`). Handed to `run_problems` unopened, it is refused by name."""
     nodes, edges = gate(rescue=False)
     nodes.insert(2, node("n-ref", "factory-ref"))
     edges += [belt("n-agent", "n-ref", "success"), belt("n-ref", "n-out")]
     factory = save(test_store, nodes, edges)
 
-    assert any("factory-ref" in problem for problem in runcheck.run_problems(factory))
+    assert any(
+        "factory node" in problem and "not opened" in problem
+        for problem in runcheck.run_problems(factory)
+    )
 
 
 def test_a_human_node_of_a_kind_this_version_cannot_ask_is_refused_by_name(

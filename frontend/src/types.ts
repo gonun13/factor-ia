@@ -15,7 +15,35 @@ export type NodeType =
   | "human"
   | "memory"
   | "knowledge"
-  | "factory-ref";
+  | "factory-ref"
+  | "entry"
+  | "exit";
+
+/**
+ * Which of a library factory's three ways in — or out — a connector is.
+ * Mirrors `models.ConnectorKind`. The canvas calls them memory, input and
+ * loopback; the words on disk are the entry handles' (`decisions/0012`), since
+ * a factory node is entered the same three ways a machine is.
+ */
+export type ConnectorKind = "store" | "forward" | "loop";
+
+/** The six connectors, in the order a new factory is created with them. Their
+ * ids are `<type>-<kind>` (`models.CONNECTORS`). */
+export const CONNECTORS: { type: "entry" | "exit"; kind: ConnectorKind; label: string }[] = [
+  { type: "entry", kind: "store", label: "Memory in" },
+  { type: "entry", kind: "forward", label: "Input in" },
+  { type: "entry", kind: "loop", label: "Loopback in" },
+  { type: "exit", kind: "store", label: "Memory out" },
+  { type: "exit", kind: "forward", label: "Input out" },
+  { type: "exit", kind: "loop", label: "Loopback out" },
+];
+
+/** What the canvas calls each connector kind. */
+export const CONNECTOR_WORD: Record<ConnectorKind, string> = {
+  store: "memory",
+  forward: "input",
+  loop: "loopback",
+};
 
 /**
  * What an input node asks for, and what an output node does with the branch.
@@ -447,7 +475,8 @@ export type Port = { name: string; kind: "text" };
 export type Factory = {
   schema_version: number;
   id: string;
-  project_id: string;
+  /** Null for a library factory, which belongs to the workspace. */
+  project_id: string | null;
   name: string;
   inputs: Port[];
   outputs: Port[];
@@ -458,6 +487,30 @@ export type Factory = {
 };
 
 /** The levels the Claude CLI's handshake reports as supported. */
+/** Which optional connectors a library factory uses. Mirrors
+ * `models.FactoryPorts`. */
+export type FactoryPorts = {
+  loop_in: boolean;
+  fail_out: boolean;
+  reads: boolean;
+  writes: boolean;
+};
+
+/** A library factory as the main page and a project canvas list it. */
+export type LibraryFactorySummary = {
+  id: string;
+  project_id: null;
+  name: string;
+  node_count: number;
+  edge_count: number;
+  updated_at: string;
+  ports: FactoryPorts;
+  /** Why it cannot be used yet — structural only (`expand.body_problems`). */
+  problems: string[];
+  /** The projects whose main factory uses it. */
+  used_by: string[];
+};
+
 export type EffortLevel = "low" | "medium" | "high" | "xhigh" | "max";
 
 /** Project-wide execution defaults an agent node inherits unless it overrides
@@ -646,6 +699,11 @@ export type NodeRun = {
   /** The document a `prd` input node was given. The contents are `output_text`;
    * this is only ever the label. */
   filename: string | null;
+  /** How many times this node has run. */
+  lap?: number;
+  /** The factory node this machine ran inside (`models.NodeRun.within`). Its
+   * `node_id` is then `<within>.<inner id>` — but read this, never the dot. */
+  within?: string | null;
 };
 
 /** One codebase's isolated checkout for one run. `kept` is the cleanup policy:
@@ -691,12 +749,18 @@ export type RunMemory = {
   kept: boolean;
 };
 
+/** What a run is for — `models.RunKind`. A simulation walks one library
+ * factory on its own, keeps nothing, and cannot be resumed. */
+export type RunKind = "run" | "simulation";
+
 export type Run = {
   schema_version: number;
   id: string;
-  project_id: string;
+  /** Null for a simulation. */
+  project_id: string | null;
   factory_id: string;
   factory_name: string;
+  kind: RunKind;
   status: OverallRunStatus;
   detail: string | null;
   /** The one-shot request (open question 2). Null until it is submitted. */

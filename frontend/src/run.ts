@@ -553,13 +553,25 @@ function message(cause: unknown): string {
 }
 
 /**
+ * Which runs a surface is about: a project's main factory, or simulations of one
+ * library factory (`decisions/0032`). The same hook serves both, because once a
+ * simulation has started it is a run in every respect the canvas draws.
+ */
+export type RunScope =
+  | { kind: "run"; projectId: string; factoryId: string }
+  | { kind: "simulation"; factoryId: string };
+
+/**
  * Start, watch, submit to and cancel one run.
  *
  * `watch` is separate from `start` so a run that is already in flight — after a
  * reload, or in a second tab — is attached to the same way a new one is. That
  * is the late-joining client the server's catch-up exists for.
  */
-export function useRun(projectId: string, factoryId: string) {
+export function useRun(scope: RunScope) {
+  const scopeKind = scope.kind;
+  const projectId = scope.kind === "run" ? scope.projectId : null;
+  const factoryId = scope.factoryId;
   const [state, setState] = useState<RunState>(EMPTY);
   const source = useRef<EventSource | null>(null);
   /**
@@ -636,6 +648,7 @@ export function useRun(projectId: string, factoryId: string) {
       .then((runs) => {
         const inFlight = runs.find(
           (candidate) =>
+            (candidate.kind ?? "run") === scopeKind &&
             candidate.project_id === projectId &&
             candidate.factory_id === factoryId &&
             !isTerminal(candidate.status),
@@ -650,12 +663,17 @@ export function useRun(projectId: string, factoryId: string) {
     return () => {
       attached = false;
     };
-  }, [projectId, factoryId, watch]);
+  }, [scopeKind, projectId, factoryId, watch]);
 
-  const start = useCallback(async () => {
+  /** Start a run, or — in a simulation's scope — a simulation in `codebaseId`,
+   * the one thing Simulate asks for before its input. */
+  const start = useCallback(async (options: { codebaseId?: string } = {}) => {
     setState({ ...EMPTY, busy: true });
     try {
-      const run = await api.startRun(projectId, factoryId);
+      const run =
+        scopeKind === "simulation"
+          ? await api.startSimulation(factoryId, options.codebaseId ?? "")
+          : await api.startRun(projectId ?? "", factoryId);
       setState({ ...EMPTY, run, status: run.status, busy: false });
       watch(run.id);
       return run;
@@ -674,7 +692,7 @@ export function useRun(projectId: string, factoryId: string) {
       });
       return null;
     }
-  }, [projectId, factoryId, watch]);
+  }, [scopeKind, projectId, factoryId, watch]);
 
   const submit = useCallback(
     async (text: string, options: { nodeId?: string; filename?: string } = {}) => {
@@ -846,8 +864,10 @@ export function useRun(projectId: string, factoryId: string) {
    * The server decides the same question the same way and has the final say —
    * this is what draws the button, not what authorises the act. */
   const resumable = useMemo(
-    () => state.status === "stopped" || state.status === "failed",
-    [state.status],
+    () =>
+      // A simulation is never picked back up: it kept nothing (`0032`).
+      scopeKind === "run" && (state.status === "stopped" || state.status === "failed"),
+    [scopeKind, state.status],
   );
 
   /** Whether Cancel is on offer: while a run is moving, and while a halted one

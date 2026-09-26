@@ -63,6 +63,54 @@ export function OutputGlyph() {
   );
 }
 
+/**
+ * Factory: a building with a sawtooth roof — a block of machines standing as one.
+ *
+ * The one glyph that is not a single machine, because a factory node is not
+ * one: it is a whole line folded into a box, entered and left like a machine.
+ */
+export function FactoryGlyph() {
+  return (
+    <svg viewBox="0 0 16 16" aria-hidden>
+      <path d="M1.8 14V7.2l3.6 2.4V7.2l3.6 2.4V7.2l3.6 2.4V14Z" {...stroke} />
+      <path d="M12.6 9.6V2.4h1.6V14" {...stroke} />
+      <path d="M4.2 12h1.2M7.8 12H9" {...stroke} />
+    </svg>
+  );
+}
+
+/** Entry: a door, arrow in — a library factory's way in. */
+export function EntryGlyph() {
+  return (
+    <svg viewBox="0 0 16 16" aria-hidden>
+      <path d="M9 2.2h4.2v11.6H9" {...stroke} />
+      <path d="M1.8 8h8" {...stroke} />
+      <path d="M7 5.2 9.8 8 7 10.8" {...stroke} />
+    </svg>
+  );
+}
+
+/** Exit: the same door, arrow out — a library factory's way out. */
+export function ExitGlyph() {
+  return (
+    <svg viewBox="0 0 16 16" aria-hidden>
+      <path d="M7 2.2H2.8v11.6H7" {...stroke} />
+      <path d="M6.2 8h8" {...stroke} />
+      <path d="M11.4 5.2 14.2 8l-2.8 2.8" {...stroke} />
+    </svg>
+  );
+}
+
+/** Simulate: a play mark inside a flask — try it without shipping it. */
+export function SimulateGlyph() {
+  return (
+    <svg viewBox="0 0 16 16" aria-hidden>
+      <path d="M6 1.8h4M6.8 1.8v4L2.6 12.6a1 1 0 0 0 .9 1.6h9a1 1 0 0 0 .9-1.6L9.2 5.8v-4" {...stroke} />
+      <path d="M7 9.2v3l2.4-1.5Z" {...stroke} />
+    </svg>
+  );
+}
+
 /** Human: a person at the line — the one machine that is not one. */
 export function HumanGlyph() {
   return (

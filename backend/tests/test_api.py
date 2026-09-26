@@ -142,8 +142,9 @@ def test_codebase_attachment_only_on_agent_nodes(
     assert response.status_code == 422
 
 
-def test_deferred_node_types_are_accepted_by_the_model(client: TestClient) -> None:
-    # No UI and no execution, but the type union has to hold them from day one.
+def test_human_and_factory_nodes_are_accepted_by_the_model(client: TestClient) -> None:
+    # A factory node naming a factory that does not exist still saves: a
+    # half-drawn canvas must, and the run check is what refuses it.
     client.post("/api/projects", json={"name": "Demo"})
     response = client.put(
         "/api/projects/demo/factories/main",

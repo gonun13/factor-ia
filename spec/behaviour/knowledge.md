@@ -684,6 +684,21 @@ This means `RunConfig` (`backend/factoria/agent/adapter.py`) gains `mcp_servers`
 node config** — for the identical reason `add_dirs` is. A node that could name
 its own allowed tools would be the hole every other boundary exists to close.
 
+## Inside a factory, and in a simulation
+
+A knowledge node in a library factory reaches its base like any other once the
+factory node is opened. When the project and a factory it uses — or two
+factories — each select **the same base**, expansion merges them into one node,
+the first, and re-points every wire at it: "one shelf, one node" is a rule about
+what one canvas drew, and no canvas drew that pair. Two nodes one canvas drew on
+one base are still refused.
+
+**A simulation's writes are real.** A base keeps what a simulated factory files
+into it, and the Simulate panel says so before it starts. A filing made by a
+simulation is made under the factory's id where a run's is made under the
+project's ([`factories.md`](factories.md),
+[`../decisions/0032`](../decisions/0032-a-simulation-leaves-nothing-behind.md)).
+
 ## Concurrency and lifecycle
 
 **One writer at a time per base.** An in-process lock keyed by base id, plus
@@ -837,7 +852,7 @@ and gets no card on the timeline.
 | Tools and servers on the spawn | `agent/adapter.RunConfig`, `agent/claude.build_argv` |
 | The index into the system prompt | `verdict.compose_system_prompt` |
 | The node, its two handles, its glyph | `frontend/src/nodes/KnowledgeNode.tsx`, `nodes/index.ts`, `NodeShell.tsx` |
-| The palette, in the Storage group | `frontend/src/screens/FactoryCanvas.tsx` |
+| The palette, in the Storage group | `frontend/src/screens/palette.ts` |
 | The library UI | `frontend/src/screens/ProjectList.tsx` |
 | The tests | `test_knowledge.py`, `test_knowledge_mcp.py`, `test_knowledge_check.py`, `test_knowledge_run.py`, `test_knowledge_api.py` |
 | The walkthrough | `uitests/knowledge.mjs` |

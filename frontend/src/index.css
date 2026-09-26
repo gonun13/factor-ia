@@ -34,10 +34,17 @@
   --knowledge: var(--memory);
   /* A rose that belongs to no machine: a sign-off is the one node the line
      cannot execute by itself. Kept clear of --danger's salmon, which means a
-     problem rather than a pause. Mirrored by NODE_COLOUR in FactoryCanvas, the
+     problem rather than a pause. Mirrored by NODE_COLOUR in GraphEditor, the
      minimap's only source of colour. */
   --human: #f58fb5;
   --output: #6ee7a8;
+  /* A factory node: a whole line folded into one block. Warm and off every
+     machine's hue, because it is not one machine — and kept clear of --human's
+     pink and --danger's salmon, which mean a person and a failure. Mirrored by
+     NODE_COLOUR in GraphEditor, which the minimap reads. */
+  --factory: #ff9f6e;
+  /* A library factory's connectors: doors, not machines, so they are quiet. */
+  --connector: #8b98ad;
   --codebase: #b79cff;
   --danger: #ff8f8f;
 
@@ -1302,7 +1309,7 @@ button.skill-card.is-system:hover {
 
 /* Off the agent/output axis on purpose: a memory is neither a machine that does
    work nor a thing the run produces, and colouring it like either would say it
-   is. Matches `NODE_COLOUR.memory` in FactoryCanvas, which the minimap reads. */
+   is. Matches `NODE_COLOUR.memory` in GraphEditor, which the minimap reads. */
 .type-knowledge {
   color: var(--knowledge);
 }
@@ -1317,6 +1324,11 @@ button.skill-card.is-system:hover {
 
 .type-output {
   color: var(--output);
+}
+
+.type-factory,
+.type-factory-ref {
+  color: var(--factory);
 }
 
 /* A discard output is the one output that ships nothing, and it should not look
@@ -2850,4 +2862,102 @@ ul.plain {
   color: var(--ink-dim);
   background: var(--panel);
   cursor: default;
+}
+
+/* ---- factories -----------------------------------------------------------
+   The library on the main page, the factory editor's run panel, and the view
+   inside a factory node during a run. */
+
+.factories-section {
+  margin-top: 2.4rem;
+  display: grid;
+  gap: 0.85rem;
+}
+
+.factories-section .lede {
+  margin-bottom: 0.4rem;
+}
+
+.factory-icon {
+  --tile: var(--factory);
+}
+
+.factory-card .warn {
+  color: var(--input);
+}
+
+.palette-empty {
+  margin: 0;
+  color: var(--ink-dim);
+  font-size: 0.8rem;
+  max-width: 18rem;
+}
+
+/* Simulate is Run's sibling, not Run: same weight, its own mark. */
+.runbox .run.simulate {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.runbox .run.simulate svg {
+  width: 14px;
+  height: 14px;
+}
+
+/* Its own row: a label, then a picker that takes the rest of the width and
+   ellipsises a long codebase name rather than widening the panel. */
+.simulate-codebase {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.simulate-codebase .eyebrow {
+  flex: 0 0 auto;
+}
+
+.simulate-codebase select {
+  flex: 1;
+  min-width: 0;
+  width: 100%;
+  text-overflow: ellipsis;
+}
+
+/* The status sentence beside Simulate wraps under its own width instead of
+   pushing the row past the panel's edge. */
+.simulate-box .runbox-head .state {
+  flex: 1;
+  min-width: 0;
+}
+
+.simulate-warning {
+  color: var(--input);
+}
+
+/* Inside a factory node, during a run: the factory's canvas over the
+   project's, which stays mounted underneath so its unsaved edits survive. */
+.drill-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+}
+
+.drill-overlay > .app {
+  flex: 1;
+  min-height: 0;
+}
+
+.drill-missing {
+  margin: 4rem auto;
+  max-width: 30rem;
+  color: var(--ink-dim);
+}
+
+.drill-box .ready {
+  color: var(--ink-dim);
 }

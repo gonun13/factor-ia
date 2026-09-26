@@ -54,3 +54,7 @@ original keeps its number.
 | [0026](0026-effort-defaults-to-high.md) | Effort defaults to `high` | narrows `data.md`'s *ask nobody* to provider and model |
 | [0027](0027-agents-pass-on-their-final-message.md) | A machine passes on its final message | supersedes part of `behaviour/human-nodes.md` |
 | [0028](0028-the-commit-message-is-a-system-skill-pass.md) | The commit message is written by a system skill pass | extends `0016` |
+| [0029](0029-factories-are-a-workspace-library.md) | Factories are a workspace library | supersedes `data.md`'s per-project nested factories |
+| [0030](0030-a-factory-runs-by-expansion.md) | A factory node runs by expansion into one walk | supersedes part of `domain.md` (ports from declared inputs/outputs) |
+| [0031](0031-connectors-are-nodes.md) | Connectors are nodes, and the loop entry is decided by shape | extends `0012`, `0009`, `0019` |
+| [0032](0032-a-simulation-leaves-nothing-behind.md) | A simulation leaves nothing behind | amends `0024` for simulations |

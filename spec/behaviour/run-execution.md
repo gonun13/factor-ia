@@ -12,7 +12,20 @@ commit node does with the branch has another ([`git-output.md`](git-output.md)).
 ## What a run is
 
 One execution of one factory. **One at a time** — a second is refused with the
-id of the run holding the slot.
+id of the run holding the slot, and a simulation holds the same slot.
+
+**A project's factory nodes are opened before anything is checked.**
+`expand.expand` replaces each with its library factory's nodes — ids
+`<factory node>.<inner id>` — and the flat graph is what `runcheck` checks and
+the walk walks. A factory's belt connectors run as **pass-through** machines,
+whose output is exactly what arrived; everything else on this page applies to
+the flat graph unchanged. See [`factories.md`](factories.md) and
+[`../decisions/0030`](../decisions/0030-a-factory-runs-by-expansion.md).
+
+**A simulation is a run of kind `simulation`** of one library factory wrapped in
+an input and a discard, in a detached worktree that makes no branch and is
+removed however it ends. Stop discards it and nothing resumes it
+([`../decisions/0032`](../decisions/0032-a-simulation-leaves-nothing-behind.md)).
 
 The orchestrator is in-process `asyncio`. A single user running one or two
 factories does not need a queue or a broker, and anything built for more than
@@ -241,6 +254,10 @@ cancellation an explicit endpoint rather than an inferred one.
 
 `POST /api/runs/{id}/resume` has two forms, and they answer different
 questions ([`decisions/0023`](../decisions/0023-a-run-can-be-restarted-from-a-node.md)).
+Both re-read the factory file and **re-open its factory nodes** from the library
+as it is now; expansion is deterministic, so the same files give the same ids. A
+resume is refused, by name, when a factory node no longer opens or a machine in
+the record is gone. A simulation is refused by both: nothing it did was kept.
 
 - **With no body**, it picks a run back up where it halted. Any `stopped` or
   `failed` run qualifies — the button, a restart, a crash, or a spent

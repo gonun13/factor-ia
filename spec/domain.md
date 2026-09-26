@@ -39,23 +39,27 @@ because of a field somebody set.
 ```
 Project ──< Codebase          (v1 attaches exactly one; the model allows many)
    │
-   └──< Factory ─────────────┐   main factory + nested ones (nesting not built)
-          │                  │
-          ├──< Node          │   input | agent | output | human
-          │      │           │   memory | knowledge | factory-ref ────────────┘
+   └──1 Factory "main"
+          │
+          ├──< Node               input | agent | output | human
+          │      │                memory | knowledge | factory-ref ──┐
           │      └──> Codebase    (attachment: a workspace requirement, not an edge)
-          │
+          │                                                          │
           ├──< Edge          (belt: source → target, carrying an outcome)
-          │                  (wire: an end that is memory or knowledge)
-          │
-          └──< Run
+          │                  (wire: an end that is storage)          │
+          │                                                          │
+          └──< Run                                                   │
                  ├──< NodeRun ──< Event   (append-only; the live stream)
                  ├──< RunWorktree         (one per codebase the run touched)
-                 └──< RunMemory           (one per memory node)
+                 └──< RunMemory           (one per memory node)      │
+                                                                     │
+Workspace library ──< Factory (library) ◄────────────────────────────┘
+                        ├──< Node   agent | memory | knowledge | entry | exit
+                        └──< Run    (kind: simulation)
 ```
 
-**Project** — a named workspace. Owns codebases and factories, and carries the
-project-wide provider and model defaults an agent node inherits, and an icon
+**Project** — a named workspace. Owns codebases and its main factory, and
+carries the project-wide provider and model defaults an agent node inherits, and an icon
 from a fixed set of ten presets.
 
 **Codebase** — a directory under `/workspace` that is a git repo. Both the
@@ -63,11 +67,19 @@ agent's *knowledge base* and its *operating target*. **Discovered, never
 supplied**: the API takes the id of something a scan returned, so no request
 ever carries a host path.
 
-**Factory** — a named subgraph with typed inputs and outputs. **A factory is
-also a valid node type**, which is what makes nesting work: a `factory-ref` node
-points at another factory and its ports are that factory's declared inputs and
-outputs. **Not built** — the type is in the union with no UI and no execution,
-so nesting is a later UI change rather than a file-format change.
+**Factory** — a named graph. A project's **main factory** is its line, from
+input nodes to output nodes. A **library factory** is a reusable, fully
+automated block owned by the workspace, not by a project
+([`decisions/0029`](decisions/0029-factories-are-a-workspace-library.md)): agents
+and storage between six **connectors** (`entry`/`exit` × `store`/`forward`/`loop`,
+[`decisions/0031`](decisions/0031-connectors-are-nodes.md)), and no input,
+output, human or factory node. A main factory uses one through a **factory
+node** (`factory-ref`), whose ways in and out are those connectors and whose
+codebase every agent inside works in. A factory node runs by **expansion** into
+its factory's nodes, in the project's one run
+([`decisions/0030`](decisions/0030-a-factory-runs-by-expansion.md)); a library
+factory on its own is **simulated** ([`decisions/0032`](decisions/0032-a-simulation-leaves-nothing-behind.md)).
+See [`behaviour/factories.md`](behaviour/factories.md).
 
 **Node** — typed, positioned, configured. Its persisted half is the
 `NodeDefinition` — what the operator drew. Its live half is the `NodeRuntime`,
@@ -118,14 +130,15 @@ seed — a base is a directory somebody takes over, so it lives in the workspace
 where git can show it.
 
 **Run** — one execution of a factory, with its input, its adapter, and its final
-status. **NodeRun** — one node's execution within it. **Event** — an append-only
+status: a `run` of a project's main factory, or a `simulation` of a library
+factory (`Run.kind`). **NodeRun** — one node's execution within it. **Event** — an append-only
 record of everything that happened, in the adapter's normalized union.
 
 ---
 
 ## Kinds, and why a kind is not a type
 
-Four node types vary by a **kind** carried in the node's freeform
+Six node types vary by a **kind** carried in the node's freeform
 `definition.config["kind"]`, read by one function (`models.node_kind`) so that
 validation, the run check, the orchestrator's dispatch and the summary all read
 it the same way.
@@ -143,6 +156,7 @@ it.
 | `output` | `discard` · `commit` · `commit-push` · `commit-merge` | What it does with the branch the run produced — strictly increasing reach, each step one the operator drew on purpose, starting at nothing. |
 | `human` | `approval` · `scope` | How much it asks for: a gate with one question written into the graph, or a negotiation an agent conducts over several turns. |
 | `agent` | `worker` · `reviewer` | What it is for: doing the job, or judging what it is given and saying so in a verdict. |
+| `entry` · `exit` | `store` · `forward` · `loop` | Which of a library factory's ways in, or out, a connector is — memory, input or loopback on the canvas. |
 
 **An unrecognised kind is returned as written, never defaulted.** Saying
 `"commit"` about a node whose file says `"commit-deploy"` would turn a
@@ -180,7 +194,9 @@ change with a test behind it, not an incidental one.
 
 | union | members |
 |---|---|
-| `NodeType` | `input` `agent` `output` `human` `memory` `knowledge` `factory-ref` |
+| `NodeType` | `input` `agent` `output` `human` `memory` `knowledge` `factory-ref` `entry` `exit` |
+| `ConnectorKind` | `store` `forward` `loop` |
+| `RunKind` | `run` `simulation` |
 | `InputKind` | `request` `prd` |
 | `OutputKind` | `discard` `commit` `commit-push` `commit-merge` |
 | `HumanKind` | `approval` `scope` |
@@ -237,7 +253,8 @@ awkward is not a rule — `main.json` is a file people edit in a pull request.
 5. **No output node may sit on a loop body.** Otherwise it would commit on every
    lap — or, for a `discard` output, end the line on every lap. The rule is
    type-wide; only the sentence the operator reads changes.
-6. **An edge into an agent or a human node arrives at one of three entries.**
+6. **An edge into an agent, a human or a factory node arrives at one of three
+   entries.**
    `store` takes a wire from a memory or a base, `forward` a belt running down
    the line, `loop` a judge's `fail` belt closing one; a human node draws no
    `store`, because only an agent may read storage. Enforced **client-side only**
@@ -248,8 +265,30 @@ awkward is not a rule — `main.json` is a file people edit in a pull request.
    [`decisions/0012`](decisions/0012-three-entry-handles.md).
 6. **Whether a node has two ports is a question about the node, not its type.**
    A worker and a reviewer are both `type: "agent"` and answer it differently
-   (`models.has_outcome_ports`). A human node always has two; an input has
-   nothing to fail at; an output that fails has nowhere left to route.
+   (`models.has_outcome_ports`). A human node always has two; so does a factory
+   node, whose `success` is its input exit and `fail` its loopback exit; an
+   input has nothing to fail at; an output that fails has nowhere left to route.
+
+### Shape of a library factory
+
+- **No input, output, human or factory node, and exactly the six connectors.**
+  (`api.validate_library_graph` at save time; `expand.body_problems` at run
+  time.) Factories do not nest.
+- **The input entry feeds something, and the input exit is reached from it**
+  without passing through the loopback entry — so a factory used without a loop
+  still reaches every machine and its way out. (`expand.body_problems`,
+  `validation.ts`.)
+- **Only a reviewer's fail belt feeds the loopback exit**, which is what makes a
+  factory node's `fail` port a judge's
+  ([`decisions/0031`](decisions/0031-connectors-are-nodes.md)).
+- **A memory connector is attached, not on the line** (`models.is_attached`), so
+  an edge touching one is a wire.
+- **A machine inside a library factory carries no codebase** (save-time refusal
+  in `api.validate_library_graph`). It works in the one its factory node names,
+  or the one a simulation names.
+- **A main factory holds no connector** (`api.validate_project_graph`).
+- **A library factory another project uses cannot be deleted**
+  (`Store.delete_library_factory`, which names the projects).
 
 ### Validity of a node
 
@@ -260,8 +299,8 @@ awkward is not a rule — `main.json` is a file people edit in a pull request.
    node. A scope session writes no code, and requiring a repository would make
    the node unusable at the head of a line, which is the only place anyone wants
    it.
-9. **A codebase id may only appear on an `agent` node**, and only if discovery
-   vouched for it.
+9. **A codebase id may only appear on an `agent` or a `factory-ref` node**, and
+   only if discovery vouched for it.
 10. **A memory node's label is its identity** — it is the filename, and a second
     hidden name would only be a way for the canvas and the disk to disagree. A
     knowledge node is a *reference* to a thing that already has a name, so its
@@ -280,8 +319,8 @@ awkward is not a rule — `main.json` is a file people edit in a pull request.
 
 ### Runs
 
-13. **One run at a time.** A second is refused with the id of the run holding
-    the slot.
+13. **One run at a time**, simulations included. A second is refused with the
+    id of the run holding the slot.
 14. **A run reads the saved factory file, not the canvas.** The greyed-out Run
     button is a courtesy; the server enforces the preconditions itself and
     returns every reason at once.

@@ -47,7 +47,7 @@ from fastapi.responses import PlainTextResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict
 
 from . import housekeeping
-from .models import Run, RunAnswer, RunDecision, RunInput, utcnow
+from .models import Run, RunAnswer, RunDecision, RunInput, SimulationStart, utcnow
 from .orchestrator import Orchestrator, RunBusy, RunConflict, get_orchestrator
 from .runcheck import NotRunnable
 from .runlog import RunLog
@@ -93,6 +93,36 @@ async def start_run(project_id: str, factory_id: str) -> Run:
             status.HTTP_409_CONFLICT,
             f"a run is already in flight ({exc.run_id}) — this container runs "
             "one factory at a time. Cancel it, or wait for it to finish.",
+        ) from exc
+    except NotRunnable as exc:
+        raise HTTPException(UNPROCESSABLE, exc.problems) from exc
+
+
+@router.post(
+    "/factories/{factory_id}/simulations",
+    response_model=Run,
+    status_code=status.HTTP_201_CREATED,
+)
+async def start_simulation(factory_id: str, body: SimulationStart) -> Run:
+    """Simulate one library factory in a chosen codebase (`decisions/0032`).
+
+    The same refusals as `start_run`, and the same door afterwards: the run sits
+    in `waiting_input` and its one input is posted to `/runs/{id}/input`.
+    """
+    try:
+        return await orchestrator().simulate(factory_id, body.codebase_id)
+    except NotFound as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
+    except (Conflict, Corrupt) as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+    except PathEscape as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "invalid path") from exc
+    except RunBusy as exc:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"a run is already in flight ({exc.run_id}) — this container runs "
+            "one factory at a time, simulations included. Cancel it, or wait for "
+            "it to finish.",
         ) from exc
     except NotRunnable as exc:
         raise HTTPException(UNPROCESSABLE, exc.problems) from exc

@@ -64,7 +64,12 @@ def render(run: Run) -> str:
         f"# {run.factory_name or run.factory_id} — {verdict}",
         "",
         f"- **Run** `{run.id}`",
-        f"- **Project** `{run.project_id}` · **factory** `{run.factory_id}`",
+        (
+            f"- **Simulation** of library factory `{run.factory_id}` — worked in a "
+            "detached checkout, so no branch was made, and nothing was kept"
+            if run.kind == "simulation"
+            else f"- **Project** `{run.project_id}` · **factory** `{run.factory_id}`"
+        ),
         f"- **Branch** `{run.branch}`" if run.branch else "- **Branch** —",
         f"- **Adapter** `{run.adapter}`"
         + ("  ⚠️ **ran with the agent's permission checks bypassed**" if run.dangerous else ""),
@@ -88,7 +93,8 @@ def render(run: Run) -> str:
             "**Nothing, deliberately** — this factory ends with a `discard` "
             "output, so no commit was made."
         )
-        gone = [made for made in run.worktrees if not made.kept]
+        # A simulation's checkout was detached: there is no branch to report.
+        gone = [made for made in run.worktrees if not made.kept and made.branch]
         if gone:
             lines += [
                 "",

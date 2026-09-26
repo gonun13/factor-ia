@@ -33,6 +33,7 @@ import { useHoverNote } from "./NodeNote";
 import {
   AgentGlyph,
   DiscardGlyph,
+  FactoryGlyph,
   HumanGlyph,
   InputGlyph,
   KnowledgeGlyph,
@@ -53,6 +54,7 @@ const GLYPHS = {
   memory: MemoryGlyph,
   knowledge: KnowledgeGlyph,
   output: OutputGlyph,
+  factory: FactoryGlyph,
 } as const;
 
 /**
@@ -80,6 +82,7 @@ const TYPE_NAME = {
   memory: "memory",
   knowledge: "knowledge",
   output: "output",
+  factory: "factory",
 } as const;
 
 const KIND_NAME: Record<string, string> = {
@@ -157,6 +160,12 @@ export function NodeShell({
   const loopNote = useHoverNote(
     "loop — a reviewer’s fail belt, coming back round for another lap, arrives here",
   );
+  // A factory node's memory exit: the one source a wire leaves a machine by,
+  // because it relays what the machines inside file rather than filing itself.
+  const storeOutNote = useHoverNote(
+    "memory out — wire storage from here to keep what the machines inside file",
+  );
+  const isFactory = kind === "factory";
   const variant = nodeKind(data.definition);
   const Glyph = KIND_GLYPHS[variant] ?? GLYPHS[kind];
   const name = KIND_NAME[variant] ?? TYPE_NAME[kind];
@@ -274,19 +283,25 @@ export function NodeShell({
               ENTRY_STORE,
               "handle-store",
               storeNote,
-              "storage — a memory or a knowledge base this machine may read arrives here",
+              isFactory
+                ? "memory in — storage wired here is handed to the machines inside"
+                : "storage — a memory or a knowledge base this machine may read arrives here",
             )}
           {entry(
             ENTRY_FORWARD,
             "handle-forward",
             forwardNote,
-            "forward — the belt that runs down the line into this machine arrives here",
+            isFactory
+              ? "input in — the belt that runs down the line into this factory arrives here"
+              : "forward — the belt that runs down the line into this machine arrives here",
           )}
           {entry(
             ENTRY_LOOP,
             "handle-loop",
             loopNote,
-            "loop — a reviewer’s fail belt, coming back round for another lap, arrives here",
+            isFactory
+              ? "loopback in — a judge’s fail belt sending the work back into this factory arrives here"
+              : "loop — a reviewer’s fail belt, coming back round for another lap, arrives here",
           )}
         </>
       ) : (
@@ -381,6 +396,38 @@ export function NodeShell({
             className="handle-read"
             aria-label="read — machines wired from here may consult this base"
             {...readNote.handlers}
+          />
+        </>
+      ) : isFactory ? (
+        /* **A factory node's three ways out**, top to bottom in the rows its
+           ways in use: memory, input, loopback. The input exit is its `success`
+           port and the loopback exit its `fail` port — the names a belt's
+           `source_handle` has always carried, so everything that routes on them
+           reads a factory node like any other machine with two outcomes. The
+           memory exit is a wire's source, and a wire carries no outcome. */
+        <>
+          {storeOutNote.popup}
+          <Handle
+            id="store"
+            type="source"
+            position={Position.Right}
+            className="handle-store-out"
+            aria-label="memory out — wire storage from here to keep what the machines inside file"
+            {...storeOutNote.handlers}
+          />
+          <Handle
+            id="success"
+            type="source"
+            position={Position.Right}
+            className="handle-success handle-factory-out"
+            title="input out — what the factory finished with"
+          />
+          <Handle
+            id="fail"
+            type="source"
+            position={Position.Right}
+            className="handle-fail handle-factory-out"
+            title="loopback out — work a reviewer inside the factory sent back"
           />
         </>
       ) : hasOutcomePorts(data.definition) ? (

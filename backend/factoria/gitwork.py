@@ -603,6 +603,17 @@ def add_worktree(repo: Path | str, path: Path | str, branch: str, base: str) -> 
     _git(["worktree", "add", "-b", branch, str(path), base], cwd=repo)
 
 
+def add_detached_worktree(repo: Path | str, path: Path | str, base: str) -> None:
+    """`git worktree add --detach <path> <base>` — a checkout on no branch.
+
+    A simulation's worktree (`decisions/0032`). A simulation is discarded
+    however it ends, and this module never deletes a ref, not even its own
+    (`_check`) — so the only way a discarded run leaves no branch behind is
+    never to make one. Removed like any other worktree, by `remove_worktree`.
+    """
+    _git(["worktree", "add", "--detach", str(path), base], cwd=repo)
+
+
 def attach_worktree(repo: Path | str, path: Path | str, branch: str) -> None:
     """`git worktree add <path> <branch>` — a checkout of a branch that already
     exists, with no `-b`.

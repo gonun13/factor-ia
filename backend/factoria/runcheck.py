@@ -68,8 +68,10 @@ from .models import (
     DEFAULT_EDGE_OUTCOME,
     EDGE_OUTCOMES,
     HUMAN_KINDS,
+    CONNECTOR_TYPES,
     edge_outcome,
     has_outcome_ports,
+    is_attached,
     ATTACHED_TYPES,
     node_base,
     node_kind,
@@ -93,12 +95,19 @@ def run_problems(
     codebases: list[Codebase] | None = None,
     *,
     tree_state: Callable[[str], gitwork.TreeState] = gitwork.tree_state,
+    within: dict[str, str] | None = None,
 ) -> list[str]:
     """Everything that makes `factory` unrunnable, in the order a human reads.
 
     `tree_state` is injected so a test can state a repo's condition instead of
     building one — the git checks are real subprocesses, and most of what they
     guard has nothing to do with git.
+
+    `within` says this is a project's **flat** graph, factory nodes opened
+    (`expand.project_problems`): flat node id → the factory node it came from.
+    Those callers have already said everything about a factory node in its own
+    words, so the sentences that would repeat it about the machines inside are
+    left out — an inner agent's missing codebase is its factory node's.
     """
     nodes = factory.nodes
     if not nodes:
@@ -146,7 +155,12 @@ def run_problems(
 
     for node in by_type.get("agent", []):
         attached = node.definition.codebase_id
-        if not attached:
+        if within is not None and node.id in within:
+            # An inner agent's codebase is its factory node's, and whether that
+            # one is set and still discovered is said once, about the factory
+            # node (`expand.project_problems`).
+            pass
+        elif not attached:
             problems.append(
                 f"Agent “{label(node)}” has no codebase attached — "
                 "an agent cannot run without one."
@@ -236,7 +250,13 @@ def run_problems(
         # A memory is attached to the line, never on it: it has no belts by
         # construction, so every rule here would refuse it for being exactly
         # what it is. `_wire_problems` asks the questions that apply to it.
-        if kind in ATTACHED_TYPES:
+        if is_attached(node):
+            continue
+        # A connector is the edge of a factory, and whether a factory node is
+        # fed and drained is its own sentence (`expand._ref_problems`). Asked
+        # here, the same fact would come back about a door the operator cannot
+        # see from the project canvas.
+        if kind in CONNECTOR_TYPES:
             continue
         if kind == "input":
             off_line = node.id not in outgoing
@@ -298,10 +318,14 @@ def run_problems(
     problems += _permission_problems(by_type.get("agent", []), label)
 
     for node in nodes:
-        if node.definition.type == "factory-ref":
+        if node.definition.type == "factory-ref" and within is None:
+            # A factory node runs as its factory's nodes, opened before this
+            # check (`expand.py`). One here means a caller skipped that — or,
+            # from `expand.project_problems`, one that could not be opened,
+            # which that function has already said in the node's own words.
             problems.append(
-                f"“{label(node)}” is a {node.definition.type} node, which nothing "
-                "executes yet."
+                f"“{label(node)}” is a factory node, and it was not opened before "
+                "the run was checked — nothing executes a factory node itself."
             )
     return problems
 
@@ -477,7 +501,12 @@ def _wire_problems(
                 )
 
     # A memory nothing reads is wiring that costs a write and saves nothing.
+    # Except a simulation's scratch memory (`expand.harness`), which stands in
+    # for storage a project would wire to a factory's memory exit and exists so
+    # the operator can open what was filed.
     for node in memories:
+        if node.definition.config.get("scratch") is True:
+            continue
         if not readers[node.id]:
             problems.append(
                 f"nothing reads “{label(node)}” — wire it to the machine that "
@@ -1025,10 +1054,15 @@ def back_edges(nodes: list[Node], edges: list[Edge]) -> dict[str, list[str]]:
             return False
         if edge_outcome(edge) != "fail" or not has_outcome_ports(source):
             return False
-        if source.definition.type not in ("agent", "human"):
+        if source.definition.type not in ("agent", "human", "factory-ref"):
             return False
         if source.definition.type == "human" and node_kind(source) != "approval":
             return False  # a scope node's fail is a crash, not a judgement
+        # A **factory node's** fail port is its loopback exit, which only a
+        # reviewer inside may feed (`expand.body_problems`) — so it is a judge's.
+        # Only a project graph ever holds one: this is how `expand` tells a loop
+        # into a factory from a forward belt. The walk and the run check see the
+        # flat graph, where the belt leaves the reviewer itself.
         return True
 
     # Pass one — qualification, over the whole graph. A belt closes a loop when
