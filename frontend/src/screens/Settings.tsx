@@ -281,8 +281,7 @@ export function Settings({ onBack }: { onBack: () => void }) {
           <h1>Settings</h1>
           <p className="lede">
             Once per machine: sign the container in to each agent provider you
-            use, and give it a key so a run can push. Claude and Cursor keep
-            separate credentials.
+            use, and give it a key so a run can push.
           </p>
 
           {error && <div className="error">{error}</div>}
@@ -363,8 +362,8 @@ export function Settings({ onBack }: { onBack: () => void }) {
               </span>
             </div>
             <p className="lede">
-              One ed25519 keypair, generated inside the container. Only the
-              public half is ever shown — add it to your forge to let a run push.
+              One ed25519 keypair, generated inside the container. Add the
+              public half to your forge to let a run push.
             </p>
 
             {key?.exists ? (
@@ -405,8 +404,8 @@ export function Settings({ onBack }: { onBack: () => void }) {
 
           <div className="footnote">
             <span>
-              Credentials live in a container volume that is never bound to the
-              host, and leave it only as traffic to the provider.
+              Credentials live in a container volume, never bound to the host,
+              and leave it only as traffic to the provider.
             </span>
           </div>
         </div>

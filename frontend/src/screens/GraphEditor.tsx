@@ -513,7 +513,7 @@ export function GraphEditor({
       setNormalised(
         `${orphaned.length === 1 ? "A write wire" : `${orphaned.length} write wires`} from ${names
           .map((name) => `“${name}”`)
-          .join(", ")} ${orphaned.length === 1 ? "was" : "were"} removed: a principles base is read-only to every machine. Save to keep the change.`,
+          .join(", ")} ${orphaned.length === 1 ? "was" : "were"} removed — principles are read-only to every machine. Save to keep it.`,
       );
       return existing.filter((edge) => !orphaned.includes(edge));
     });

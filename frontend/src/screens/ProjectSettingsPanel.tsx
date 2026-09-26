@@ -266,8 +266,8 @@ export function ProjectSettingsPanel({
         <div className="slideover-body">
           <p className="lede">
             What every agent in <strong>{project.name}</strong> runs on unless
-            the agent says otherwise, and the icon the project wears. Saved to
-            this machine, not to the factory file.
+            the agent says otherwise, and the project&rsquo;s icon. Saved to this
+            machine, not to the factory file.
           </p>
 
           {error && <div className="error">{error}</div>}
@@ -337,8 +337,8 @@ export function ProjectSettingsPanel({
             )}
             {!modelIgnored && stale && (
               <span className="bad">
-                This CLI no longer offers that model. It is kept as written and
-                will be refused at run time rather than quietly replaced.
+                This CLI no longer offers that model — a run will be refused.
+                Choose another.
               </span>
             )}
           </section>

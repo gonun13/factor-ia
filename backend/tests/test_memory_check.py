@@ -134,7 +134,7 @@ def test_a_reader_with_its_writer_below_it_on_the_line_is_refused(repo: Path) ->
     edges += [wire("n-read", "n-mem"), wire("n-mem", "n-write")]
     found = problems(nodes, edges, repo)
     assert any("is not above it on the line" in p for p in found), found
-    assert any("the belts decide what has happened yet" in p for p in found), found
+    assert any("move the writer above it" in p for p in found), found
 
 
 def test_a_reader_of_a_memory_nothing_writes_to_is_refused(repo: Path) -> None:
@@ -149,7 +149,7 @@ def test_a_memory_nobody_reads_is_refused(repo: Path) -> None:
     edges = [e for e in edges if e.id != wire("n-mem", "n-read").id]
     found = problems(nodes, edges, repo)
     assert any("nothing reads" in p for p in found), found
-    assert any("saves no work" in p for p in found), found
+    assert any("or delete it" in p for p in found), found
 
 
 def test_a_writer_inside_a_loop_may_be_read_below_it(repo: Path) -> None:
@@ -184,7 +184,7 @@ def test_two_memories_that_land_on_one_name_are_refused(repo: Path) -> None:
     nodes, edges = canonical([mem("n-mem-2", "codebase  index")])
     edges += [wire("n-write", "n-mem-2"), wire("n-mem-2", "n-read")]
     found = problems(nodes, edges, repo)
-    assert any("would write to one file" in p for p in found), found
+    assert any("all come out as" in p and "rename one" in p for p in found), found
     assert any("codebase-index" in p for p in found), found
 
 

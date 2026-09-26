@@ -143,21 +143,21 @@ export function runProblems(
 
   if (!factoryMode && byType("input").length === 0) {
     problems.push({
-      message: "No input node — a factory starts with one, and a run has nothing to submit.",
+      message: "No input node — add one.",
       nodeIds: [],
     });
   }
   if (factoryMode && agents.length === 0) {
     problems.push({
-      message: "No agent node — nothing inside the factory would do any work.",
+      message: "No agent node — add one.",
       nodeIds: [],
     });
   } else if (agents.length === 0 && refs.length === 0) {
-    problems.push({ message: "No agent node — nothing would do any work.", nodeIds: [] });
+    problems.push({ message: "No agent node — add one.", nodeIds: [] });
   }
   if (!factoryMode && byType("output").length === 0) {
     problems.push({
-      message: "No output node — a factory ends with one, and the run would produce nothing.",
+      message: "No output node — add one.",
       nodeIds: [],
     });
   }
@@ -172,8 +172,8 @@ export function runProblems(
     problems.push({
       message:
         unattached.length === 1
-          ? `Agent “${label(unattached[0])}” has no codebase attached — an agent cannot run without one.`
-          : `${unattached.length} agents have no codebase attached — an agent cannot run without one.`,
+          ? `Agent “${label(unattached[0])}” has no codebase attached — attach one.`
+          : `${unattached.length} agents have no codebase attached — attach one to each.`,
       nodeIds: unattached.map((n) => n.id),
     });
   }
@@ -201,7 +201,7 @@ export function runProblems(
   );
   for (const node of scopeless) {
     problems.push({
-      message: `Scope “${label(node)}” has no skill attached — a scope node needs one to know what to ask about.`,
+      message: `Scope “${label(node)}” has no skill attached — attach one.`,
       nodeIds: [node.id],
     });
   }
@@ -227,7 +227,7 @@ export function runProblems(
       });
     } else if (!state.head) {
       problems.push({
-        message: `“${id}” has no commits yet — a run branches from HEAD.`,
+        message: `“${id}” has no commits yet — make a first commit.`,
         nodeIds: owners,
       });
     } else if (state.dirty) {
@@ -272,7 +272,7 @@ export function runProblems(
     const targetIsMemory = target.data.definition.type === "memory";
     if (sourceIsMemory && targetIsMemory) {
       problems.push({
-        message: `“${label(source)}” is wired to “${label(target)}” and both are memories — a memory is written by a machine and read by one, so there is nothing at either end of this to do it.`,
+        message: `“${label(source)}” is wired to “${label(target)}” and both are memories — wire each to an agent instead.`,
         nodeIds: [source.id, target.id],
       });
       continue;
@@ -280,7 +280,7 @@ export function runProblems(
     if (targetIsMemory) {
       if (!storageMachine(source.data.definition.type)) {
         problems.push({
-          message: `“${label(target)}” is written to by “${label(source)}”, which is a ${source.data.definition.type} node — what shapes a memory is the contract given to the machine writing it, so only an agent may write one.`,
+          message: `“${label(target)}” is written to by “${label(source)}”, which is a ${source.data.definition.type} node — only an agent may write one.`,
           nodeIds: [target.id, source.id],
         });
       } else {
@@ -288,14 +288,14 @@ export function runProblems(
       }
       if (leavesByOutcome(wire)) {
         problems.push({
-          message: `the wire from “${label(source)}” to “${label(target)}” leaves by an outcome port — a memory is filed whatever the machine’s outcome, so a wire carries no outcome.`,
+          message: `the wire from “${label(source)}” to “${label(target)}” leaves by an outcome port — a wire carries no outcome.`,
           nodeIds: [source.id, target.id],
         });
       }
     } else if (sourceIsMemory) {
       if (!storageMachine(target.data.definition.type)) {
         problems.push({
-          message: `“${label(source)}” is read by “${label(target)}”, which is a ${target.data.definition.type} node — a memory hands out a reference for a machine to read, so only an agent may read one.`,
+          message: `“${label(source)}” is read by “${label(target)}”, which is a ${target.data.definition.type} node — only an agent may read one.`,
           nodeIds: [source.id, target.id],
         });
       } else {
@@ -338,14 +338,14 @@ export function runProblems(
         }
         if (!wrote.some((w) => above.get(reader.id)?.has(w.id))) {
           problems.push({
-            message: `“${label(reader)}” reads “${label(node)}”, but ${wrote.map((w) => `“${label(w)}”`).join(", ")} is not above it on the line — the memory would still be empty when it got there. A wire says where work is filed; the belts decide what has happened yet.`,
+            message: `“${label(reader)}” reads “${label(node)}”, but ${wrote.map((w) => `“${label(w)}”`).join(", ")} is not above it on the line — move the writer above it.`,
             nodeIds: [reader.id, node.id, ...wrote.map((w) => w.id)],
           });
         }
       }
       if (read.length === 0) {
         problems.push({
-          message: `nothing reads “${label(node)}” — wire it to the machine that should use it, or delete it. A memory nobody was told about saves no work.`,
+          message: `nothing reads “${label(node)}” — wire it to the machine that should use it, or delete it.`,
           nodeIds: [node.id],
         });
       }
@@ -361,7 +361,7 @@ export function runProblems(
   for (const [slug, sharing] of bySlug) {
     if (sharing.length < 2) continue;
     problems.push({
-      message: `${sharing.map((n) => `“${label(n)}”`).join(", ")} all come out as “${slug}”, so they would write to one file and overwrite each other. Rename one.`,
+      message: `${sharing.map((n) => `“${label(n)}”`).join(", ")} all come out as “${slug}” — rename one.`,
       nodeIds: sharing.map((n) => n.id),
     });
   }
@@ -388,7 +388,7 @@ export function runProblems(
       const chosen = knowledgeBase(node.data.definition);
       if (!chosen) {
         problems.push({
-          message: `“${label(node)}” has no knowledge base selected — a knowledge node is a reference to a base that already exists, so an empty one points at nothing. Choose a base, or delete the node.`,
+          message: `“${label(node)}” has no knowledge base selected — choose a base, or delete the node.`,
           nodeIds: [node.id],
         });
         continue;
@@ -412,7 +412,7 @@ export function runProblems(
     for (const [baseId, sharing] of byBase) {
       if (sharing.length < 2) continue;
       problems.push({
-        message: `${sharing.map((n) => `“${label(n)}”`).join(", ")} all select the knowledge base “${baseId}”. One base is one shelf with one lock and one index — put every wire on a single node, and delete the rest.`,
+        message: `${sharing.map((n) => `“${label(n)}”`).join(", ")} all select the knowledge base “${baseId}” — put every wire on a single node, and delete the rest.`,
         nodeIds: sharing.map((n) => n.id),
       });
     }
@@ -430,7 +430,7 @@ export function runProblems(
       // unhelpful advice about a wire that has no right end.
       if (isAttached(source.data.definition) && isAttached(target.data.definition)) {
         problems.push({
-          message: `“${label(source)}” is wired to “${label(target)}” and both are storage — a knowledge base is read and written by a machine, so there is nothing at either end of this to do it.`,
+          message: `“${label(source)}” is wired to “${label(target)}” and both are storage — wire each to an agent instead.`,
           nodeIds: [source.id, target.id],
         });
         continue;
@@ -442,14 +442,14 @@ export function runProblems(
       if (targetType === "knowledge") {
         if (!storageMachine(sourceType)) {
           problems.push({
-            message: `“${label(target)}” is written to by “${label(source)}”, which is a ${sourceType} node — a base is contributed to by a machine, so only an agent may write to one.`,
+            message: `“${label(target)}” is written to by “${label(source)}”, which is a ${sourceType} node — only an agent may write to one.`,
             nodeIds: [target.id, source.id],
           });
           continue;
         }
         if (leavesByOutcome(wire)) {
           problems.push({
-            message: `the wire from “${label(source)}” to “${label(target)}” leaves by an outcome port — a base is contributed to whatever the machine’s outcome, so a wire carries no outcome.`,
+            message: `the wire from “${label(source)}” to “${label(target)}” leaves by an outcome port — a wire carries no outcome.`,
             nodeIds: [source.id, target.id],
           });
         }
@@ -458,7 +458,7 @@ export function runProblems(
         const base = chosen ? library.get(chosen) : undefined;
         if (base && !knowledgeWritable(base.type)) {
           problems.push({
-            message: `“${label(source)}” is wired to write to “${label(target)}”, which is a ${base.type} base. Principles are what the machines are measured against, so nothing may edit them from inside a run — a machine that can edit the standard it is judged by is a machine that can pass its own review.`,
+            message: `“${label(source)}” is wired to write to “${label(target)}”, which is a ${base.type} base. Principles are read-only — remove the wire.`,
             nodeIds: [source.id, target.id],
           });
         }
@@ -466,7 +466,7 @@ export function runProblems(
       }
       if (!storageMachine(targetType)) {
         problems.push({
-          message: `“${label(source)}” is read by “${label(target)}”, which is a ${targetType} node — a base hands out what it holds for a machine to read, so only an agent may read one.`,
+          message: `“${label(source)}” is read by “${label(target)}”, which is a ${targetType} node — only an agent may read one.`,
           nodeIds: [source.id, target.id],
         });
         continue;
@@ -481,7 +481,7 @@ export function runProblems(
     for (const node of knowledgeNodes) {
       if (reached.has(node.id)) continue;
       problems.push({
-        message: `nothing is wired to “${label(node)}” — wire it to the machines that may consult it, or delete it. A base nobody was given is a base nobody can read.`,
+        message: `nothing is wired to “${label(node)}” — wire it to the machines that may consult it, or delete it.`,
         nodeIds: [node.id],
       });
     }
@@ -522,8 +522,8 @@ export function runProblems(
     problems.push({
       message:
         fedInputs.length === 1
-          ? `“${label(fedInputs[0])}” is an input, so nothing may feed it — a factory starts with its inputs.`
-          : `${fedInputs.length} input nodes are being fed — a factory starts with its inputs.`,
+          ? `“${label(fedInputs[0])}” is an input, so nothing may feed it.`
+          : `${fedInputs.length} input nodes are being fed — nothing may feed an input.`,
       nodeIds: fedInputs.map((n) => n.id),
     });
   }
@@ -534,8 +534,8 @@ export function runProblems(
     problems.push({
       message:
         feedingOutputs.length === 1
-          ? `“${label(feedingOutputs[0])}” is an output, so it may not feed anything — a factory ends with its outputs.`
-          : `${feedingOutputs.length} output nodes feed something — a factory ends with its outputs.`,
+          ? `“${label(feedingOutputs[0])}” is an output, so it may not feed anything.`
+          : `${feedingOutputs.length} output nodes feed something — an output may not feed anything.`,
       nodeIds: feedingOutputs.map((n) => n.id),
     });
   }
@@ -575,7 +575,7 @@ export function runProblems(
       problems.push({
         message:
           type === "agent"
-            ? `“${label(source)}” is a Worker, which has one way out — its belt cannot leave by “${edge.sourceHandle}”. A machine that judges what it is given is a Reviewer: drop one from the palette in its place, or remove the belt.`
+            ? `“${label(source)}” is a Worker, which has one way out — its belt cannot leave by “${edge.sourceHandle}”. Use a Reviewer in its place, or remove the belt.`
             : `“${label(source)}” is a ${type} node, which has one way out — its belt cannot leave by “${edge.sourceHandle}”.`,
         nodeIds: [source.id],
       });
@@ -620,19 +620,19 @@ export function runProblems(
     const ends = [source.id, target.id];
     if (edge.targetHandle === ENTRY_STORE) {
       problems.push({
-        message: `The wire into “${label(target)}” arrives at its storage entry, but it comes from “${label(source)}”, which is a ${source.data.definition.type} node — the storage entry takes a memory or a knowledge base.`,
+        message: `The wire from “${label(source)}” arrives at “${label(target)}”’s storage entry, which takes only a memory or a knowledge base.`,
         nodeIds: ends,
         severity: "notice",
       });
     } else if (edge.targetHandle === ENTRY_LOOP) {
       problems.push({
-        message: `The belt into “${label(target)}” arrives at its loop entry, but it does not come back round to “${label(source)}” — the loop entry is for a reviewer’s fail belt that closes one. Move it to the forward entry, so the drawing says what the run does.`,
+        message: `The belt from “${label(source)}” arrives at “${label(target)}”’s loop entry but closes no loop — move it to the forward entry.`,
         nodeIds: ends,
         severity: "notice",
       });
     } else if (edge.targetHandle === ENTRY_FORWARD) {
       problems.push({
-        message: `The belt from “${label(source)}” into “${label(target)}” closes a loop but arrives at the forward entry — move it to the loop entry, so the return path reads as one.`,
+        message: `The belt from “${label(source)}” into “${label(target)}” closes a loop but arrives at the forward entry — move it to the loop entry.`,
         nodeIds: ends,
         severity: "notice",
       });
@@ -769,8 +769,8 @@ export function runProblems(
   if (dirty) {
     problems.push({
       message: factoryMode
-        ? "Unsaved changes — a simulation reads the saved factory file, not the canvas."
-        : "Unsaved changes — a run reads the saved factory file, not the canvas.",
+        ? "Unsaved changes — save before simulating."
+        : "Unsaved changes — save before a run.",
       nodeIds: [],
     });
   }
@@ -808,7 +808,7 @@ function factoryNodeProblems(
     }
     if (!ref.data.definition.codebase_id) {
       problems.push({
-        message: `“${name}” has no codebase selected — every agent inside a factory works in the codebase its factory node names.`,
+        message: `“${name}” has no codebase selected — select one.`,
         nodeIds: [ref.id],
       });
     }
@@ -850,7 +850,7 @@ function factoryNodeProblems(
       for (const belt of loopsIn) {
         const judge = byId.get(belt.source);
         problems.push({
-          message: `“${judge ? label(judge) : belt.source}” sends work back into “${name}”, but nothing inside “${factory.name}” takes work back — its loopback entry feeds nothing.`,
+          message: `“${judge ? label(judge) : belt.source}” sends work back into “${name}”, but nothing inside “${factory.name}” takes work back.`,
           nodeIds: [ref.id, belt.source],
         });
       }
@@ -900,9 +900,9 @@ function bodyProblems(
 ): Problem[] {
   const problems: Problem[] = [];
   const forbidden: Record<string, string> = {
-    input: "a factory is fed through its input entry, not an input node",
-    output: "a factory hands its work on through its input exit, not an output node",
-    human: "a factory is fully automated — a person belongs on the project's line",
+    input: "use its input entry instead",
+    output: "use its input exit instead",
+    human: "a factory is fully automated",
     "factory-ref": "a factory cannot contain another factory",
   };
   for (const node of nodes) {
@@ -917,7 +917,7 @@ function bodyProblems(
   const exitStore = connectorOf(nodes, "exit", "store");
   if (!entryForward || !entryLoop || !entryStore || !exitForward || !exitLoop || !exitStore) {
     problems.push({
-      message: "The factory is missing a connector — it has to have all six, three in and three out.",
+      message: "The factory is missing a connector — it needs all six.",
       nodeIds: [],
     });
     return problems;
@@ -929,13 +929,13 @@ function bodyProblems(
     const source = byId.get(belt.source);
     if (target?.data.definition.type === "entry") {
       problems.push({
-        message: `“${label(target)}” is an entry, so nothing inside the factory may feed it — it is fed from the project.`,
+        message: `“${label(target)}” is an entry, so nothing inside the factory may feed it.`,
         nodeIds: [target.id],
       });
     }
     if (source?.data.definition.type === "exit") {
       problems.push({
-        message: `“${label(source)}” is an exit, so it may not feed anything inside the factory — what reaches it leaves for the project.`,
+        message: `“${label(source)}” is an exit, so it may not feed anything inside the factory.`,
         nodeIds: [source.id],
       });
     }
@@ -949,7 +949,7 @@ function bodyProblems(
   const exitFed = belts.some((belt) => belt.target === exitForward.id);
   if (!exitFed) {
     problems.push({
-      message: `Nothing reaches “${label(exitForward)}” — draw a belt from the last machine to it, so the factory has a way out.`,
+      message: `Nothing reaches “${label(exitForward)}” — draw a belt from the last machine to it.`,
       nodeIds: [exitForward.id],
     });
   }
@@ -981,12 +981,12 @@ function bodyProblems(
     if (!target) continue;
     if (target.data.definition.type !== "agent") {
       problems.push({
-        message: `“${label(entryLoop)}” feeds “${label(target)}” — work sent back goes to a machine, which does it again.`,
+        message: `“${label(entryLoop)}” feeds “${label(target)}” — work sent back must go to an agent.`,
         nodeIds: [entryLoop.id, target.id],
       });
     } else if (!reached.has(target.id)) {
       problems.push({
-        message: `“${label(target)}” is reached only from “${label(entryLoop)}”, so it would never run when nothing is sent back — feed it from “${label(entryForward)}”'s line as well.`,
+        message: `“${label(target)}” is reached only from “${label(entryLoop)}” — feed it from “${label(entryForward)}”'s line as well.`,
         nodeIds: [target.id],
       });
     }
@@ -1001,7 +1001,7 @@ function bodyProblems(
       belt.sourceHandle === "fail";
     if (!judged) {
       problems.push({
-        message: `“${label(source)}” feeds “${label(exitLoop)}”, and only a reviewer's fail belt may — the loopback exit is how a factory says the work should go back.`,
+        message: `“${label(source)}” feeds “${label(exitLoop)}”, and only a reviewer's fail belt may.`,
         nodeIds: [source.id, exitLoop.id],
       });
     }
@@ -1012,13 +1012,13 @@ function bodyProblems(
     if (!source || !target) continue;
     if (source.id === entryStore.id && target.data.definition.type !== "agent") {
       problems.push({
-        message: `“${label(entryStore)}” is wired to “${label(target)}” — what is wired into the factory is read by a machine, so only an agent may take it.`,
+        message: `“${label(entryStore)}” is wired to “${label(target)}” — only an agent may take it.`,
         nodeIds: [entryStore.id, target.id],
       });
     }
     if (target.id === exitStore.id && source.data.definition.type !== "agent") {
       problems.push({
-        message: `“${label(source)}” is wired to “${label(exitStore)}” — what the factory files is a machine's answer, so only an agent may write it.`,
+        message: `“${label(source)}” is wired to “${label(exitStore)}” — only an agent may write it.`,
         nodeIds: [source.id, exitStore.id],
       });
     }

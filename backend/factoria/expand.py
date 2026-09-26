@@ -86,9 +86,9 @@ SCRATCH_KEY = "scratch"
 #: What a library factory may not contain, and why, for a file edited by hand
 #: past the save-time refusal (`api.validate_library_graph`).
 FORBIDDEN_IN_BODY: dict[str, str] = {
-    "input": "a factory is fed through its input entry, not an input node",
-    "output": "a factory hands its work on through its input exit, not an output node",
-    "human": "a factory is fully automated — a person belongs on the project's line",
+    "input": "use its input entry instead",
+    "output": "use its input exit instead",
+    "human": "a factory is fully automated",
     "factory-ref": "a factory cannot contain another factory",
 }
 
@@ -188,7 +188,7 @@ def body_problems(body: Factory) -> list[str]:
     exit_store = connectors[("exit", "store")]
 
     if not any(node.definition.type == "agent" for node in body.nodes):
-        problems.append("No agent node — nothing inside the factory would do any work.")
+        problems.append("No agent node — add one.")
 
     # Direction first: an entry is fed only from outside, and an exit feeds only
     # what is outside. A belt the wrong way round is a line that leaves the
@@ -199,12 +199,12 @@ def body_problems(body: Factory) -> list[str]:
         if target is not None and target.definition.type == "entry":
             problems.append(
                 f"“{_label(target)}” is an entry, so nothing inside the factory may "
-                "feed it — it is fed from the project."
+                "feed it."
             )
         if source is not None and source.definition.type == "exit":
             problems.append(
                 f"“{_label(source)}” is an exit, so it may not feed anything inside "
-                "the factory — what reaches it leaves for the project."
+                "the factory."
             )
 
     if not any(belt.source == entry_forward.id for belt in belts):
@@ -215,7 +215,7 @@ def body_problems(body: Factory) -> list[str]:
     if not any(belt.target == exit_forward.id for belt in belts):
         problems.append(
             f"Nothing reaches “{_label(exit_forward)}” — draw a belt from the last "
-            "machine to it, so the factory has a way out."
+            "machine to it."
         )
 
     # Reachability over the belts, **without the loopback entry**. A run in
@@ -251,12 +251,12 @@ def body_problems(body: Factory) -> list[str]:
         if target.definition.type != "agent":
             problems.append(
                 f"“{_label(entry_loop)}” feeds “{_label(target)}” — work sent back "
-                "goes to a machine, which does it again."
+                "must go to an agent."
             )
         elif target.id not in reached:
             problems.append(
-                f"“{_label(target)}” is reached only from “{_label(entry_loop)}”, so "
-                "it would never run when nothing is sent back — feed it from "
+                f"“{_label(target)}” is reached only from “{_label(entry_loop)}” — "
+                "feed it from "
                 f"“{_label(entry_forward)}”'s line as well."
             )
 
@@ -278,8 +278,7 @@ def body_problems(body: Factory) -> list[str]:
         if not judged:
             problems.append(
                 f"“{_label(source)}” feeds “{_label(exit_loop)}”, and only a "
-                "reviewer's fail belt may — the loopback exit is how a factory says "
-                "the work should go back."
+                "reviewer's fail belt may."
             )
 
     # The memory connectors are storage: a machine reads the one and writes the
@@ -290,14 +289,13 @@ def body_problems(body: Factory) -> list[str]:
             continue
         if source.id == entry_store.id and target.definition.type != "agent":
             problems.append(
-                f"“{_label(entry_store)}” is wired to “{_label(target)}” — what is "
-                "wired into the factory is read by a machine, so only an agent may "
-                "take it."
+                f"“{_label(entry_store)}” is wired to “{_label(target)}” — only an "
+                "agent may take it."
             )
         if target.id == exit_store.id and source.definition.type != "agent":
             problems.append(
-                f"“{_label(source)}” is wired to “{_label(exit_store)}” — what the "
-                "factory files is a machine's answer, so only an agent may write it."
+                f"“{_label(source)}” is wired to “{_label(exit_store)}” — only an "
+                "agent may write it."
             )
         if target.id == entry_store.id or source.id == exit_store.id:
             problems.append(
@@ -535,8 +533,7 @@ def _ref_problems(
             judge = by_id.get(belt.source)
             problems.append(
                 f"“{_label(judge) if judge else belt.source}” sends work back into "
-                f"“{label}”, but nothing inside “{body.name}” takes work back — its "
-                "loopback entry feeds nothing."
+                f"“{label}”, but nothing inside “{body.name}” takes work back."
             )
     if any(edge_outcome(belt) == "fail" for belt in out) and not ports.fail_out:
         problems.append(
@@ -735,8 +732,7 @@ def project_problems(
         attached = node.definition.codebase_id
         if not attached:
             problems.append(
-                f"“{_label(node)}” has no codebase selected — every agent inside a "
-                "factory works in the codebase its factory node names."
+                f"“{_label(node)}” has no codebase selected — select one."
             )
         elif attached not in known:
             problems.append(

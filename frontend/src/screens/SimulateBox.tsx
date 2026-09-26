@@ -145,7 +145,7 @@ export function SimulateBox({
       {!run.status && written.length > 0 && (
         <p className="problems-note simulate-warning">
           A simulation writes to knowledge bases for real: {written.map((name) => `“${name}”`).join(", ")}{" "}
-          will keep what this factory files there.
+          will keep what this factory files.
         </p>
       )}
 

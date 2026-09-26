@@ -87,10 +87,9 @@ export function HumanNode({ id, data }: NodeProps<FlowNode>) {
         note={
           <p>
             The line stops here. Approving takes the upper belt, rejecting the
-            lower one — and a rejection with no belt drawn for it ends the run.
-            Draw that lower belt back to an earlier machine and a rejection
-            sends the work round again, carrying what you wrote as the whole of
-            the next lap’s brief.
+            lower one; with no lower belt, a rejection ends the run. Draw it
+            back to an earlier machine to send the work round again, with what
+            you wrote as the brief.
           </p>
         }
       >
@@ -118,9 +117,8 @@ export function HumanNode({ id, data }: NodeProps<FlowNode>) {
       data={data}
       note={
         <p>
-          The line stops here and an agent interviews you, one question at a
-          time. The answers become a document on the upper belt; a session that
-          ends without one takes the lower belt.
+          The line stops here and an agent interviews you. The answers leave
+          as a document on the upper belt; no document, the lower belt.
         </p>
       }
     >
@@ -171,12 +169,12 @@ export function HumanNode({ id, data }: NodeProps<FlowNode>) {
         {staleSkill && (
           <span className="warn">
             {chosenSkill?.system
-              ? "Built into the knowledge node — a node cannot wear it."
+              ? "Built into the knowledge node — choose another."
               : "No longer in _skills/."}
           </span>
         )}
         {!nodeSkill && (
-          <span className="warn">A scope node needs one to know what to ask about.</span>
+          <span className="warn">Required — attach one.</span>
         )}
       </div>
 

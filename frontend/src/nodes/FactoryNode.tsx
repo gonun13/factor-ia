@@ -46,10 +46,9 @@ export function FactoryNode({ id, data }: NodeProps<FlowNode>) {
       data={data}
       note={
         <p>
-          A block of machines from the factory library, standing as one. Work
-          comes in by its input entry and leaves by its input exit — or by its
-          loopback exit, when a reviewer inside sends it back. Every agent inside
-          works in the codebase chosen here.
+          A block of machines from the factory library. Work comes in by its
+          input entry and leaves by its input exit, or by its loopback exit when
+          sent back. Every agent inside works in the codebase chosen here.
         </p>
       }
     >
@@ -64,8 +63,8 @@ export function FactoryNode({ id, data }: NodeProps<FlowNode>) {
         {missing && <span className="warn">No longer in the library.</span>}
         {factory && factory.problems.length > 0 && (
           <span className="warn">
-            Not usable yet — {factory.problems.length} thing
-            {factory.problems.length === 1 ? "" : "s"} to fix in it.
+            Not usable — {factory.problems.length} thing
+            {factory.problems.length === 1 ? "" : "s"} to fix.
           </span>
         )}
         {uses.length > 0 && <span className="factory-uses">{uses.join(" · ")}</span>}

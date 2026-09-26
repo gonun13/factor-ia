@@ -175,7 +175,7 @@ function ProjectCanvasInner({
       if (!definition.factory_ref) return;
       // Leaving for the factory's editor unmounts this canvas, and a hash change
       // fires no beforeunload — so unsaved edits are asked about here.
-      if (dirty && !window.confirm("This canvas has unsaved changes. Leave without saving them?")) {
+      if (dirty && !window.confirm("Unsaved changes — leave without saving?")) {
         return;
       }
       onEditFactory(definition.factory_ref);

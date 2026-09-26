@@ -399,9 +399,8 @@ function FactoryLibrary({ onOpen }: { onOpen: (factoryId: string) => void }) {
     <section className="factories-section" aria-labelledby="factories-heading">
       <h2 id="factories-heading">Factories</h2>
       <p className="lede">
-        A factory is a block of machines that runs by itself — agents and
-        storage between three ways in and three ways out. Build one here, then
-        drop it onto any project's line as a single node.
+        A factory is a block of machines that runs by itself. Build one here,
+        then drop it onto any project's line as a single node.
       </p>
 
       {error && <div className="error">{error}</div>}
@@ -499,7 +498,7 @@ function FactoryLibrary({ onOpen }: { onOpen: (factoryId: string) => void }) {
                   </span>
                   {factory.problems.length > 0 && (
                     <span className="meta warn" title={factory.problems.join("\n")}>
-                      not usable yet — {factory.problems.length} thing
+                      not usable — {factory.problems.length} thing
                       {factory.problems.length === 1 ? "" : "s"} to fix
                     </span>
                   )}
@@ -626,8 +625,7 @@ function MachineContract() {
         <>
           <p className="hint">
             Appended under every skill a machine wears, on every spawn. A skill
-            cannot argue with it — it is said after the skill, and the last
-            thing said is the thing that cannot be waved away.
+            cannot override it.
           </p>
           {problem && <div className="error">{problem}</div>}
           {contract === null && !problem ? (
@@ -755,9 +753,9 @@ function SkillLibrary() {
     <section className="skills-section">
       <h2>Skills</h2>
       <p className="lede">
-        Standing instructions an agent can wear — appended to its prompt on
-        every run, whatever the request. They live in <code>_skills/</code> in
-        your workspace and are committed with the team, like factories.
+        Standing instructions an agent can wear, appended to its prompt on
+        every run. They live in <code>_skills/</code> in your workspace,
+        committed with the team.
       </p>
 
       <MachineContract />
@@ -1126,33 +1124,28 @@ function SkillEditor({
             <div className="skill-editor-warning" role="note">
               {name === "commit-message" ? (
                 <>
-                  <strong>This skill is built into the commit node.</strong> It
-                  is not chosen by a machine — every commit a run makes has its
-                  message written through it, in every factory and every
-                  project.
+                  <strong>This skill is built into the commit node.</strong>{" "}
+                  Every commit a run makes has its message written through it.
                 </>
               ) : (
                 <>
                   <strong>This skill is built into the knowledge node.</strong>{" "}
-                  It is not chosen by a machine — every knowledge base with the
-                  matching type files through it, in every factory and every
-                  project.
+                  Every knowledge base of the matching type files through it.
                 </>
               )}
               <ul>
                 <li>
                   {name === "commit-message"
-                    ? "A change takes effect on the next run, everywhere. A message the pass cannot deliver falls back to the request and the last answer, so unclear instructions cost you readable commits, never a commit."
-                    : "A change takes effect on the next run, everywhere. Instructions that stop being clear will fill your bases with entries nobody can use, and the entries already filed are not revisited."}
+                    ? "A change takes effect on the next run, everywhere; unclear instructions cost you readable messages."
+                    : "A change takes effect on the next run, everywhere; unclear instructions fill your bases with unusable entries."}
                 </li>
                 <li>
-                  Saving writes <code>_skills/{name}.md</code>, which from then
-                  on wins over the shipped text. Revert on the card to go back.
+                  Saving writes <code>_skills/{name}.md</code>, which wins over
+                  the shipped text until you Revert on the card.
                 </li>
                 <li>
-                  Changing <code>name:</code> does not rename this — it saves a
-                  separate ordinary skill and leaves this one on the shipped
-                  instructions.
+                  Changing <code>name:</code> saves a separate skill; it does not
+                  rename this one.
                 </li>
               </ul>
             </div>
@@ -1191,8 +1184,8 @@ function SkillEditor({
           ) : (
             <>
               <span className="hint">
-                The <code>name:</code> in the frontmatter is the filename — change
-                it and this saves a new skill rather than renaming this one.
+                The <code>name:</code> in the frontmatter is the filename —
+                changing it saves a new skill.
               </span>
               <button
                 type="button"
@@ -1511,22 +1504,20 @@ function KnowledgeEditor({
             discovered from a refusal afterwards. */}
         {base?.system && (
           <div className="skill-editor-warning" role="note">
-            <strong>This knowledge base ships with the product.</strong> Its
-            content is yours — edit it freely, and your version wins.
+            <strong>This knowledge base ships with the product.</strong> Edit
+            it freely; your version wins.
             <ul>
               <li>
-                A change takes effect on the next run, for every machine wired
-                to this base, in every factory and every project.
+                A change reaches every machine wired to this base on the next
+                run, in every project.
               </li>
               <li>
-                Neither the base nor the files it ships with can be removed. A
-                file deleted in the workspace is put back on the next read, so
-                empty one rather than deleting it.
+                Its shipped files cannot be removed — a deleted one comes back,
+                so empty it instead.
               </li>
               <li>
-                Nothing overwrites a file you have edited, so an updated version
-                of this base will not reach it. Files you add here are ordinary
-                files and can be deleted.
+                A file you have edited no longer receives updates. Files you add
+                can be deleted.
               </li>
             </ul>
           </div>
@@ -1701,8 +1692,8 @@ function KnowledgeEditor({
                   </label>
                   {base.system && (
                     <p className="hint">
-                      This base ships with the product, and its title is the name
-                      everything else refers to it by. Its prose is yours.
+                      This base ships with the product, so its title is fixed.
+                      Its prose is yours.
                     </p>
                   )}
 
@@ -1909,11 +1900,9 @@ function KnowledgeLibrary() {
     <section className="skills-section knowledge-section">
       <h2>Knowledge</h2>
       <p className="lede">
-        Permanent, curated stores the machines can consult — and, where you wire
-        it, add to. Unlike a run's memory, nothing here is ever cleaned up: a
-        base is filled before a run exists and outlives it, and every project
-        wired to it reads the same one. They live in <code>_knowledge/</code> in
-        your workspace and are committed with the team.
+        Permanent, curated stores the machines can consult and, where you wire
+        it, add to. Nothing here is ever cleaned up. They live in{" "}
+        <code>_knowledge/</code> in your workspace, committed with the team.
       </p>
 
       {problem && <div className="error">{problem}</div>}
@@ -1933,9 +1922,7 @@ function KnowledgeLibrary() {
           </label>
           <p className="hint">
             The directory name, and the name every node selects it by. Lowercase
-            letters, digits and hyphens — the workspace is cloned onto
-            case-insensitive filesystems, where two ids differing only in case
-            are one directory on one machine and two on another.
+            letters, digits and hyphens.
           </p>
 
           <label className="field">
@@ -1965,8 +1952,8 @@ function KnowledgeLibrary() {
           <p className="hint">
             {KNOWLEDGE_TYPE_NOTE[baseType]}.{" "}
             {baseType === "principles"
-              ? "Read-only to every machine, permanently: principles are what the agents are measured against, and one that could edit the standard it is judged by could pass its own review."
-              : "Machines may write to it where you draw a write wire, and only there."}
+              ? "Read-only to every machine, permanently."
+              : "Machines may write to it only where you draw a write wire."}
           </p>
 
           <label className="field">
@@ -1980,9 +1967,8 @@ function KnowledgeLibrary() {
             />
           </label>
           <p className="hint">
-            Shown on the card, in the editor and on the node — so whoever opens
-            this library knows what the shelf is for. The machines are told what
-            belongs in a base by their filing skill, not by this.
+            Shown on the card, in the editor and on the node. Machines are told
+            what belongs in a base by their filing skill, not by this.
           </p>
 
           <div className="row">

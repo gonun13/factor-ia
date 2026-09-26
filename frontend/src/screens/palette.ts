@@ -136,7 +136,7 @@ function factoriesGroup(library: LibraryFactorySummary[]): PaletteGroup {
       label: factory.name,
       hint:
         factory.problems.length > 0
-          ? "not usable yet — open it from the main page to finish it"
+          ? "not usable — fix it from the main page"
           : `${factory.node_count - 6} machine${factory.node_count - 6 === 1 ? "" : "s"}, as one block`,
       Glyph: FactoryGlyph,
     })),

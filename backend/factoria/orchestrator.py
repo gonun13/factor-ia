@@ -2457,7 +2457,7 @@ class Orchestrator:
                 state,
                 node.id,
                 "failed",
-                "no skill attached — a scope node needs one to know what to ask",
+                "no skill attached — attach one",
             )
             return
         try:

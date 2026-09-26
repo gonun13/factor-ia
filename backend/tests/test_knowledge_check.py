@@ -162,7 +162,7 @@ def test_a_node_with_no_base_selected_is_refused(library: Path, repo: Path) -> N
         id="n-base", definition=NodeDefinition(type="knowledge", label="Acme API")
     )
     [problem] = [p for p in problems(nodes, edges, repo) if "no knowledge base" in p]
-    assert "points at nothing" in problem
+    assert "choose a base, or delete the node" in problem
 
 
 def test_a_base_that_has_gone_is_named(library: Path, repo: Path) -> None:
@@ -179,7 +179,7 @@ def test_two_nodes_on_one_base_are_refused(library: Path, repo: Path) -> None:
         nodes_extra=[base("n-base2", "acme-api", label="Acme again")],
         edges_extra=[reads("n-base2", "n-do")],
     )
-    [problem] = [p for p in problems(nodes, edges, repo) if "one shelf" in p]
+    [problem] = [p for p in problems(nodes, edges, repo) if "all select the knowledge base" in p]
     assert "Acme API" in problem and "Acme again" in problem
 
 
@@ -209,7 +209,7 @@ def test_a_write_wire_carries_no_outcome(library: Path, repo: Path) -> None:
     edges = [e for e in edges if e.id != "n-do-out->n-out"]
     edges += [belt("n-do", "n-review"), belt("n-review", "n-out", "success")]
     [problem] = [p for p in problems(nodes, edges, repo) if "carries no outcome" in p]
-    assert "whatever the machine" in problem
+    assert "leaves by an outcome port" in problem
 
 
 def test_storage_does_not_talk_to_storage(library: Path, repo: Path) -> None:
@@ -260,8 +260,8 @@ def test_a_write_wire_onto_principles_is_refused_server_side(
     nodes[2] = base("n-base", "principles", label="Principles")
     edges = [edge for edge in edges if edge.id != "n-base-read->n-do"]
     edges.append(writes("n-do", "n-base"))
-    [problem] = [p for p in problems(nodes, edges, repo) if "measured against" in p]
-    assert "pass its own review" in problem
+    [problem] = [p for p in problems(nodes, edges, repo) if "principles base" in p]
+    assert "remove the wire" in problem
 
 
 def test_reading_principles_is_the_normal_case(library: Path, repo: Path) -> None:
