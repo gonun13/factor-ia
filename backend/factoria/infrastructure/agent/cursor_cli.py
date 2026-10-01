@@ -10,8 +10,6 @@ import asyncio
 import json
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
-
 from .. import config
 from . import proc
 from .cli import AccountStatus, Handshake, Model
@@ -247,12 +245,3 @@ def _parse_models_output(text: str) -> list[Model]:
                 model = model.model_copy(update={"label": rest})
             out.append(model)
     return out
-
-
-class CursorOffer(BaseModel):
-    """Unused export seam for tests that want the handshake + account together."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    account: AccountStatus = Field(default_factory=AccountStatus)
-    handshake: Handshake = Field(default_factory=Handshake)

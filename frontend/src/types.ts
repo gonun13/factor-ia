@@ -77,7 +77,6 @@ export type HumanKind = "approval" | "scope";
  * what an agent has always done is work.
  */
 export type AgentKind = "worker" | "reviewer";
-export type NodeKind = InputKind | OutputKind | HumanKind | AgentKind;
 
 export const DEFAULT_INPUT_KIND: InputKind = "request";
 export const DEFAULT_OUTPUT_KIND: OutputKind = "commit";

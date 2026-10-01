@@ -785,14 +785,6 @@ def rev(repo: Path | str, ref: str) -> str | None:
     return done.stdout.strip() or None if done.returncode == 0 else None
 
 
-def local_branches(repo: Path | str) -> list[str]:
-    """Every local branch name, in git's own order."""
-    done = _git(
-        ["branch", "--list", "--format=%(refname:short)"], cwd=repo, check=False
-    )
-    return [line.strip() for line in done.stdout.splitlines() if line.strip()]
-
-
 def push_ref(
     worktree: Path | str,
     source: str,

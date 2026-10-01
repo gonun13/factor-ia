@@ -1,18 +1,8 @@
 /**
  * The bridge between the API's graph and React Flow's.
  *
- * **The split is structural.** A React Flow node's `data` is exactly
- * `{ definition, runtime }` — the same two halves the API node has, not a
- * flattened copy of the fields the current components happen to render. So
- * stage 5 merges live state with
- *
- *     setNodes(ns => ns.map(n =>
- *       n.id === event.node_id
- *         ? { ...n, data: { ...n.data, runtime: next } }
- *         : n))
- *
- * and every node component already reads `data.runtime`. Nothing about editing,
- * serialization or the node components has to change when runs land.
+ * A React Flow node's `data` keeps the API node's `{ definition, runtime }`
+ * shape, so event updates and serialization share that boundary.
  *
  * React Flow owns three fields that shadow the definition: `id`, `type` and
  * `position`. `id` and `type` are set once from the definition and never move.
@@ -28,10 +18,8 @@ import {
   DEFAULT_EDGE_OUTCOME,
   DEFAULT_HUMAN_KIND,
   DEFAULT_INPUT_KIND,
-  DEFAULT_MAX_LAPS,
   DEFAULT_OUTPUT_KIND,
   KNOWLEDGE_READ_ONLY_TYPES,
-  MAX_LAPS_LIMIT,
   type Factory,
   type GraphEdge,
   type KnowledgeBaseSummary,
@@ -660,14 +648,6 @@ export function entryFor(
   return isLoopBelt(source, sourceHandle) && closesLoop(nodes, belts, sourceId, targetId)
     ? ENTRY_LOOP
     : ENTRY_FORWARD;
-}
-
-/** A reviewer's lap cap as the node asks for it, defaulted — `verdict.max_laps`. */
-export function nodeMaxLaps(definition: NodeDefinition): number {
-  const raw = definition.config?.max_laps;
-  const value = typeof raw === "number" ? raw : parseInt(String(raw ?? ""), 10);
-  if (!Number.isFinite(value)) return DEFAULT_MAX_LAPS;
-  return Math.max(1, Math.min(MAX_LAPS_LIMIT, value));
 }
 
 /** The default label for each thing the palette can drop, keyed by kind. */

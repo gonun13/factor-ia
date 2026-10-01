@@ -119,13 +119,6 @@ def _label(node: Node) -> str:
     return node.definition.label or node.id
 
 
-def _connector_label(type_: str, kind: str) -> str:
-    for connector_type, connector_kind, label in CONNECTORS:
-        if connector_type == type_ and connector_kind == kind:
-            return label
-    return f"{type_} {kind}"
-
-
 # ---- reading a factory -------------------------------------------------------
 
 

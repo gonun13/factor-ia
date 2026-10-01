@@ -17,7 +17,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from ...domain.models import KnowledgeEntry
 from ..store import atomic_write
 from ...domain.knowledge.adapter import Chunk, Listing, Match, Written
 from .store import (
