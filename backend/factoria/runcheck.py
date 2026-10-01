@@ -1,4 +1,4 @@
-"""Run preconditions, server-side. A graph that cannot run is refused here.
+"""Graph validation, server-side: save-time structure and run preconditions.
 
 Stage 3 put this list in the client (`frontend/src/validation.ts`) and left
 enforcement to stage 5 on purpose: a greyed-out button is a courtesy, not a
@@ -8,7 +8,7 @@ thing that can reach it.
 **This is a different, stricter check than save-time validation**, and the two
 are not layered by accident:
 
-- `api.validate_graph` (stage 2) refuses graphs that could not be **loaded
+- `validate_graph` (stage 2) refuses graphs that could not be **loaded
   back** — duplicate node ids, an edge pointing at nothing, a `codebase_id` on a
   node type that cannot carry one. It is deliberately permissive about a
   half-drawn canvas, because a half-drawn canvas is what drawing looks like and
@@ -52,7 +52,6 @@ from typing import Callable
 
 from . import config, gitwork, skills, worktree
 from .agent.adapter import PermissionDenied, resolve_permission_mode
-from .api import validate_graph
 from .discovery import discover_codebases
 from .paths import PathEscape, is_safe_name
 from . import sshkeys
@@ -69,6 +68,8 @@ from .models import (
     EDGE_OUTCOMES,
     HUMAN_KINDS,
     CONNECTOR_TYPES,
+    CONNECTOR_KINDS,
+    CONNECTORS,
     edge_outcome,
     has_outcome_ports,
     is_attached,
@@ -79,6 +80,125 @@ from .models import (
     node_remote,
 )
 from . import verdict
+
+
+def validate_graph(nodes: list[Node], edges: list[Edge]) -> list[str]:
+    """Structural problems that make a graph unwritable, not unrunnable.
+
+    An agent node with no codebase is *unrunnable* and stage 3 blocks the Run
+    button over it — but it is exactly what a half-drawn canvas looks like, so
+    it must remain saveable. What is refused here is a graph that could not be
+    loaded back: duplicate ids, edges pointing at nothing, a codebase id that
+    discovery does not vouch for.
+    """
+    problems: list[str] = []
+    seen: set[str] = set()
+    for node in nodes:
+        if not node.id or len(node.id) > 100 or any(c < " " for c in node.id):
+            problems.append(f"node id is not usable: {node.id!r}")
+        if node.id in seen:
+            problems.append(f"duplicate node id: {node.id}")
+        seen.add(node.id)
+        definition = node.definition
+        if definition.codebase_id is not None and definition.type not in (
+            "agent",
+            "factory-ref",
+        ):
+            problems.append(
+                f"node {node.id}: only agent and factory nodes carry a codebase attachment"
+            )
+        if definition.factory_ref is not None and definition.type != "factory-ref":
+            problems.append(f"node {node.id}: only factory-ref nodes carry a factory_ref")
+
+    attached = {
+        n.definition.codebase_id for n in nodes if n.definition.codebase_id is not None
+    }
+    if attached:
+        known = {codebase.id for codebase in discover_codebases()}
+        for codebase_id in sorted(attached - known):
+            problems.append(
+                f"unknown codebase: {codebase_id!r} — codebases are discovered "
+                "under /workspace, not supplied"
+            )
+
+    edge_ids: set[str] = set()
+    for edge in edges:
+        if not edge.id or edge.id in edge_ids:
+            problems.append(f"duplicate or empty edge id: {edge.id!r}")
+        edge_ids.add(edge.id)
+        for end, node_id in (("source", edge.source), ("target", edge.target)):
+            if node_id not in seen:
+                problems.append(f"edge {edge.id}: {end} node {node_id!r} does not exist")
+        if edge.source == edge.target:
+            problems.append(f"edge {edge.id}: connects a node to itself")
+    return problems
+
+
+def validate_project_graph(nodes: list[Node], edges: list[Edge]) -> list[str]:
+    """`validate_graph`, plus what a project's main factory may not hold.
+
+    **No connectors.** A connector is a library factory's way in or out, and a
+    main factory has neither — its ways in are input nodes and its ways out are
+    output nodes. One on a project canvas could only have been pasted there.
+    """
+    problems = validate_graph(nodes, edges)
+    for node in nodes:
+        if node.definition.type in CONNECTOR_TYPES:
+            problems.append(
+                f"node {node.id}: a {node.definition.type} connector belongs to a "
+                "library factory, not to a project"
+            )
+    return problems
+
+
+#: What a library factory may not contain, and why, in the operator's words.
+_NOT_IN_A_FACTORY: dict[str, str] = {
+    "input": "a factory is fed through its input entry, not an input node",
+    "output": "a factory hands its work on through its input exit, not an output node",
+    "human": "a factory is fully automated — a person belongs on the project's line",
+    "factory-ref": "a factory cannot contain another factory",
+}
+
+
+def validate_library_graph(nodes: list[Node], edges: list[Edge]) -> list[str]:
+    """`validate_graph`, plus the shape every library factory file must have.
+
+    Refused at save time, unlike the wiring rules (`expand.body_problems`),
+    because these describe a file that could not be *loaded back as a factory*:
+    a factory missing its input entry has no way in at all, and a factory
+    holding an input node would ask a person for something in the middle of
+    somebody else's run. A half-drawn factory still saves; a malformed one
+    does not.
+    """
+    problems = validate_graph(nodes, edges)
+    for node in nodes:
+        why = _NOT_IN_A_FACTORY.get(node.definition.type)
+        if why:
+            problems.append(f"node {node.id}: {why}")
+        if node.definition.codebase_id is not None:
+            problems.append(
+                f"node {node.id}: a machine inside a factory carries no codebase — "
+                "it works in the one its factory node names"
+            )
+    for type_, kind, label in CONNECTORS:
+        matching = [
+            node
+            for node in nodes
+            if node.definition.type == type_
+            and str(node.definition.config.get("kind") or "") == kind
+        ]
+        if not matching:
+            problems.append(f"the factory is missing its “{label}” connector")
+        elif len(matching) > 1:
+            problems.append(f"the factory has {len(matching)} “{label}” connectors — keep one")
+    for node in nodes:
+        kind = str(node.definition.config.get("kind") or "")
+        if node.definition.type in CONNECTOR_TYPES and kind not in CONNECTOR_KINDS:
+            problems.append(
+                f"node {node.id}: a connector of kind {kind!r} is not one this "
+                f"version knows ({', '.join(sorted(CONNECTOR_KINDS))})"
+            )
+    return problems
 
 
 class NotRunnable(Exception):

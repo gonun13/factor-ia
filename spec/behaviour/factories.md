@@ -40,7 +40,7 @@ repository as the main factories.
 **What a factory may hold.** Agents — workers and reviewers — and storage,
 memories and knowledge bases. **No input, output or human node**, and **no
 factory node**: factories do not nest. Those are refused at save time
-(`api.validate_library_graph`), with the six connectors, and refused again at run
+(`runcheck.validate_library_graph`), with the six connectors, and refused again at run
 time for a file edited by hand (`expand.body_problems`). A machine inside a
 factory carries no codebase; saving one with a codebase is refused.
 

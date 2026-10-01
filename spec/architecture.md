@@ -37,7 +37,8 @@ backend/     FastAPI app, uv-managed  (factoria.main:app)
              housekeeping.py  that policy applied later, as a preview
              memory.py  run memory: the document, the contract, the pointer
              summary.py  /data/runs/<id>/summary.md
-             runcheck.py  run preconditions · runevents.py  the event envelope
+             runcheck.py  graph validation and run preconditions
+             runevents.py  the event envelope
              runlog.py  /data/runs, events.jsonl, the bus · runs_api.py  SSE
              scrub.py  token-shaped-string scrubbing · sshkeys.py  the git key
              settings_api.py  account, sign-in, ssh key
@@ -138,6 +139,14 @@ the primary write and everything else is a convenience over the same document.
 the run preconditions itself — the greyed-out button is a courtesy, not a
 control. That check is deliberately stricter than the save-time one: a
 half-drawn canvas must save, and must not run.
+
+Both sets of server-side graph rules live in `runcheck.py`: `validate_graph`,
+`validate_project_graph` and `validate_library_graph` own save-time structure,
+and `run_problems` adds execution preconditions. The REST module imports the
+save-time validators and keeps their names available as `api.validate_*`.
+Importing graph validation does not load REST routing, FastAPI or Starlette;
+`tests/test_architecture.py` checks that boundary in a fresh process. Validation
+owns the rules so a caller checking a graph does not also construct HTTP routes.
 
 The SSE stream numbers every event, so a viewer that joins late or reconnects
 resumes exactly where it left off (`Last-Event-ID`, or `?from=`) with no gap and

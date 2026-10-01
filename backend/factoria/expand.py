@@ -84,7 +84,7 @@ SIM_LOOP_OUTPUT_ID = "simulation-loopback"
 SCRATCH_KEY = "scratch"
 
 #: What a library factory may not contain, and why, for a file edited by hand
-#: past the save-time refusal (`api.validate_library_graph`).
+#: past the save-time refusal (`runcheck.validate_library_graph`).
 FORBIDDEN_IN_BODY: dict[str, str] = {
     "input": "use its input entry instead",
     "output": "use its input exit instead",
@@ -324,7 +324,7 @@ def expand(main: Factory, lookup: Lookup) -> Expanded:
     is refused, and the rest of the graph is still checked, so every reason
     comes back at once.
     """
-    from . import runcheck  # runcheck → api → store; import late to stay a leaf
+    from . import runcheck
 
     refs = [node for node in main.nodes if node.definition.type == "factory-ref"]
     flat = main.model_copy(deep=True)
