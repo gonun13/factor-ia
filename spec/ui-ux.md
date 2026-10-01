@@ -26,7 +26,9 @@ There are three kinds, and the canvas is one component wearing two jobs.
   writable, the discovered codebases, and — at the far right — the running
   version (`factor-ia v0.4.0`, from the backend's health check), which opens the
   changelog in a window. The changelog lists main features per release, newest
-  first, from `frontend/src/changelog.ts`.
+  first, from `frontend/src/changelog.ts`. It is a feature summary; the full
+  release record is [`CHANGELOG.md`](../CHANGELOG.md), maintained under
+  [`AGENTS.md`](../AGENTS.md#changelog-and-versions).
 - **Canvas** — where everything happens. One factory, whole: a project's main
   factory (`#/p/<project>`), or a library factory (`#/f/<factory>`), on the same
   editor with a different palette and a different run panel.

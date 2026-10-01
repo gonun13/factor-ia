@@ -1,9 +1,11 @@
 /**
- * What each release added, newest first — the list the footer's version opens.
+ * Release feature summaries, newest first — the list the footer's version opens.
  *
  * Main features only: a line here is something an operator can now do, not a
- * fix or a refactor. The first entry's version should match the backend's
- * `__version__`, which is what the footer shows.
+ * fix or a refactor. CHANGELOG.md is the full release record; AGENTS.md documents
+ * how to maintain it. The first entry's version and date must match its newest
+ * release; the version also matches the manifests, backend `__version__` (what
+ * the footer shows) and the editable package in the backend lockfile.
  */
 export interface Release {
   version: string;

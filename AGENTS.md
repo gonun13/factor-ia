@@ -77,3 +77,53 @@ by design.
 - **The workspace is the only shared surface.** Codebases are discovered, never
   supplied; every path derived from a request is re-checked against `/workspace`
   with symlinks resolved.
+
+## Changelog and versions
+
+[`CHANGELOG.md`](CHANGELOG.md) is the full release record, in Keep a Changelog
+format. `frontend/src/changelog.ts` is the feature summary opened by the
+main page's version button; its `features` array is not a full list of fixes.
+Keep the newest release version and date aligned in both records. Generic
+release skills must follow this project's convention rather than append a new
+dated release for each workflow run.
+
+Before preparing a release, audit both records against the specs and code.
+Preserve existing release headings, versions, dates, ordering and facts. Make
+only necessary wording corrections that preserve historical meaning; report
+suspected factual errors for an operator decision rather than rewriting them.
+Do not backfill undocumented releases or add newly discovered historical claims.
+
+Use the default branch (`main`) and review the diffs since the latest release's
+tag, or the commit that introduced its record if no tag exists. The untagged
+`0.4.0` baseline is `21445f91ed76eb70d891ac892c6eed1a28a5a1a6`. No
+operator-visible changes since that baseline means no new release or version
+bump; documentation, tests, refactors, CI and dependency-only changes alone do
+not justify one. Do not assume a manifest's version is an unreleased next
+version: if it disagrees with the newest release, ask before proceeding.
+
+For a release that is due, prepend `## [X.Y.Z] - YYYY-MM-DD` and nonempty
+`Added`, `Changed`, `Fixed` sections in that order. Use one present-tense line
+per operator-visible change, in the project's vocabulary, with no internal
+paths, identifiers or private details. Describe security fixes by issue class
+without reproduction steps. Additions or noticeable behaviour changes receive
+a minor bump; fixes alone receive a patch bump. Ask when classification is
+unclear. Flag removed features, changed defaults or incompatible formats, and
+obtain the operator's decision before releasing a suspected breaking change;
+never choose a major bump automatically.
+
+The current tooling has no project-wide release command. When bumping, update
+all of these together:
+
+- `backend/pyproject.toml`: `[project].version`.
+- `backend/factoria/__init__.py`: `__version__`, served by the health check.
+- `backend/uv.lock`: the editable `factoria` package's version; regenerate with
+  `cd backend && uv lock` and check for unrelated dependency changes.
+- `frontend/package.json`: `version`; the frontend uses pnpm, and its lockfile
+  currently carries no root project version.
+
+Add the app's feature summary for the same version and date when preparing a
+release, using the existing `Release` shape. Verify that all version values
+agree with the newest changelog entry, dates are ISO, and the diff contains
+only release records, version metadata and explicitly refined release
+documentation. Preparing notes does not authorize a commit, tag or push;
+report the exact commands for the operator to run.
