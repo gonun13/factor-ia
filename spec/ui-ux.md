@@ -22,7 +22,8 @@ There are three kinds, and the canvas is one component wearing two jobs.
   **system** badge on the line under it; a delete's question takes the whole
   row. And
   a **Settings** link top right, led by the same cog that opens a project's
-  settings. A footnote closes the page: the workspace mount and whether it is
+  settings. A footnote is pinned to the bottom of the window, outside the
+  scrolling page: the workspace mount and whether it is
   writable, the discovered codebases, and — at the far right — the running
   version (`factor-ia v0.4.0`, from the backend's health check), which opens the
   changelog in a window. The changelog lists main features per release, newest

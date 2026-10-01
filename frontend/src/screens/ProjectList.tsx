@@ -288,43 +288,48 @@ export function ProjectList({
             <KnowledgeLibrary />
           </div>
 
-          <div className="footnote">
-            <span>
-              workspace <code>{health?.workspace ?? "…"}</code>{" "}
-              {health && (
-                <span className={health.workspace_writable ? "ok" : "bad"}>
-                  {health.workspace_present
-                    ? health.workspace_writable
-                      ? "mounted, writable"
-                      : "mounted, NOT writable"
-                    : "not mounted"}
-                </span>
-              )}
-            </span>
-            <span>
-              {codebases.length} codebase{codebases.length === 1 ? "" : "s"}{" "}
-              discovered
-              {codebases.length > 0 && (
-                <>
-                  {" "}
-                  · <span className="mono">{codebases.map((c) => c.name).join(", ")}</span>
-                </>
-              )}
-            </span>
-            {health && (
-              <button
-                type="button"
-                className="link-button footnote-version"
-                onClick={() => setShowChangelog(true)}
-                title="What's new"
-              >
-                factor-ia v{health.version}
-              </button>
-            )}
-          </div>
           {showChangelog && <Changelog onClose={() => setShowChangelog(false)} />}
         </div>
       </div>
+
+      {/* Pinned under the scrolling page rather than at the end of it, so the
+          workspace's state and the version are always in view. */}
+      <footer className="page-foot">
+        <div className="footnote">
+          <span>
+            workspace <code>{health?.workspace ?? "…"}</code>{" "}
+            {health && (
+              <span className={health.workspace_writable ? "ok" : "bad"}>
+                {health.workspace_present
+                  ? health.workspace_writable
+                    ? "mounted, writable"
+                    : "mounted, NOT writable"
+                  : "not mounted"}
+              </span>
+            )}
+          </span>
+          <span>
+            {codebases.length} codebase{codebases.length === 1 ? "" : "s"}{" "}
+            discovered
+            {codebases.length > 0 && (
+              <>
+                {" "}
+                · <span className="mono">{codebases.map((c) => c.name).join(", ")}</span>
+              </>
+            )}
+          </span>
+          {health && (
+            <button
+              type="button"
+              className="link-button footnote-version"
+              onClick={() => setShowChangelog(true)}
+              title="What's new"
+            >
+              factor-ia v{health.version}
+            </button>
+          )}
+        </div>
+      </footer>
     </div>
   );
 }

@@ -1237,6 +1237,22 @@ button.skill-card.is-system:hover {
   flex-wrap: wrap;
 }
 
+/* The main page's footnote, pinned under the scrolling screen like the topbar
+   is over it, and lined up with the wide column above. */
+.page-foot {
+  flex: 0 0 auto;
+  padding: 0.55rem 1.5rem;
+  border-top: 1px solid var(--edge);
+  background: linear-gradient(180deg, #0e131b, #121822);
+}
+
+.page-foot .footnote {
+  max-width: 74rem;
+  margin: 0 auto;
+  padding-top: 0;
+  border-top: none;
+}
+
 /* The version sits at the far right and opens the changelog. */
 .footnote .footnote-version {
   margin-left: auto;
