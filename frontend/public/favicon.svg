@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <!-- Factor-ia: a factory, lit and running, whose chimney gives off a spark
+       instead of smoke. Mirrored by BrandMark in src/nodes/Glyphs.tsx. -->
+  <rect x="0.5" y="0.5" width="31" height="31" rx="7" fill="#131922" stroke="#35425a"/>
+  <g transform="translate(0.25 1)">
+    <path d="M5 26V14.5l5 3.5v-3.5l5 3.5v-3.5l5 3.5V10h5.5v16Z" fill="#e8ecf2"/>
+    <path d="M7.5 21.5h2v2.5h-2ZM12.5 21.5h2v2.5h-2ZM17.5 21.5h2v2.5h-2Z" fill="#f4b942"/>
+    <path d="M5 26.6h21.5" stroke="#f4b942" stroke-width="1.6" stroke-linecap="round"/>
+    <path d="M22.75 0.8Q23.2 4.6 26.6 5.1Q23.2 5.6 22.75 9.2Q22.3 5.6 18.9 5.1Q22.3 4.6 22.75 0.8Z" fill="#f4b942"/>
+    <path d="M16.6 3.6Q16.8 5.3 18.3 5.5Q16.8 5.7 16.6 7.4Q16.4 5.7 14.9 5.5Q16.4 5.3 16.6 3.6Z" fill="#f4b942" opacity="0.7"/>
+  </g>
+</svg>

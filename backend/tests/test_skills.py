@@ -401,3 +401,58 @@ def test_system_skills_sort_first_then_everything_by_name(workspace: Path) -> No
     # And the block at the top is exactly the system ones — an operator's
     # `knowledge-notes` sorts with the imports, where it belongs.
     assert [one.system for one in listed] == [True, True, True, True, False, False, False]
+
+
+# ---- the default skills ----------------------------------------------------
+#
+# Seeded once into a workspace with no `_skills/`, and ordinary imports from
+# then on: not system, deletable, and never put back.
+
+DEFAULTS = ["implement", "plan", "release", "research", "review", "scope", "verify"]
+
+
+def test_the_defaults_are_the_seven_working_skills() -> None:
+    shipped = sorted(path.stem for path in skills.default_skills_dir().glob("*.md"))
+    assert shipped == DEFAULTS
+    # None of them is also a system skill: a name in both would be listed
+    # twice, once deletable and once not.
+    assert not set(shipped) & skills.SYSTEM_SKILLS
+
+
+@pytest.mark.parametrize("name", DEFAULTS)
+def test_every_default_skill_is_a_valid_clean_skill(name: str) -> None:
+    """Validated here rather than at seed time, which copies bytes: a
+    malformed default would otherwise land in every new workspace and vanish
+    from its library."""
+    skill = skills._load(skills.default_skills_dir() / f"{name}.md")
+    assert skill.name == name
+    assert skill.description.strip()
+    assert skill.bytes <= skills.SKILL_MAX_BYTES
+    assert skill.notes == [], f"{name}: {[note.note for note in skill.notes]}"
+
+
+def test_a_fresh_workspace_is_seeded_with_the_defaults(workspace: Path) -> None:
+    skills.seed_default_skills()
+    assert imported() == DEFAULTS
+    listed = {one.name: one for one in skills.list_skills()}
+    assert not any(listed[name].system for name in DEFAULTS)
+    # Byte for byte: the seed copies, it does not re-render.
+    for name in DEFAULTS:
+        assert (workspace / "_skills" / f"{name}.md").read_bytes() == (
+            skills.default_skills_dir() / f"{name}.md"
+        ).read_bytes()
+    # And nothing is left behind from staging.
+    assert [path.name for path in workspace.iterdir()] == ["_skills"]
+
+
+def test_a_workspace_with_skills_is_never_seeded(workspace: Path) -> None:
+    write(workspace, "repo-recon.md", TEMPLATE)
+    skills.seed_default_skills()
+    assert imported() == ["repo-recon"]
+
+
+def test_a_deleted_default_stays_deleted(workspace: Path) -> None:
+    skills.seed_default_skills()
+    skills.delete_skill("review")
+    skills.seed_default_skills()
+    assert "review" not in imported()

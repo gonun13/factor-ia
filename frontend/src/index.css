@@ -123,6 +123,33 @@ button.primary:hover:not(:disabled) {
   background: linear-gradient(180deg, #3a7fe4, #2a63bd);
 }
 
+/* The way out of a form or a question: a plain grey button, so it reads as a
+   real choice beside the coloured one without competing with it. */
+button.secondary {
+  color: var(--ink);
+  background: #2a2f37;
+  border-color: #464d58;
+}
+
+button.secondary:hover:not(:disabled) {
+  background: #343a44;
+  border-color: #5a6270;
+}
+
+/* Another way to do the same thing — Paste Markdown beside a skill import's
+   file picker. Tinted in the accent like the library's add buttons, so it is
+   found at a glance, but not filled: Import stays the one solid answer. */
+button.tinted {
+  color: var(--ink);
+  background: color-mix(in srgb, var(--agent) 10%, var(--raised));
+  border-color: color-mix(in srgb, var(--agent) 45%, var(--edge-strong));
+}
+
+button.tinted:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--agent) 18%, var(--raised));
+  border-color: var(--agent);
+}
+
 button.destructive {
   color: var(--danger);
   border-color: color-mix(in srgb, var(--danger) 55%, var(--edge-strong));
@@ -176,13 +203,34 @@ button:focus-visible {
   letter-spacing: -0.01em;
 }
 
-.brand .dot {
-  width: 9px;
-  height: 9px;
-  border-radius: 2px;
-  background: var(--input);
-  box-shadow: 0 0 12px var(--input);
+/* The mark and the name together are the way home, from either screen that
+   wears them. The subtitle beside them is not part of the link. */
+.brand-home {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.55rem;
+  color: inherit;
+  text-decoration: none;
+  border-radius: 4px;
+}
+
+.brand-home:hover {
+  color: var(--ink);
+  opacity: 0.85;
+}
+
+.brand-home:focus-visible {
+  outline: 2px solid var(--agent);
+  outline-offset: 2px;
+}
+
+/* The product's own mark, on the two screens that belong to no project. Sized
+   to sit level with a project's icon tile on the screens that do. */
+.brand .brand-mark {
+  width: 24px;
+  height: 24px;
   align-self: center;
+  flex: 0 0 auto;
 }
 
 /* The project's own icon: a glyph on a tile of the preset's colour. Each preset
@@ -244,6 +292,19 @@ button:focus-visible {
   background: none;
 }
 
+/* A link that leads with a glyph — the cog before Settings. The glyph follows
+   the text's colour, so it brightens with it on hover. */
+.link-button.has-glyph {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.link-button.has-glyph svg {
+  width: 16px;
+  height: 16px;
+}
+
 /* ---- project list ------------------------------------------------------- */
 
 .screen {
@@ -284,13 +345,131 @@ button:focus-visible {
   gap: 0.85rem;
 }
 
-/* The skills library. Narrower cards than a project's, because a skill is a
-   thing you pick rather than a place you go — and one line of description is
-   what makes it pickable. */
-.skills-section {
+/* The main page runs wider than the other screens: below the projects it holds
+   three columns, and at the plain width each would be too narrow to read a
+   card in. */
+.screen-inner.is-wide {
+  max-width: 74rem;
+}
+
+/* The three libraries under the projects — factories, skills, knowledge — side
+   by side. Each column spans both rows of this grid as a subgrid, so the
+   tallest header sets the first row and every column's body, its add card
+   first, starts on the same line. */
+.libraries {
   margin-top: 2.4rem;
   display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  column-gap: 1.5rem;
+  row-gap: 2.4rem;
+}
+
+.library-column {
+  grid-row: span 2;
+  display: grid;
+  grid-template-rows: subgrid;
+  row-gap: 0.85rem;
+  min-width: 0;
+}
+
+.library-head h2 {
+  margin: 0;
+}
+
+.library-head .lede {
+  margin: 0.35rem 0 0;
+}
+
+.library-body {
+  display: grid;
   gap: 0.85rem;
+  align-content: start;
+  min-width: 0;
+}
+
+.library-body .lede,
+.library-body .muted {
+  margin: 0;
+}
+
+/* The way to add one: a small button to the left, tinted in the accent so it
+   is found at a glance without outweighing the cards below it, which are what
+   the column is made of. The same in all three columns. */
+.library-add {
+  justify-self: start;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.45rem 0.9rem;
+  font-size: 0.88rem;
+  font-weight: 500;
+  color: var(--ink);
+  background: color-mix(in srgb, var(--agent) 10%, var(--raised));
+  border-color: color-mix(in srgb, var(--agent) 45%, var(--edge-strong));
+}
+
+.library-add:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--agent) 18%, var(--raised));
+  border-color: var(--agent);
+}
+
+.library-add > span {
+  color: var(--agent);
+  font-size: 1.05rem;
+  font-weight: 600;
+  line-height: 1;
+}
+
+/* What sits level with the add button — the skills column's Machine Contract.
+   Its size, in grey with no accent at all: a question you can ask of the
+   library, not a second way to add to it. */
+.library-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.library-add.secondary {
+  color: var(--ink-dim);
+  background: #24272c;
+  border-color: #3f4349;
+}
+
+.library-add.secondary:hover:not(:disabled),
+.library-add.secondary[aria-expanded="true"] {
+  color: var(--ink);
+  background: #2e3137;
+  border-color: #5a5f66;
+}
+
+/* A column is one card wide. */
+.library-body .project-grid,
+.library-body .skill-grid {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+/* Except skills: two to a row, each a name and, on a system skill, its badge.
+   The delete question needs the room, so its slot takes the whole row. */
+.skills-section .skill-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.skills-section .skill-slot:has(.is-confirming) {
+  grid-column: 1 / -1;
+}
+
+.skills-section .skill-card .skill-badge {
+  justify-self: start;
+  margin-left: 0;
+}
+
+/* Stacked rather than squeezed: below this a third of the page is too narrow
+   for a card's name. */
+@media (max-width: 60rem) {
+  .libraries {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 .skill-grid {
@@ -388,6 +567,13 @@ button.skill-card.is-system:hover {
   -webkit-line-clamp: 2;
   line-clamp: 2;
   overflow: hidden;
+}
+
+/* The facts line under a knowledge card's description — type, files, size.
+   Smaller and fainter than the description, never larger than it. */
+.skill-card .meta {
+  font-size: 0.72rem;
+  color: var(--ink-faint);
 }
 
 .skill-card.is-confirming {
@@ -1049,6 +1235,54 @@ button.skill-card.is-system:hover {
   display: flex;
   gap: 1.25rem;
   flex-wrap: wrap;
+}
+
+/* The version sits at the far right and opens the changelog. */
+.footnote .footnote-version {
+  margin-left: auto;
+  padding: 0;
+  font: inherit;
+  font-family: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
+  color: var(--ink-faint);
+  cursor: pointer;
+}
+
+.footnote .footnote-version:hover {
+  color: var(--ink);
+}
+
+.changelog {
+  width: min(36rem, 86vw);
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  overflow: hidden;
+}
+
+.changelog-body {
+  overflow-y: auto;
+  padding: 0.75rem 1rem 1rem;
+  display: grid;
+  gap: 1.25rem;
+}
+
+.changelog-release h3 {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  margin: 0 0 0.5rem;
+  font-size: 0.95rem;
+}
+
+.changelog-release ul {
+  margin: 0;
+  padding-left: 1.1rem;
+  display: grid;
+  gap: 0.3rem;
+  font-size: 0.82rem;
+  line-height: 1.5;
+  color: var(--ink-dim);
 }
 
 .ok {
@@ -2866,16 +3100,6 @@ ul.plain {
 /* ---- factories -----------------------------------------------------------
    The library on the main page, the factory editor's run panel, and the view
    inside a factory node during a run. */
-
-.factories-section {
-  margin-top: 2.4rem;
-  display: grid;
-  gap: 0.85rem;
-}
-
-.factories-section .lede {
-  margin-bottom: 0.4rem;
-}
 
 .factory-icon {
   --tile: var(--factory);

@@ -10,14 +10,35 @@ away. You lay down machines and then you watch those same machines work.
 There are three kinds, and the canvas is one component wearing two jobs.
 
 - **The main page** — the entry point. **Projects**, each card showing the
-  project's icon beside its name; then **Factories**, the workspace's library of
-  reusable blocks; then the skill and knowledge libraries; and a **Settings**
-  link top right.
+  project's icon beside its name; below them three columns at one level —
+  **Factories**, the workspace's library of reusable blocks, then **Skills** and
+  **Knowledge** — each opened by the same small add button (**+ New factory**,
+  **+ Import a skill**, **+ New knowledge base**), with the three buttons level
+  whatever each column's lede runs to; the columns stack on a narrow window.
+  Beside **+ Import a skill** sits a grey **Machine Contract** button, which
+  opens, under that row, the text appended to every skill a machine wears —
+  fetched from the backend, so what it shows is what the agent gets. Skills
+  sit two cards to a row, each its name alone, with a system skill's
+  **system** badge on the line under it; a delete's question takes the whole
+  row. And
+  a **Settings** link top right, led by the same cog that opens a project's
+  settings. A footnote closes the page: the workspace mount and whether it is
+  writable, the discovered codebases, and — at the far right — the running
+  version (`factor-ia v0.4.0`, from the backend's health check), which opens the
+  changelog in a window. The changelog lists main features per release, newest
+  first, from `frontend/src/changelog.ts`.
 - **Canvas** — where everything happens. One factory, whole: a project's main
   factory (`#/p/<project>`), or a library factory (`#/f/<factory>`), on the same
   editor with a different palette and a different run panel.
 - **Settings** — a deliberately small, plain screen. Sign-in and the git key.
   Not a second canvas.
+
+The two screens that belong to no project — the main page and Settings — wear
+the product's mark in the topbar: the factory glyph drawn solid, its windows
+lit amber over an amber belt, a spark rising from the chimney where smoke would
+be. The same mark is the browser tab's icon. The mark and the name beside it
+are one link to the main page. The screens inside a project or a factory wear
+that thing's own tile instead.
 
 ## The canvas
 
@@ -259,11 +280,12 @@ A factory is a block of machines that runs by itself — agents and storage
 between three ways in and three ways out — built once and dropped onto any
 project's line as one node. See [`behaviour/factories.md`](behaviour/factories.md).
 
-**On the main page, after the projects.** The same cards as a project's: **New
-factory** creates one inline and opens it; a card says how many machines it
-holds, which projects use it, and — when it cannot be used yet — how many things
-there are to fix. Its **×** asks inline before deleting, and a factory a project
-still uses is refused with the projects named, in the server's own sentence.
+**On the main page, the first column after the projects.** The same cards as a
+project's, one per row: **New factory** creates one inline and opens it; a card
+says how many machines it holds, which projects use it, and — when it cannot be
+used yet — how many things there are to fix. Its **×** asks inline before
+deleting, and a factory a project still uses is refused with the projects
+named, in the server's own sentence.
 
 **Its editor is the canvas, narrowed.** The palette offers **Agents** and
 **Storage** and nothing else — no input, output or human node, and no factory
@@ -315,6 +337,12 @@ is still refused.
 
 The default model shown there is read from the CLI's own handshake, never
 hardcoded — it costs nothing and answers even while signed out.
+
+**Each provider is checked on its own.** Every account card asks for its own
+status, and the git key is read separately. Each section fills in when its own
+answer arrives, so a CLI that hangs until its timeout leaves only its own card
+at *checking…*. A check that could not be made says *check failed* on that card.
+Finishing or cancelling a sign-in re-checks only that provider.
 
 ## Copy rules
 

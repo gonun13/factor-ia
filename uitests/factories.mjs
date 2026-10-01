@@ -4,7 +4,8 @@
  *
  * What this checks is everything a factory is *before* a project uses it:
  *
- * - the Factories section sits after the projects and before the libraries;
+ * - the Factories column sits after the projects, level with the skills and
+ *   knowledge columns, each opened by the same add button;
  * - a new factory opens in its editor holding its six connectors, which the
  *   Delete key cannot remove;
  * - the palette offers agents and storage and nothing else;
@@ -63,7 +64,29 @@ try {
   const order = headings.map((text) => text.trim()).filter((text) => ["Projects", "Factories", "Skills"].some((word) => text.startsWith(word)));
   check("Factories come after Projects and before the libraries", order.slice(0, 2), ["Projects", "Factories"]);
 
-  await page.locator(".factories-section .project-card-new").click();
+  // The three libraries are columns at one level, each opened by the same
+  // small add button — and the buttons stay level however long each lede runs.
+  const columns = await page.evaluate(() =>
+    [".factories-section", ".skills-section", ".knowledge-section"].map((selector) => {
+      const column = document.querySelector(selector);
+      const add = column?.querySelector(".library-body > .library-add");
+      const box = (el) => el?.getBoundingClientRect();
+      return {
+        top: Math.round(box(column)?.top ?? -1),
+        left: Math.round(box(column)?.left ?? -1),
+        addTop: Math.round(box(add)?.top ?? -1),
+        add: add?.textContent.replace("+", "").trim() ?? null,
+      };
+    }),
+  );
+  check("the three libraries share one row", new Set(columns.map((c) => c.top)).size, 1);
+  check("left to right: factories, skills, knowledge",
+    columns.every((c, i) => i === 0 || c.left > columns[i - 1].left), true);
+  check("each opens with the same add button",
+    columns.map((c) => c.add), ["New factory", "Import a skill", "New knowledge base"]);
+  check("and the three add buttons are level", new Set(columns.map((c) => c.addTop)).size, 1);
+
+  await page.locator(".factories-section .library-add").click();
   await page.locator('.factories-section input[aria-label="New factory name"]').fill(NAME);
   await page.locator(".factories-section button[type=submit]").click();
   await page.waitForFunction(() => window.location.hash.startsWith("#/f/"));

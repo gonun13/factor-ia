@@ -94,6 +94,15 @@ one. An agent node names one and its body is appended to that node's prompt on
 every spawn. **Not a node and not an edge** — a property of the machine, like
 its model.
 
+**Default skills** — the working skills a line is built from — `research`,
+`scope`, `plan`, `implement`, `verify`, `review`, `release` — ship in
+`backend/factoria/default_skills/` and are copied into a workspace that has no
+`_skills/` yet, once, at startup (`skills.seed_default_skills`). From then on
+they are ordinary imports: worn by choice, edited in place, and deleted for
+good. Unlike a system skill nothing is served out of the package, and unlike a
+system base nothing is written back; a shipped change to a default reaches new
+workspaces only.
+
 **Machine contract** — what a machine promises a skill it wears
 (`machine.CONTRACT`), stated in the system prompt directly under the skill's
 body and above every other rung. A skill is a document written for somewhere

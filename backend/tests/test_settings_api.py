@@ -138,3 +138,50 @@ def test_status_names_the_container_s_default_provider(stubbed, client, monkeypa
 
     monkeypatch.delenv("FACTOR_IA_ADAPTER", raising=False)
     assert client.get("/api/agent/status").json()["default_provider"] == "claude"
+
+
+def test_each_provider_is_verified_on_its_own_route(stubbed, client: TestClient) -> None:
+    """Settings asks once per card, so each card answers in its own CLI's time."""
+    claude = client.get("/api/agent/claude/status").json()
+    assert set(claude) == {"account", "handshake"}
+    assert claude["account"]["version"] == "2.1.236"
+    assert claude["account"]["authenticated"] is False
+    assert claude["handshake"]["default_model"] is None
+
+    cursor = client.get("/api/agent/cursor/status").json()
+    assert set(cursor) == {"account", "handshake"}
+    assert cursor["account"]["authenticated"] is False
+    assert cursor["handshake"]["default_model"] == "composer-2.5"
+
+
+async def _refuse() -> None:
+    raise AssertionError("the other provider was asked")
+
+
+def test_the_claude_check_never_asks_cursor(stubbed, client: TestClient, monkeypatch) -> None:
+    """A hanging Cursor CLI must not hold the Claude card at *checking…* —
+    which holds only if the Claude route never touches Cursor."""
+    from factoria.agent import cursor_cli
+
+    monkeypatch.setattr(cursor_cli, "auth_status", _refuse)
+    monkeypatch.setattr(cursor_cli, "models_handshake", _refuse)
+    assert client.get("/api/agent/claude/status").status_code == 200
+
+
+def test_the_cursor_check_never_asks_claude(stubbed, client: TestClient, monkeypatch) -> None:
+    from factoria.agent import cli
+
+    monkeypatch.setattr(cli, "auth_status", _refuse)
+    monkeypatch.setattr(cli, "handshake", _refuse)
+    assert client.get("/api/agent/cursor/status").status_code == 200
+
+
+def test_a_provider_route_scrubs_its_detail_too(stubbed, client: TestClient, monkeypatch) -> None:
+    from factoria.agent import cursor_cli
+
+    async def leaky() -> cursor_cli.AccountStatus:
+        return cursor_cli.AccountStatus(detail="failed with sk-ant-oat01-" + "A" * 40)
+
+    monkeypatch.setattr(cursor_cli, "auth_status", leaky)
+    detail = client.get("/api/agent/cursor/status").json()["account"]["detail"]
+    assert "sk-ant-" not in detail

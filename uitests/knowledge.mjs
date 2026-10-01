@@ -648,7 +648,7 @@ try {
     await page.locator('.skill-card.is-confirming:has-text("Delete")').count(),
     1,
   );
-  await page.locator(".skill-card.is-confirming button.link-button").click();
+  await page.locator(".skill-card.is-confirming button.secondary").click();
 } finally {
   await browser.close();
   for (const id of [TIMELINE, RULES]) {

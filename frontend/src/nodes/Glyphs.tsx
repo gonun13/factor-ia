@@ -79,6 +79,44 @@ export function FactoryGlyph() {
   );
 }
 
+/** The Factor-ia mark: the factory above, solid, lit and running, with a spark
+ *  where the smoke would be. Not a glyph — it carries its own colours, from the
+ *  tokens, rather than inheriting one. Mirrored by `public/favicon.svg`. */
+export function BrandMark() {
+  const amber = { fill: "var(--input)" };
+  return (
+    <svg className="brand-mark" viewBox="0 0 32 32" aria-hidden>
+      <rect
+        x="0.5"
+        y="0.5"
+        width="31"
+        height="31"
+        rx="7"
+        style={{ fill: "var(--panel)", stroke: "var(--edge-strong)" }}
+      />
+      <g transform="translate(0.25 1)">
+        <path d="M5 26V14.5l5 3.5v-3.5l5 3.5v-3.5l5 3.5V10h5.5v16Z" style={{ fill: "var(--ink)" }} />
+        <path d="M7.5 21.5h2v2.5h-2ZM12.5 21.5h2v2.5h-2ZM17.5 21.5h2v2.5h-2Z" style={amber} />
+        <path
+          d="M5 26.6h21.5"
+          strokeWidth="1.6"
+          strokeLinecap="round"
+          style={{ stroke: "var(--input)" }}
+        />
+        <path
+          d="M22.75 0.8Q23.2 4.6 26.6 5.1Q23.2 5.6 22.75 9.2Q22.3 5.6 18.9 5.1Q22.3 4.6 22.75 0.8Z"
+          style={amber}
+        />
+        <path
+          d="M16.6 3.6Q16.8 5.3 18.3 5.5Q16.8 5.7 16.6 7.4Q16.4 5.7 14.9 5.5Q16.4 5.3 16.6 3.6Z"
+          style={amber}
+          opacity="0.7"
+        />
+      </g>
+    </svg>
+  );
+}
+
 /** Entry: a door, arrow in — a library factory's way in. */
 export function EntryGlyph() {
   return (

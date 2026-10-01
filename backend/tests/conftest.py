@@ -85,6 +85,11 @@ def test_store(workspace: Path, data_dir: Path) -> store.Store:
 def client(test_store: store.Store, monkeypatch: pytest.MonkeyPatch) -> TestClient:
     monkeypatch.delenv("FACTOR_IA_ALLOWED_ORIGINS", raising=False)
     monkeypatch.delenv("FACTOR_IA_ALLOWED_HOSTS", raising=False)
+    # An established workspace, not a fresh one: startup seeds the default
+    # skills into a workspace with no `_skills/`, and a test about the library
+    # wants it holding only what the test put there. The seed has its own
+    # tests in `test_skills.py`.
+    (config.WORKSPACE / "_skills").mkdir(exist_ok=True)
     # TestClient sends no Origin unless asked, which is the `curl` case. The
     # base URL is the documented one, so the suite runs on the Host allowlist's
     # out-of-the-box default rather than on a name configured for it.

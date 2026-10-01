@@ -29,6 +29,8 @@ says so.
 
 from __future__ import annotations
 
+import asyncio
+
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -132,37 +134,74 @@ def _scrubbed(account: cli.AccountStatus) -> cli.AccountStatus:
     return account.model_copy(update={"detail": scrub_text(account.detail)})
 
 
+class ProviderStatus(BaseModel):
+    """One provider's verification: its account and its model listing.
+
+    What the Settings page asks once per card, so each card answers as soon as
+    its own CLI does — a Cursor binary that hangs until its timeout does not
+    hold the Claude card at *checking…*, and re-checking one after its sign-in
+    does not spawn the other's subprocesses.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    account: cli.AccountStatus
+    handshake: cli.Handshake
+
+
+async def _claude_status() -> ProviderStatus:
+    account, handshake = await asyncio.gather(cli.auth_status(), cli.handshake())
+    return ProviderStatus(account=_scrubbed(account), handshake=handshake)
+
+
+async def _cursor_status() -> ProviderStatus:
+    account, handshake = await asyncio.gather(
+        cursor_cli.auth_status(), cursor_cli.models_handshake()
+    )
+    return ProviderStatus(account=_scrubbed(account), handshake=handshake)
+
+
+def _offer(handshake: cli.Handshake) -> ModelOffer:
+    return ModelOffer(
+        models=handshake.models,
+        default_model=handshake.default_model,
+        default_model_label=handshake.default_model_label,
+    )
+
+
 @router.get("/agent/status", response_model=AgentStatus)
 async def agent_status() -> AgentStatus:
     """Account status for both CLIs plus what each provider offers.
 
     Claude handshake + Cursor models listing, both free of tokens and both
     answering while signed out — which is what makes the default model readable
-    before the operator has ever signed in.
+    before the operator has ever signed in. The two providers are asked
+    concurrently, so this answers in the slower one's time, not their sum.
     """
-    account = _scrubbed(await cli.auth_status())
-    handshake = await cli.handshake()
-    cursor_account = _scrubbed(await cursor_cli.auth_status())
-    cursor_handshake = await cursor_cli.models_handshake()
+    claude, cursor = await asyncio.gather(_claude_status(), _cursor_status())
     return AgentStatus(
-        account=account,
-        handshake=handshake,
-        cursor_account=cursor_account,
+        account=claude.account,
+        handshake=claude.handshake,
+        cursor_account=cursor.account,
         default_provider=_normalize_default_provider(config.adapter_name()),
         providers={
-            "claude": ModelOffer(
-                models=handshake.models,
-                default_model=handshake.default_model,
-                default_model_label=handshake.default_model_label,
-            ),
-            "cursor": ModelOffer(
-                models=cursor_handshake.models,
-                default_model=cursor_handshake.default_model,
-                default_model_label=cursor_handshake.default_model_label,
-            ),
+            "claude": _offer(claude.handshake),
+            "cursor": _offer(cursor.handshake),
             "fake": _fake_offer(),
         },
     )
+
+
+@router.get("/agent/claude/status", response_model=ProviderStatus)
+async def claude_status() -> ProviderStatus:
+    """The Claude account and handshake alone — the Settings card's own check."""
+    return await _claude_status()
+
+
+@router.get("/agent/cursor/status", response_model=ProviderStatus)
+async def cursor_status() -> ProviderStatus:
+    """The Cursor account and models listing alone — the Settings card's own check."""
+    return await _cursor_status()
 
 
 @router.get("/agent/login", response_model=login.LoginState)

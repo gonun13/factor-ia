@@ -119,7 +119,10 @@ Knowledge: list/create bases at `/api/knowledge` · read/delete one at
 of those mutations the server accepts;
 [`behaviour/knowledge.md`](behaviour/knowledge.md) holds the full contract.
 
-Settings: `GET /api/agent/status` (both accounts and both model listings) ·
+Settings: `GET /api/agent/status` (both accounts and both model listings,
+asked concurrently — what the canvas reads) · `GET /api/agent/claude/status` and
+`GET /api/agent/cursor/status` (one provider's account and listing, never asking
+the other — what the Settings page reads, one per card) ·
 `GET`/`POST /api/agent/login`, `POST /api/agent/login/code`,
 `POST /api/agent/login/cancel` · the same four routes for Cursor under
 `/api/agent/cursor/login` · `GET`/`POST /api/ssh/key`.
@@ -715,7 +718,7 @@ design's biggest open question:
 | `/workspace` | the one surface shared with the host | bind mount from `FACTOR_IA_WORKSPACE_HOST` |
 | `/data` | projects registry, run history, event logs | `factoria-data` volume |
 | `/workspace/_factories/` | factory definitions | a **separate, team-owned git repo** under the workspace |
-| `/workspace/_skills/` | standing and overridden system skills | workspace files, suitable for the operator's own git history |
+| `/workspace/_skills/` | standing and overridden system skills; seeded with the default skills when absent | workspace files, suitable for the operator's own git history |
 | `/workspace/_knowledge/` | durable knowledge bases | workspace files, suitable for the operator's own git history |
 
 **Execution isolation.** Each agent run operates in its own **git worktree** of

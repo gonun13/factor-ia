@@ -646,6 +646,13 @@ export type AgentStatus = {
   default_provider: "claude" | "cursor" | "fake";
 };
 
+/** One provider's own verification — the Settings card for it asks this
+ * alone, so each card answers as soon as its CLI does. */
+export type ProviderStatus = {
+  account: AccountStatus;
+  handshake: Handshake;
+};
+
 export type LoginPhase =
   | "starting"
   | "awaiting_code"

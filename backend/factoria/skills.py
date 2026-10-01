@@ -27,6 +27,12 @@ changes are git-tracked and shared with a team exactly as every other skill
 is, and losing that file restores the product's own instructions instead of
 leaving a node type with none.
 
+**And for the ones a fresh workspace starts with.** `default_skills/` holds
+the working skills a line is built from — `research`, `scope`, `plan`,
+`implement`, `verify`, `review`, `release` — and `seed_default_skills` copies
+them into a workspace that has no `_skills/` yet. After that they are ordinary
+imports in every respect: worn by choice, edited in place, deleted for good.
+
 **The file is the record and git is the history**, which is the whole reason
 this module is not part of `store.py`. `store.py`'s contract is JSON written
 through pydantic so the key order is identical on every machine; a skill is
@@ -43,7 +49,11 @@ not show up in a picker).
 
 from __future__ import annotations
 
+import logging
+import os
 import re
+import shutil
+import tempfile
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
@@ -57,6 +67,11 @@ SKILLS_DIRNAME = "_skills"
 
 #: The directory of documents the product ships, beside this module.
 SYSTEM_SKILLS_DIRNAME = "system_skills"
+
+#: The skills a fresh workspace starts with, beside this module. Not a
+#: registry: nothing here is consulted after the seed, so a default the
+#: operator deletes stays deleted (`seed_default_skills`).
+DEFAULT_SKILLS_DIRNAME = "default_skills"
 
 #: **Skills a node type is hardwired to**, rather than ones an operator
 #: imported and an agent node wears by choice. Four today. Three are one per
@@ -107,6 +122,8 @@ _SLUG_STRIP = re.compile(r"[^a-z0-9]+")
 _DESCRIPTION_MAX = 500
 
 _lock = threading.Lock()
+
+log = logging.getLogger("factoria")
 
 
 class SkillError(RuntimeError):
@@ -317,6 +334,60 @@ def system_skill_path(name: str) -> Path:
     if name not in SYSTEM_SKILLS:
         raise SkillNotFound(f"no system skill named {name!r}")
     return system_skills_dir() / f"{name}.md"
+
+
+def default_skills_dir() -> Path:
+    """The skills a fresh workspace is seeded with, beside this module —
+    resolved off `__file__` for the same reason `system_skills_dir` is."""
+    return Path(__file__).resolve().parent / DEFAULT_SKILLS_DIRNAME
+
+
+def seed_default_skills(root: Path | None = None) -> None:
+    """Give a workspace with no `_skills/` the default skills, once.
+
+    **Seeded when the directory is absent, and never again.** Unlike
+    `knowledge.store.ensure_system_bases`, which writes back a missing shipped
+    file on every read, this does nothing at all once `_skills/` exists: the
+    defaults are ordinary imports, and an operator who deletes `review.md` or
+    rewrites `plan.md` has decided, not drifted. A shipped change to a default
+    reaches new workspaces only.
+
+    **All or nothing.** The files are written into a hidden sibling directory
+    and renamed into place, so a crash half-way leaves no `_skills/` — and the
+    next start seeds again — rather than a partial set this function would
+    then never complete.
+
+    **Never raises.** It runs at startup, and a workspace that cannot be
+    written to is one that starts without defaults, not a server that will not
+    boot.
+    """
+    try:
+        target = skills_dir(root)
+    except PathEscape:
+        return
+    if target.exists():
+        return
+    source = default_skills_dir()
+    defaults = sorted(source.glob("*.md")) if source.is_dir() else []
+    if not defaults:
+        # A packaging fault, and the test suite is where to catch it.
+        return
+    with _lock:
+        staging: Path | None = None
+        try:
+            staging = Path(
+                tempfile.mkdtemp(dir=str(target.parent), prefix=f".{target.name}.")
+            )
+            for path in defaults:
+                shutil.copyfile(path, staging / path.name)
+                os.chmod(staging / path.name, 0o644)
+            os.rename(staging, target)
+            staging = None
+        except OSError as exc:
+            log.warning("could not seed the default skills into %s: %s", target, exc)
+        finally:
+            if staging is not None:
+                shutil.rmtree(staging, ignore_errors=True)
 
 
 def is_system(name: str) -> bool:

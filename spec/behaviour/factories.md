@@ -22,8 +22,9 @@ Build:     (input in) ──► Implement ──► Review ──pass──► (
 
 ## The library
 
-Factories are listed on the main page after the projects, and built on the same
-canvas. They belong to the workspace, not to a project
+Factories are listed on the main page after the projects, in the first of its
+three library columns, and built on the same canvas. They belong to the
+workspace, not to a project
 ([`../decisions/0029`](../decisions/0029-factories-are-a-workspace-library.md)):
 `/workspace/_factories/_library/<id>.json`, `project_id: null`, in the same git
 repository as the main factories.

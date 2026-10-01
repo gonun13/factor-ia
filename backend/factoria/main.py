@@ -10,7 +10,7 @@ from typing import AsyncIterator
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 
-from . import __version__, config
+from . import __version__, config, skills
 from .api import router as api_router
 from .knowledge import store as knowledge_store
 from .knowledge_api import router as knowledge_router
@@ -25,7 +25,7 @@ log = logging.getLogger("factoria")
 
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
-    """Durability, and the shipped bases, on the way up.
+    """Durability, the shipped bases and the default skills, on the way up.
 
     `DESIGN.md`, Non-functional requirements: *"a run interrupted mid-flight is
     marked failed on restart, never silently resumed."* The sweep runs before
@@ -40,8 +40,12 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     sure it is there. Doing it here as well means a fresh workspace has the
     directory on disk — and in `git status` — before anybody opens the library,
     rather than at the moment they first look.
+
+    The default skills are seeded here and only here: once, into a workspace
+    with no `_skills/` yet (`skills.seed_default_skills`).
     """
     knowledge_store.ensure_system_bases()
+    skills.seed_default_skills()
     interrupted = get_orchestrator().sweep_interrupted()
     if interrupted:
         log.warning(

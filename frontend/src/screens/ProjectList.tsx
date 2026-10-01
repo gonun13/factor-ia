@@ -6,28 +6,31 @@
  * no codebases and saves no factories, and the operator should learn that here
  * rather than from a failed save.
  *
- * The skills library sits below the projects because that is what it is to
- * them: not a project's contents, and not a sibling of one either. A skill
- * belongs to nothing — any agent in any factory in any project can wear one —
- * so the only screen that can honestly hold it is the one above them all.
+ * **Below the projects, three columns side by side: factories, skills,
+ * knowledge.** Each is what a project is built from rather than a project's
+ * contents, and none belongs to one — a factory is dropped onto any project's
+ * line as a node (`decisions/0029`), a skill is worn by any agent in any
+ * factory, a base is consulted by any of them — so the only screen that can
+ * honestly hold them is the one above them all. Factories take the first
+ * column because they are the biggest block a project is built from.
  *
- * **Factories come straight after the projects**, and before the libraries,
- * because they are what a project is built from: reusable, fully automated
- * blocks any project drops onto its line as a factory node (`decisions/0029`).
- * Like a skill, a factory belongs to no project — the workspace owns it — so
- * this is the one screen that can hold it.
- *
- * The knowledge library sits beside it for exactly the same reason, and the
- * two are deliberately not merged: a skill tells an agent *how to behave* and
- * is unconditional once attached; a base holds *what is durably true* and is a
- * source consulted through tools. One screen, two sections, because they are
- * managed by the same person at the same moment and are otherwise nothing
- * alike.
+ * Skills and knowledge are deliberately not merged: a skill tells an agent
+ * *how to behave* and is unconditional once attached; a base holds *what is
+ * durably true* and is a source consulted through tools. One screen, two
+ * columns, because they are managed by the same person at the same moment and
+ * are otherwise nothing alike.
  */
 
 import { useEffect, useRef, useState } from "react";
 import { ApiError, api } from "../api";
-import { FactoryGlyph, PROJECT_ICON_GLYPHS, TrashGlyph } from "../nodes/Glyphs";
+import { Changelog } from "./Changelog";
+import {
+  BrandMark,
+  FactoryGlyph,
+  PROJECT_ICON_GLYPHS,
+  SettingsGlyph,
+  TrashGlyph,
+} from "../nodes/Glyphs";
 import {
   KNOWLEDGE_FILE_MAX_BYTES,
   KNOWLEDGE_TYPES,
@@ -60,6 +63,7 @@ export function ProjectList({
   const [projects, setProjects] = useState<Project[] | null>(null);
   const [codebases, setCodebases] = useState<Codebase[]>([]);
   const [health, setHealth] = useState<Health | null>(null);
+  const [showChangelog, setShowChangelog] = useState(false);
   const [creating, setCreating] = useState(false);
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
@@ -139,27 +143,29 @@ export function ProjectList({
     <div className="app">
       <header className="topbar">
         <span className="brand">
-          <span className="dot" />
-          Factor-ia
+          <a className="brand-home" href="#/" title="Back to the main page">
+            <BrandMark />
+            Factor-ia
+          </a>
           <small>· build and operate AI software factories</small>
         </span>
         <span className="spacer" />
         <button
-          className="link-button"
+          className="link-button has-glyph"
           onClick={() => {
             window.location.hash = "#/settings";
           }}
         >
+          <SettingsGlyph />
           Settings
         </button>
       </header>
 
       <div className="screen">
-        <div className="screen-inner">
+        <div className="screen-inner is-wide">
           <h1>Projects</h1>
           <p className="lede">
-            A project is a workspace with a main factory. Open one to lay down
-            the line.
+            A project is a workspace with a main factory. Start here.
           </p>
 
           {error && <div className="error">{error}</div>}
@@ -188,7 +194,7 @@ export function ProjectList({
                     <button className="primary" type="submit" disabled={!name.trim() || busy}>
                       {busy ? "Creating…" : "Create"}
                     </button>
-                    <button type="button" className="link-button" onClick={cancelCreate}>
+                    <button type="button" className="secondary" onClick={cancelCreate}>
                       Cancel
                     </button>
                   </span>
@@ -229,7 +235,7 @@ export function ProjectList({
                       <button
                         ref={cancelDeleteButton}
                         type="button"
-                        className="link-button"
+                        className="secondary"
                         onClick={() => setConfirmingDelete(null)}
                         disabled={deleting !== null}
                       >
@@ -271,9 +277,16 @@ export function ProjectList({
             </div>
           )}
 
-          <FactoryLibrary onOpen={onOpenFactory} />
-          <SkillLibrary />
-          <KnowledgeLibrary />
+          {/* Three columns at one level, each headed the same way and opened by
+              the same small add button — so the three things a project is
+              built from read as peers, not as a list in order of importance.
+              The headers share a subgrid row, which is what keeps the three
+              buttons level whatever each lede runs to. */}
+          <div className="libraries">
+            <FactoryLibrary onOpen={onOpenFactory} />
+            <SkillLibrary />
+            <KnowledgeLibrary />
+          </div>
 
           <div className="footnote">
             <span>
@@ -298,8 +311,18 @@ export function ProjectList({
                 </>
               )}
             </span>
-            {health && <span>api v{health.version}</span>}
+            {health && (
+              <button
+                type="button"
+                className="link-button footnote-version"
+                onClick={() => setShowChangelog(true)}
+                title="What's new"
+              >
+                factor-ia v{health.version}
+              </button>
+            )}
           </div>
+          {showChangelog && <Changelog onClose={() => setShowChangelog(false)} />}
         </div>
       </div>
     </div>
@@ -396,130 +419,132 @@ function FactoryLibrary({ onOpen }: { onOpen: (factoryId: string) => void }) {
   }
 
   return (
-    <section className="factories-section" aria-labelledby="factories-heading">
-      <h2 id="factories-heading">Factories</h2>
-      <p className="lede">
-        A factory is a block of machines that runs by itself. Build one here,
-        then drop it onto any project's line as a single node.
-      </p>
+    <section className="library-column factories-section" aria-labelledby="factories-heading">
+      <header className="library-head">
+        <h2 id="factories-heading">Factories</h2>
+        <p className="lede">
+          A factory is a block of machines that runs by itself. Build one here,
+          then drop it onto any project's line as a single node.
+        </p>
+      </header>
 
-      {error && <div className="error">{error}</div>}
+      <div className="library-body">
+        {!creating && (
+          <button type="button" className="library-add" onClick={() => setCreating(true)}>
+            <span aria-hidden>+</span> New factory
+          </button>
+        )}
 
-      {factories === null ? (
-        <p className="lede">Loading…</p>
-      ) : (
-        <div className="project-grid factory-grid">
-          {creating ? (
-            <form className="project-card project-card-new is-editing" onSubmit={create}>
-              <input
-                ref={nameInput}
-                value={name}
-                onChange={(event) => setName(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === "Escape") cancelCreate();
-                }}
-                onBlur={() => {
-                  if (!name.trim() && !busy) cancelCreate();
-                }}
-                placeholder="Factory name"
-                aria-label="New factory name"
-                maxLength={80}
-              />
-              <span className="new-project-actions">
-                <button className="primary" type="submit" disabled={!name.trim() || busy}>
-                  {busy ? "Creating…" : "Create"}
-                </button>
-                <button type="button" className="link-button" onClick={cancelCreate}>
-                  Cancel
-                </button>
-              </span>
-            </form>
-          ) : (
-            <button
-              className="project-card project-card-new factory-card-new"
-              onClick={() => setCreating(true)}
-            >
-              <span className="new-project-icon">+</span>
-              <span className="name">New factory</span>
-            </button>
-          )}
+        {error && <div className="error">{error}</div>}
 
-          {factories.map((factory) =>
-            confirmingDelete === factory.id ? (
-              <div
-                key={factory.id}
-                className="project-card is-confirming"
-                onKeyDown={(event) => {
-                  if (event.key === "Escape" && !deleting) setConfirmingDelete(null);
-                }}
-              >
-                <span className="name">Delete {factory.name}?</span>
-                <span className="meta">
-                  Deletes <code>_factories/_library/{factory.id}.json</code>. A
-                  factory a project still uses cannot be deleted.
-                </span>
-                <span className="card-actions">
-                  <button
-                    type="button"
-                    className="destructive"
-                    onClick={() => remove(factory.id)}
-                    disabled={deleting !== null}
-                  >
-                    {deleting === factory.id ? "Deleting…" : "Delete"}
+        {factories === null ? (
+          <p className="lede">Loading…</p>
+        ) : (
+          <div className="project-grid factory-grid">
+            {creating && (
+              <form className="project-card project-card-new is-editing" onSubmit={create}>
+                <input
+                  ref={nameInput}
+                  value={name}
+                  onChange={(event) => setName(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Escape") cancelCreate();
+                  }}
+                  onBlur={() => {
+                    if (!name.trim() && !busy) cancelCreate();
+                  }}
+                  placeholder="Factory name"
+                  aria-label="New factory name"
+                  maxLength={80}
+                />
+                <span className="new-project-actions">
+                  <button className="primary" type="submit" disabled={!name.trim() || busy}>
+                    {busy ? "Creating…" : "Create"}
                   </button>
-                  <button
-                    ref={cancelDeleteButton}
-                    type="button"
-                    className="link-button"
-                    onClick={() => setConfirmingDelete(null)}
-                    disabled={deleting !== null}
-                  >
+                  <button type="button" className="secondary" onClick={cancelCreate}>
                     Cancel
                   </button>
                 </span>
-              </div>
-            ) : (
-              <div key={factory.id} className="project-slot">
-                <button className="project-card factory-card" onClick={() => onOpen(factory.id)}>
-                  <span className="name">
-                    <span className="project-icon factory-icon" aria-hidden>
-                      <FactoryGlyph />
-                    </span>
-                    {factory.name}
-                  </span>
-                  <span className="meta mono">{factory.id}</span>
-                  <span className="meta">
-                    {Math.max(0, factory.node_count - 6)} machine
-                    {factory.node_count - 6 === 1 ? "" : "s"}
-                    {" · "}
-                    {factory.used_by.length === 0
-                      ? "used by no project"
-                      : `used by ${factory.used_by.length} project${factory.used_by.length === 1 ? "" : "s"}`}
-                  </span>
-                  {factory.problems.length > 0 && (
-                    <span className="meta warn" title={factory.problems.join("\n")}>
-                      not usable — {factory.problems.length} thing
-                      {factory.problems.length === 1 ? "" : "s"} to fix
-                    </span>
-                  )}
-                </button>
-                <button
-                  type="button"
-                  className="card-delete"
-                  aria-label={`Delete ${factory.name}`}
-                  title="Delete factory"
-                  onClick={() => {
-                    setError(null);
-                    setConfirmingDelete(factory.id);
+              </form>
+            )}
+
+            {factories.map((factory) =>
+              confirmingDelete === factory.id ? (
+                <div
+                  key={factory.id}
+                  className="project-card is-confirming"
+                  onKeyDown={(event) => {
+                    if (event.key === "Escape" && !deleting) setConfirmingDelete(null);
                   }}
                 >
-                  ×
-                </button>
-              </div>
-            ),
-          )}
-        </div>
-      )}
+                  <span className="name">Delete {factory.name}?</span>
+                  <span className="meta">
+                    Deletes <code>_factories/_library/{factory.id}.json</code>. A
+                    factory a project still uses cannot be deleted.
+                  </span>
+                  <span className="card-actions">
+                    <button
+                      type="button"
+                      className="destructive"
+                      onClick={() => remove(factory.id)}
+                      disabled={deleting !== null}
+                    >
+                      {deleting === factory.id ? "Deleting…" : "Delete"}
+                    </button>
+                    <button
+                      ref={cancelDeleteButton}
+                      type="button"
+                      className="secondary"
+                      onClick={() => setConfirmingDelete(null)}
+                      disabled={deleting !== null}
+                    >
+                      Cancel
+                    </button>
+                  </span>
+                </div>
+              ) : (
+                <div key={factory.id} className="project-slot">
+                  <button className="project-card factory-card" onClick={() => onOpen(factory.id)}>
+                    <span className="name">
+                      <span className="project-icon factory-icon" aria-hidden>
+                        <FactoryGlyph />
+                      </span>
+                      {factory.name}
+                    </span>
+                    <span className="meta mono">{factory.id}</span>
+                    <span className="meta">
+                      {Math.max(0, factory.node_count - 6)} machine
+                      {factory.node_count - 6 === 1 ? "" : "s"}
+                      {" · "}
+                      {factory.used_by.length === 0
+                        ? "used by no project"
+                        : `used by ${factory.used_by.length} project${factory.used_by.length === 1 ? "" : "s"}`}
+                    </span>
+                    {factory.problems.length > 0 && (
+                      <span className="meta warn" title={factory.problems.join("\n")}>
+                        not usable — {factory.problems.length} thing
+                        {factory.problems.length === 1 ? "" : "s"} to fix
+                      </span>
+                    )}
+                  </button>
+                  <button
+                    type="button"
+                    className="card-delete"
+                    aria-label={`Delete ${factory.name}`}
+                    title="Delete factory"
+                    onClick={() => {
+                      setError(null);
+                      setConfirmingDelete(factory.id);
+                    }}
+                  >
+                    ×
+                  </button>
+                </div>
+              ),
+            )}
+          </div>
+        )}
+      </div>
     </section>
   );
 }
@@ -595,15 +620,14 @@ function SkillNotes({ notes, stale }: { notes: SkillNote[]; stale?: boolean }) {
  * it is the text the agent actually gets, and a second copy here would be a
  * claim about the spawn that nothing keeps true. Closed by default — it is the
  * answer to "why does my skill behave like that", not something to read every
- * time you open the library.
+ * time you open the library — so the library mounts this only once its
+ * **Machine Contract** button is pressed, and the fetch happens then.
  */
 function MachineContract() {
-  const [open, setOpen] = useState(false);
   const [contract, setContract] = useState<string | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!open || contract !== null) return;
     let live = true;
     api
       .machineContract()
@@ -614,26 +638,19 @@ function MachineContract() {
     return () => {
       live = false;
     };
-  }, [open, contract]);
+  }, []);
 
   return (
-    <div className="machine-contract">
-      <button type="button" className="link-button" onClick={() => setOpen((now) => !now)}>
-        {open ? "Hide what a machine promises a skill" : "What a machine promises a skill"}
-      </button>
-      {open && (
-        <>
-          <p className="hint">
-            Appended under every skill a machine wears, on every spawn. A skill
-            cannot override it.
-          </p>
-          {problem && <div className="error">{problem}</div>}
-          {contract === null && !problem ? (
-            <p className="dim">Reading…</p>
-          ) : (
-            <pre className="machine-contract-text">{contract}</pre>
-          )}
-        </>
+    <div className="machine-contract" id="machine-contract">
+      <p className="hint">
+        Appended under every skill a machine wears, on every spawn. A skill
+        cannot override it.
+      </p>
+      {problem && <div className="error">{problem}</div>}
+      {contract === null && !problem ? (
+        <p className="dim">Reading…</p>
+      ) : (
+        <pre className="machine-contract-text">{contract}</pre>
       )}
     </div>
   );
@@ -653,6 +670,7 @@ function SkillLibrary() {
   const [problem, setProblem] = useState<string | null>(null);
   const [confirming, setConfirming] = useState<string | null>(null);
   const [deleting, setDeleting] = useState<string | null>(null);
+  const [contractOpen, setContractOpen] = useState(false);
   /** The skill whose document is open, by name. The card is the index; the
    *  window is the document. */
   const [editing, setEditing] = useState<string | null>(null);
@@ -750,214 +768,230 @@ function SkillLibrary() {
   }
 
   return (
-    <section className="skills-section">
-      <h2>Skills</h2>
-      <p className="lede">
-        Standing instructions an agent can wear, appended to its prompt on
-        every run. They live in <code>_skills/</code> in your workspace,
-        committed with the team.
-      </p>
+    <section className="library-column skills-section" aria-labelledby="skills-heading">
+      <header className="library-head">
+        <h2 id="skills-heading">Skills</h2>
+        <p className="lede">
+          Standing instructions that control an agent's behavior. System
+          skills belong to specific nodes.
+        </p>
+      </header>
 
-      <MachineContract />
-
-      {problem && !conflict && <div className="error">{problem}</div>}
-
-      {/* **Shown after the import, not instead of it.** The document is in,
-          and these are the lines of it that a line will not honour — read
-          beside the file the operator just chose rather than discovered later
-          in a run that went strangely. */}
-      {imported && (
-        <div className="skill-imported panel">
-          <span className="skill-imported-head">
-            <span className="mono">{imported.name}</span> imported
-            {imported.notes.length === 0 && " — nothing in it reads as written for a chat."}
-          </span>
-          <SkillNotes notes={imported.notes} />
-          <span className="card-actions">
-            <button type="button" className="link-button" onClick={() => setImported(null)}>
-              Dismiss
+      <div className="library-body">
+        {/* The contract beside the add button rather than at the column's
+            foot: it is reachable without scrolling past every skill, and the
+            row keeps this column's add button level with its neighbours'. */}
+        <div className="library-actions">
+          {!importing && (
+            <button type="button" className="library-add" onClick={() => setImporting(true)}>
+              <span aria-hidden>+</span> Import a skill
             </button>
-            <button type="button" className="link-button" onClick={() => setEditing(imported.name)}>
-              Open it
-            </button>
-          </span>
-        </div>
-      )}
-
-      {importing ? (
-        <div className="skill-import panel">
-          {pasting ? (
-            <textarea
-              autoFocus
-              value={text}
-              aria-label="Skill markdown"
-              placeholder={"---\nname: repo-recon\ndescription: …\n---\n\n# …"}
-              onChange={(event) => {
-                setText(event.target.value);
-                setConflict(null);
-              }}
-            />
-          ) : (
-            <div
-              className={`skill-drop${filename ? " has-file" : ""}`}
-              onDragOver={(event) => {
-                event.preventDefault();
-                event.stopPropagation();
-                event.dataTransfer.dropEffect = "copy";
-              }}
-              onDrop={(event) => {
-                event.preventDefault();
-                event.stopPropagation();
-                void take(event.dataTransfer.files[0]);
-              }}
-            >
-              <input
-                type="file"
-                aria-label="Skill file"
-                accept=".md,.markdown,.txt,text/markdown,text/plain"
-                onChange={(event) => void take(event.target.files?.[0])}
-              />
-              {filename ? (
-                <span className="prd-chosen">
-                  <span className="mono">{filename}</span>
-                  <span className="hint">
-                    {" "}
-                    · {text.split(/\r?\n/).length} lines,{" "}
-                    {Math.ceil(text.length / 1024)} kB
-                  </span>
-                </span>
-              ) : (
-                <span className="hint">
-                  {reading ? "Reading…" : "Drop a skill .md here, or choose one."}
-                </span>
-              )}
-            </div>
           )}
+          <button
+            type="button"
+            className="library-add secondary"
+            aria-expanded={contractOpen}
+            aria-controls="machine-contract"
+            onClick={() => setContractOpen((now) => !now)}
+          >
+            Machine Contract
+          </button>
+        </div>
 
-          {conflict && <div className="error">{conflict}</div>}
+        {contractOpen && <MachineContract />}
 
-          <span className="card-actions">
-            <button
-              className="primary"
-              type="button"
-              disabled={!text.trim() || busy || reading}
-              onClick={() => void submit(false)}
-            >
-              {busy ? "Importing…" : "Import"}
-            </button>
-            {conflict && (
+        {problem && !conflict && <div className="error">{problem}</div>}
+
+        {/* **Shown after the import, not instead of it.** The document is in,
+            and these are the lines of it that a line will not honour — read
+            beside the file the operator just chose rather than discovered later
+            in a run that went strangely. */}
+        {imported && (
+          <div className="skill-imported panel">
+            <span className="skill-imported-head">
+              <span className="mono">{imported.name}</span> imported
+              {imported.notes.length === 0 && " — nothing in it reads as written for a chat."}
+            </span>
+            <SkillNotes notes={imported.notes} />
+            <span className="card-actions">
+              <button type="button" className="link-button" onClick={() => setImported(null)}>
+                Dismiss
+              </button>
+              <button type="button" className="link-button" onClick={() => setEditing(imported.name)}>
+                Open it
+              </button>
+            </span>
+          </div>
+        )}
+
+        {importing && (
+          <div className="skill-import panel">
+            {pasting ? (
+              <textarea
+                autoFocus
+                value={text}
+                aria-label="Skill markdown"
+                placeholder={"---\nname: repo-recon\ndescription: …\n---\n\n# …"}
+                onChange={(event) => {
+                  setText(event.target.value);
+                  setConflict(null);
+                }}
+              />
+            ) : (
+              <div
+                className={`skill-drop${filename ? " has-file" : ""}`}
+                onDragOver={(event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  event.dataTransfer.dropEffect = "copy";
+                }}
+                onDrop={(event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  void take(event.dataTransfer.files[0]);
+                }}
+              >
+                <input
+                  type="file"
+                  aria-label="Skill file"
+                  accept=".md,.markdown,.txt,text/markdown,text/plain"
+                  onChange={(event) => void take(event.target.files?.[0])}
+                />
+                {filename ? (
+                  <span className="prd-chosen">
+                    <span className="mono">{filename}</span>
+                    <span className="hint">
+                      {" "}
+                      · {text.split(/\r?\n/).length} lines,{" "}
+                      {Math.ceil(text.length / 1024)} kB
+                    </span>
+                  </span>
+                ) : (
+                  <span className="hint">
+                    {reading ? "Reading…" : "Drop a skill .md here, or choose one."}
+                  </span>
+                )}
+              </div>
+            )}
+
+            {conflict && <div className="error">{conflict}</div>}
+
+            <span className="card-actions">
+              <button
+                className="primary"
+                type="button"
+                disabled={!text.trim() || busy || reading}
+                onClick={() => void submit(false)}
+              >
+                {busy ? "Importing…" : "Import"}
+              </button>
+              {conflict && (
+                <button
+                  type="button"
+                  className="destructive"
+                  disabled={busy}
+                  onClick={() => void submit(true)}
+                >
+                  Replace it
+                </button>
+              )}
               <button
                 type="button"
-                className="destructive"
-                disabled={busy}
-                onClick={() => void submit(true)}
+                className="tinted"
+                onClick={() => {
+                  setPasting((current) => !current);
+                  setConflict(null);
+                }}
               >
-                Replace it
+                {pasting ? "Choose a File" : "Paste Markdown"}
               </button>
-            )}
-            <button
-              type="button"
-              className="link-button"
-              onClick={() => {
-                setPasting((current) => !current);
-                setConflict(null);
-              }}
-            >
-              {pasting ? "Choose a file instead" : "Paste markdown instead"}
-            </button>
-            <button type="button" className="link-button" onClick={reset}>
-              Cancel
-            </button>
-          </span>
-        </div>
-      ) : (
-        <span>
-          <button className="primary" type="button" onClick={() => setImporting(true)}>
-            Import a skill
-          </button>
-        </span>
-      )}
+              <button type="button" className="secondary" onClick={reset}>
+                Cancel
+              </button>
+            </span>
+          </div>
+        )}
 
-      {skills === null ? (
-        <p className="lede">Loading…</p>
-      ) : skills.every((one) => one.system) ? (
-        // Never empty now — the shipped skills are always here — so the
-        // invitation is about importing one, shown while nothing has been.
-        <p className="lede">
-          Nothing imported yet. A skill is a markdown file with <code>name</code>{" "}
-          and <code>description</code> in its frontmatter, and instructions under
-          it. The ones below are built in.
-        </p>
-      ) : null}
+        {skills === null ? (
+          <p className="lede">Loading…</p>
+        ) : skills.every((one) => one.system) ? (
+          // Never empty now — the shipped skills are always here — so the
+          // invitation is about importing one, shown while nothing has been.
+          <p className="lede">
+            Nothing imported yet. A skill is a markdown file with <code>name</code>{" "}
+            and <code>description</code> in its frontmatter, and instructions under
+            it. The ones below are built in.
+          </p>
+        ) : null}
 
-      {skills !== null && (
-        <div className="skill-grid">
-          {skills.map((skill) => (
-            <div key={skill.name} className="skill-slot">
-              {confirming === skill.name ? (
-                <div
-                  className={`skill-card is-confirming${
-                    skill.system ? " is-system" : ""
-                  }`}
-                  onKeyDown={(event) => {
-                    if (event.key === "Escape" && !deleting) setConfirming(null);
-                  }}
-                >
-                  <span className="name">
-                    {skill.system ? "Revert" : "Delete"} {skill.name}?
-                  </span>
-                  <span className="desc">
-                    {skill.system ? (
-                      <>
-                        Removes your <code>_skills/{skill.name}.md</code> and
-                        restores the shipped instructions. The skill stays — a
-                        knowledge node is built on it.
-                      </>
-                    ) : (
-                      <>
-                        Removes <code>_skills/{skill.name}.md</code>. Any agent
-                        still wearing it will refuse to run until it is replaced.
-                      </>
-                    )}
-                  </span>
-                  <span className="card-actions">
-                    <button
-                      type="button"
-                      className="destructive"
-                      onClick={() => void remove(skill.name)}
-                      disabled={deleting !== null}
-                    >
-                      {deleting === skill.name
-                        ? skill.system
-                          ? "Reverting…"
-                          : "Deleting…"
-                        : skill.system
-                          ? "Revert"
-                          : "Delete"}
-                    </button>
-                    <button
-                      ref={cancelDeleteButton}
-                      type="button"
-                      className="link-button"
-                      onClick={() => setConfirming(null)}
-                      disabled={deleting !== null}
-                    >
-                      Cancel
-                    </button>
-                  </span>
-                </div>
-              ) : (
-                <>
-                  {/* Two lines and a name: what a card is for is telling these
-                      apart at a glance. The document itself is a window away. */}
-                  <button
-                    type="button"
-                    className={`skill-card${skill.system ? " is-system" : ""}`}
-                    title={`Open ${skill.name}`}
-                    onClick={() => setEditing(skill.name)}
+        {skills !== null && (
+          <div className="skill-grid">
+            {skills.map((skill) => (
+              <div key={skill.name} className="skill-slot">
+                {confirming === skill.name ? (
+                  <div
+                    className={`skill-card is-confirming${
+                      skill.system ? " is-system" : ""
+                    }`}
+                    onKeyDown={(event) => {
+                      if (event.key === "Escape" && !deleting) setConfirming(null);
+                    }}
                   >
                     <span className="name">
-                      {skill.name}
+                      {skill.system ? "Revert" : "Delete"} {skill.name}?
+                    </span>
+                    <span className="desc">
+                      {skill.system ? (
+                        <>
+                          Removes your <code>_skills/{skill.name}.md</code> and
+                          restores the shipped instructions. The skill stays — a
+                          knowledge node is built on it.
+                        </>
+                      ) : (
+                        <>
+                          Removes <code>_skills/{skill.name}.md</code>. Any agent
+                          still wearing it will refuse to run until it is replaced.
+                        </>
+                      )}
+                    </span>
+                    <span className="card-actions">
+                      <button
+                        type="button"
+                        className="destructive"
+                        onClick={() => void remove(skill.name)}
+                        disabled={deleting !== null}
+                      >
+                        {deleting === skill.name
+                          ? skill.system
+                            ? "Reverting…"
+                            : "Deleting…"
+                          : skill.system
+                            ? "Revert"
+                            : "Delete"}
+                      </button>
+                      <button
+                        ref={cancelDeleteButton}
+                        type="button"
+                        className="secondary"
+                        onClick={() => setConfirming(null)}
+                        disabled={deleting !== null}
+                      >
+                        Cancel
+                      </button>
+                    </span>
+                  </div>
+                ) : (
+                  <>
+                    {/* A name and nothing else: what a card is for is telling
+                        these apart at a glance. The document itself is a window
+                        away. */}
+                    <button
+                      type="button"
+                      className={`skill-card${skill.system ? " is-system" : ""}`}
+                      title={`Open ${skill.name}`}
+                      onClick={() => setEditing(skill.name)}
+                    >
+                      <span className="name">{skill.name}</span>
                       {/* Says why this card has no × — a badge that only
                           decorated would be a badge nobody could act on. */}
                       {skill.system && (
@@ -968,29 +1002,28 @@ function SkillLibrary() {
                           system
                         </span>
                       )}
-                    </span>
-                    <span className="desc">{skill.description}</span>
-                  </button>
-                  {/* A system skill offers Revert only once there is an edit to
-                      undo. Offering it against the shipped text would be a
-                      button whose only outcome is a refusal. */}
-                  {(!skill.system || skill.overridden) && (
-                    <button
-                      type="button"
-                      className="card-delete"
-                      aria-label={`${skill.system ? "Revert" : "Delete"} ${skill.name}`}
-                      title={skill.system ? "Revert to the shipped skill" : "Delete skill"}
-                      onClick={() => setConfirming(skill.name)}
-                    >
-                      {skill.system ? "⟲" : "×"}
                     </button>
-                  )}
-                </>
-              )}
-            </div>
-          ))}
-        </div>
-      )}
+                    {/* A system skill offers Revert only once there is an edit to
+                        undo. Offering it against the shipped text would be a
+                        button whose only outcome is a refusal. */}
+                    {(!skill.system || skill.overridden) && (
+                      <button
+                        type="button"
+                        className="card-delete"
+                        aria-label={`${skill.system ? "Revert" : "Delete"} ${skill.name}`}
+                        title={skill.system ? "Revert to the shipped skill" : "Delete skill"}
+                        onClick={() => setConfirming(skill.name)}
+                      >
+                        {skill.system ? "⟲" : "×"}
+                      </button>
+                    )}
+                  </>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
 
       {editing && (
         <SkillEditor
@@ -1897,199 +1930,204 @@ function KnowledgeLibrary() {
   }
 
   return (
-    <section className="skills-section knowledge-section">
-      <h2>Knowledge</h2>
-      <p className="lede">
-        Permanent, curated stores the machines can consult and, where you wire
-        it, add to. Nothing here is ever cleaned up. They live in{" "}
-        <code>_knowledge/</code> in your workspace, committed with the team.
-      </p>
+    <section className="library-column knowledge-section" aria-labelledby="knowledge-heading">
+      <header className="library-head">
+        <h2 id="knowledge-heading">Knowledge</h2>
+        <p className="lede">
+          Permanent data stores that the machines can consult and write into.
+          Can be shared by projects.
+        </p>
+      </header>
 
-      {problem && <div className="error">{problem}</div>}
+      <div className="library-body">
+        {!creating && (
+          <button type="button" className="library-add" onClick={() => setCreating(true)}>
+            <span aria-hidden>+</span> New knowledge base
+          </button>
+        )}
 
-      {creating ? (
-        <div className="skill-import panel">
-          <label className="field">
-            <span className="field-name">id</span>
-            <input
-              ref={idInput}
-              value={id}
-              spellCheck={false}
-              placeholder="acme-api-timeline"
-              aria-label="Base id"
-              onChange={(event) => setId(event.target.value)}
-            />
-          </label>
-          <p className="hint">
-            The directory name, and the name every node selects it by. Lowercase
-            letters, digits and hyphens.
-          </p>
+        {problem && <div className="error">{problem}</div>}
 
-          <label className="field">
-            <span className="field-name">title</span>
-            <input
-              value={title}
-              placeholder="Acme API timeline"
-              aria-label="Base title"
-              onChange={(event) => setTitle(event.target.value)}
-            />
-          </label>
-
-          <label className="field">
-            <span className="field-name">type</span>
-            <select
-              value={baseType}
-              aria-label="Base type"
-              onChange={(event) => setBaseType(event.target.value as KnowledgeType)}
-            >
-              {KNOWLEDGE_TYPES.map((one) => (
-                <option key={one} value={one}>
-                  {one}
-                </option>
-              ))}
-            </select>
-          </label>
-          <p className="hint">
-            {KNOWLEDGE_TYPE_NOTE[baseType]}.{" "}
-            {baseType === "principles"
-              ? "Read-only to every machine, permanently."
-              : "Machines may write to it only where you draw a write wire."}
-          </p>
-
-          <label className="field">
-            <span className="field-name">what it holds</span>
-            <textarea
-              value={about}
-              rows={4}
-              aria-label="What this base holds"
-              placeholder="What belongs in this base, what does not, and — if machines may write — what a good entry looks like."
-              onChange={(event) => setAbout(event.target.value)}
-            />
-          </label>
-          <p className="hint">
-            Shown on the card, in the editor and on the node. Machines are told
-            what belongs in a base by their filing skill, not by this.
-          </p>
-
-          <div className="row">
-            <button
-              type="button"
-              className="primary"
-              disabled={busy || !id.trim() || !about.trim()}
-              onClick={() => void create()}
-            >
-              {busy ? "Creating…" : "Create base"}
-            </button>
-            <button type="button" className="link-button" onClick={reset} disabled={busy}>
-              Cancel
-            </button>
-          </div>
-        </div>
-      ) : (
-        <button type="button" className="primary" onClick={() => setCreating(true)}>
-          New knowledge base
-        </button>
-      )}
-
-      {bases === null ? (
-        <p className="muted">Reading the workspace…</p>
-      ) : (
-        <>
-          {/* **Never an empty state any more** — the shipped bases are always
-              on the shelf — so this says "nothing of yours yet" and the grid
-              below it still renders. */}
-          {bases.every((one) => one.system) && (
-            <p className="muted">
-              Nothing of your own yet. A base is a directory under{" "}
-              <code>_knowledge/</code> with a <code>manifest.md</code> in it —
-              create one here, or drop one in and commit it.
+        {creating && (
+          <div className="skill-import panel">
+            <label className="field">
+              <span className="field-name">id</span>
+              <input
+                ref={idInput}
+                value={id}
+                spellCheck={false}
+                placeholder="acme-api-timeline"
+                aria-label="Base id"
+                onChange={(event) => setId(event.target.value)}
+              />
+            </label>
+            <p className="hint">
+              The directory name, and the name every node selects it by. Lowercase
+              letters, digits and hyphens.
             </p>
-          )}
-          <div className="skill-grid">
-            {bases.map((base) =>
-              confirming === base.id ? (
-                <div key={base.id} className="skill-card is-confirming" role="alertdialog">
-                  <span className="name">Delete {base.id}?</span>
-                  <span className="desc">
-                    Removes <code>_knowledge/{base.id}/</code> and everything in it
-                    — {base.files} file{base.files === 1 ? "" : "s"}. Any node still
-                    selecting it will refuse to run, by name. It is in the
-                    workspace repo, so git is the undo.
-                  </span>
-                  <span className="row">
-                    <button
-                      type="button"
-                      className="danger"
-                      onClick={() => void remove(base.id)}
-                      disabled={deleting !== null}
-                    >
-                      {deleting === base.id ? "Deleting…" : "Delete"}
-                    </button>
-                    <button
-                      type="button"
-                      className="link-button"
-                      onClick={() => setConfirming(null)}
-                      disabled={deleting !== null}
-                    >
-                      Cancel
-                    </button>
-                  </span>
-                </div>
-              ) : (
-                /* The card is a button now, so the delete has to be its sibling
-                   rather than its child — a button inside a button is not a
-                   thing the DOM has, which is the whole reason `.skill-slot`
-                   exists next door. `.card-delete` is absolute inside it, so
-                   nothing moves. */
-                <div key={base.id} className="skill-slot">
-                  <button
-                    type="button"
-                    className={`skill-card knowledge-card${base.system ? " is-system" : ""}`}
-                    title={`Open ${base.id}`}
-                    onClick={() => setOpening(base.id)}
-                  >
-                    <span className="name">
-                      {base.title}
-                      {base.system && (
-                        <span
-                          className="skill-badge"
-                          title="Shipped with the product. Edit its files freely; it cannot be removed."
-                        >
-                          system
-                        </span>
-                      )}
-                    </span>
-                    <span className="desc">{base.about}</span>
-                    <span className="meta">
-                      <span className={`type-tag type-${base.type}`}>{base.type}</span>
-                      {" · "}
-                      {base.files} file{base.files === 1 ? "" : "s"} ·{" "}
-                      {Math.max(1, Math.round(base.bytes / 1024))} kB
-                      {!base.writable && " · read-only to machines"}
-                    </span>
-                  </button>
-                  {/* **No delete control at all on a system base**, rather than
-                      one that is offered and refused — `ProjectList`'s rule for
-                      an unoverridden system skill, and here it is stronger: the
-                      seed would put the directory straight back, so the button
-                      would be offering something that cannot happen. */}
-                  {!base.system && (
-                    <button
-                      type="button"
-                      className="card-delete"
-                      aria-label={`Delete ${base.id}`}
-                      title="Delete knowledge base"
-                      onClick={() => setConfirming(base.id)}
-                    >
-                      ×
-                    </button>
-                  )}
-                </div>
-              ),
-            )}
+
+            <label className="field">
+              <span className="field-name">title</span>
+              <input
+                value={title}
+                placeholder="Acme API timeline"
+                aria-label="Base title"
+                onChange={(event) => setTitle(event.target.value)}
+              />
+            </label>
+
+            <label className="field">
+              <span className="field-name">type</span>
+              <select
+                value={baseType}
+                aria-label="Base type"
+                onChange={(event) => setBaseType(event.target.value as KnowledgeType)}
+              >
+                {KNOWLEDGE_TYPES.map((one) => (
+                  <option key={one} value={one}>
+                    {one}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <p className="hint">
+              {KNOWLEDGE_TYPE_NOTE[baseType]}.{" "}
+              {baseType === "principles"
+                ? "Read-only to every machine, permanently."
+                : "Machines may write to it only where you draw a write wire."}
+            </p>
+
+            <label className="field">
+              <span className="field-name">what it holds</span>
+              <textarea
+                value={about}
+                rows={4}
+                aria-label="What this base holds"
+                placeholder="What belongs in this base, what does not, and — if machines may write — what a good entry looks like."
+                onChange={(event) => setAbout(event.target.value)}
+              />
+            </label>
+            <p className="hint">
+              Shown on the card, in the editor and on the node. Machines are told
+              what belongs in a base by their filing skill, not by this.
+            </p>
+
+            <div className="row">
+              <button
+                type="button"
+                className="primary"
+                disabled={busy || !id.trim() || !about.trim()}
+                onClick={() => void create()}
+              >
+                {busy ? "Creating…" : "Create base"}
+              </button>
+              <button type="button" className="secondary" onClick={reset} disabled={busy}>
+                Cancel
+              </button>
+            </div>
           </div>
-        </>
-      )}
+        )}
+
+        {bases === null ? (
+          <p className="muted">Reading the workspace…</p>
+        ) : (
+          <>
+            {/* **Never an empty state any more** — the shipped bases are always
+                on the shelf — so this says "nothing of yours yet" and the grid
+                below it still renders. */}
+            {bases.every((one) => one.system) && (
+              <p className="muted">
+                Nothing of your own yet. A base is a directory under{" "}
+                <code>_knowledge/</code> with a <code>manifest.md</code> in it —
+                create one here, or drop one in and commit it.
+              </p>
+            )}
+            <div className="skill-grid">
+              {bases.map((base) =>
+                confirming === base.id ? (
+                  <div key={base.id} className="skill-card is-confirming" role="alertdialog">
+                    <span className="name">Delete {base.id}?</span>
+                    <span className="desc">
+                      Removes <code>_knowledge/{base.id}/</code> and everything in it
+                      — {base.files} file{base.files === 1 ? "" : "s"}. Any node still
+                      selecting it will refuse to run, by name. It is in the
+                      workspace repo, so git is the undo.
+                    </span>
+                    <span className="row">
+                      <button
+                        type="button"
+                        className="danger"
+                        onClick={() => void remove(base.id)}
+                        disabled={deleting !== null}
+                      >
+                        {deleting === base.id ? "Deleting…" : "Delete"}
+                      </button>
+                      <button
+                        type="button"
+                        className="secondary"
+                        onClick={() => setConfirming(null)}
+                        disabled={deleting !== null}
+                      >
+                        Cancel
+                      </button>
+                    </span>
+                  </div>
+                ) : (
+                  /* The card is a button now, so the delete has to be its sibling
+                     rather than its child — a button inside a button is not a
+                     thing the DOM has, which is the whole reason `.skill-slot`
+                     exists next door. `.card-delete` is absolute inside it, so
+                     nothing moves. */
+                  <div key={base.id} className="skill-slot">
+                    <button
+                      type="button"
+                      className={`skill-card knowledge-card${base.system ? " is-system" : ""}`}
+                      title={`Open ${base.id}`}
+                      onClick={() => setOpening(base.id)}
+                    >
+                      <span className="name">
+                        {base.title}
+                        {base.system && (
+                          <span
+                            className="skill-badge"
+                            title="Shipped with the product. Edit its files freely; it cannot be removed."
+                          >
+                            system
+                          </span>
+                        )}
+                      </span>
+                      <span className="desc">{base.about}</span>
+                      <span className="meta">
+                        <span className={`type-tag type-${base.type}`}>{base.type}</span>
+                        {" · "}
+                        {base.files} file{base.files === 1 ? "" : "s"} ·{" "}
+                        {Math.max(1, Math.round(base.bytes / 1024))} kB
+                        {!base.writable && " · read-only to machines"}
+                      </span>
+                    </button>
+                    {/* **No delete control at all on a system base**, rather than
+                        one that is offered and refused — `ProjectList`'s rule for
+                        an unoverridden system skill, and here it is stronger: the
+                        seed would put the directory straight back, so the button
+                        would be offering something that cannot happen. */}
+                    {!base.system && (
+                      <button
+                        type="button"
+                        className="card-delete"
+                        aria-label={`Delete ${base.id}`}
+                        title="Delete knowledge base"
+                        onClick={() => setConfirming(base.id)}
+                      >
+                        ×
+                      </button>
+                    )}
+                  </div>
+                ),
+              )}
+            </div>
+          </>
+        )}
+      </div>
 
       {opening && (
         <KnowledgeEditor

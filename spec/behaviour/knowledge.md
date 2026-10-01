@@ -206,7 +206,7 @@ Past them a write is refused with `too_large` rather than truncated — truncati
 is a reasonable answer for a cache and a dishonest one for a source of truth.
 
 **Managing them** is the skills library's screen and the skills library's API:
-a section on the projects list (beside `frontend/src/screens/ProjectList.tsx`'s
+a column on the projects list (beside `frontend/src/screens/ProjectList.tsx`'s
 `skills-section`), served by a fifth router `/api/knowledge` modelled on
 `backend/factoria/skills_api.py` — `POST` to create or import, `DELETE` to
 remove, and nothing fetches a URL.

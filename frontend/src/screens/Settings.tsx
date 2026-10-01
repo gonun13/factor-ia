@@ -24,18 +24,56 @@
  *
  * Polled, not streamed: SSE arrives in stage 5, and a login has four state
  * changes over a minute of human time.
+ *
+ * Each provider is verified on its own request (`/api/agent/{provider}/status`),
+ * and nothing on the page waits for another section's answer: a CLI that hangs
+ * until its timeout leaves only its own card at *checking…*, and a sign-in
+ * finishing re-checks that provider alone.
  */
 
 import { useCallback, useEffect, useRef, useState, type ReactElement } from "react";
 import { api } from "../api";
-import type { AccountStatus, AgentStatus, LoginState, SshKeyStatus } from "../types";
+import { BrandMark } from "../nodes/Glyphs";
+import type { AccountStatus, LoginState, ProviderStatus, SshKeyStatus } from "../types";
 
 const POLL_MS = 1000;
+
+type Provider = "claude" | "cursor";
+
+/** One provider's verification, fetched on its own and never awaited by
+ * anything else on the page. */
+function useProviderStatus(provider: Provider) {
+  const [status, setStatus] = useState<ProviderStatus | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const live = useRef(true);
+
+  const refresh = useCallback(async () => {
+    try {
+      const next = await api.providerStatus(provider);
+      if (!live.current) return;
+      setStatus(next);
+      setError(null);
+    } catch (cause) {
+      if (live.current) setError(cause instanceof Error ? cause.message : String(cause));
+    }
+  }, [provider]);
+
+  useEffect(() => {
+    live.current = true;
+    void refresh();
+    return () => {
+      live.current = false;
+    };
+  }, [refresh]);
+
+  return { status, error, refresh };
+}
 
 function ProviderAccount({
   title,
   cliLabel,
   account,
+  checkError,
   defaultModel,
   defaultModelDetail,
   login,
@@ -51,6 +89,9 @@ function ProviderAccount({
   title: string;
   cliLabel: string;
   account: AccountStatus | undefined;
+  /** Set when the check itself could not be asked; the card says so instead of
+   * staying at *checking…* forever. */
+  checkError: string | null;
   defaultModel: string | null | undefined;
   defaultModelDetail: string | null | undefined;
   login: LoginState | null;
@@ -70,7 +111,9 @@ function ProviderAccount({
         <span className="eyebrow">{title}</span>
         <span className={signedIn ? "ok" : "bad"}>
           {account === undefined
-            ? "checking…"
+            ? checkError
+              ? "check failed"
+              : "checking…"
             : !account.reachable
               ? "CLI unavailable"
               : signedIn
@@ -82,7 +125,7 @@ function ProviderAccount({
         <dt>{cliLabel}</dt>
         <dd className="mono">{account?.version ?? "—"}</dd>
         <dt>account</dt>
-        <dd>{account?.detail || "—"}</dd>
+        <dd>{account?.detail || checkError || "—"}</dd>
         <dt>default model</dt>
         <dd className="mono">{defaultModel ?? defaultModelDetail ?? "—"}</dd>
       </dl>
@@ -176,7 +219,8 @@ function ProviderAccount({
 }
 
 export function Settings({ onBack }: { onBack: () => void }) {
-  const [status, setStatus] = useState<AgentStatus | null>(null);
+  const claude = useProviderStatus("claude");
+  const cursor = useProviderStatus("cursor");
   const [login, setLogin] = useState<LoginState | null>(null);
   const [cursorLogin, setCursorLogin] = useState<LoginState | null>(null);
   const [key, setKey] = useState<SshKeyStatus | null>(null);
@@ -189,27 +233,16 @@ export function Settings({ onBack }: { onBack: () => void }) {
   const [cursorUrlCopied, setCursorUrlCopied] = useState(false);
   const live = useRef(true);
 
-  const refreshStatus = useCallback(async () => {
-    const next = await api.agentStatus();
-    if (live.current) setStatus(next);
-  }, []);
+  const refreshClaude = claude.refresh;
+  const refreshCursor = cursor.refresh;
 
+  // Each read lands on its own; a slow one holds nothing else back.
   useEffect(() => {
     live.current = true;
-    Promise.all([
-      api.agentStatus(),
-      api.loginState(),
-      api.cursorLoginState(),
-      api.sshKey(),
-    ])
-      .then(([account, flow, cursorFlow, sshKey]) => {
-        if (!live.current) return;
-        setStatus(account);
-        setLogin(flow);
-        setCursorLogin(cursorFlow);
-        setKey(sshKey);
-      })
-      .catch((cause: unknown) => live.current && setError(String(cause)));
+    const fail = (cause: unknown) => live.current && setError(String(cause));
+    api.loginState().then((flow) => live.current && setLogin(flow), fail);
+    api.cursorLoginState().then((flow) => live.current && setCursorLogin(flow), fail);
+    api.sshKey().then((sshKey) => live.current && setKey(sshKey), fail);
     return () => {
       live.current = false;
     };
@@ -222,13 +255,13 @@ export function Settings({ onBack }: { onBack: () => void }) {
         const next = await api.loginState();
         if (!live.current) return;
         setLogin(next);
-        if (!next.active) void refreshStatus();
+        if (!next.active) void refreshClaude();
       } catch {
         /* retried next tick */
       }
     }, POLL_MS);
     return () => window.clearInterval(timer);
-  }, [login?.active, refreshStatus]);
+  }, [login?.active, refreshClaude]);
 
   useEffect(() => {
     if (!cursorLogin?.active) return;
@@ -237,13 +270,13 @@ export function Settings({ onBack }: { onBack: () => void }) {
         const next = await api.cursorLoginState();
         if (!live.current) return;
         setCursorLogin(next);
-        if (!next.active) void refreshStatus();
+        if (!next.active) void refreshCursor();
       } catch {
         /* retried next tick */
       }
     }, POLL_MS);
     return () => window.clearInterval(timer);
-  }, [cursorLogin?.active, refreshStatus]);
+  }, [cursorLogin?.active, refreshCursor]);
 
   async function guard(action: () => Promise<void>) {
     setBusy(true);
@@ -257,17 +290,19 @@ export function Settings({ onBack }: { onBack: () => void }) {
     }
   }
 
-  const account = status?.account;
-  const handshake = status?.handshake;
-  const cursorAccount = status?.cursor_account;
-  const cursorOffer = status?.providers?.cursor;
+  const account = claude.status?.account;
+  const handshake = claude.status?.handshake;
+  const cursorAccount = cursor.status?.account;
+  const cursorHandshake = cursor.status?.handshake;
 
   return (
     <div className="app">
       <header className="topbar">
         <span className="brand">
-          <span className="dot" />
-          Factor-ia
+          <a className="brand-home" href="#/" title="Back to the main page">
+            <BrandMark />
+            Factor-ia
+          </a>
           <small>· settings</small>
         </span>
         <span className="spacer" />
@@ -290,6 +325,7 @@ export function Settings({ onBack }: { onBack: () => void }) {
             title="Claude account"
             cliLabel="claude CLI"
             account={account}
+            checkError={claude.error}
             defaultModel={handshake?.default_model}
             defaultModelDetail={handshake?.detail}
             login={login}
@@ -313,7 +349,7 @@ export function Settings({ onBack }: { onBack: () => void }) {
             onCancel={async () => {
               await guard(async () => {
                 setLogin(await api.cancelLogin());
-                await refreshStatus();
+                await refreshClaude();
               });
             }}
           />
@@ -322,11 +358,12 @@ export function Settings({ onBack }: { onBack: () => void }) {
             title="Cursor account"
             cliLabel="cursor agent CLI"
             account={cursorAccount}
-            defaultModel={cursorOffer?.default_model}
+            checkError={cursor.error}
+            defaultModel={cursorHandshake?.default_model}
             defaultModelDetail={
               cursorAccount && !cursorAccount.reachable
                 ? cursorAccount.detail
-                : cursorOffer?.default_model_label
+                : cursorHandshake?.default_model_label
             }
             login={cursorLogin}
             code={cursorCode}
@@ -349,7 +386,7 @@ export function Settings({ onBack }: { onBack: () => void }) {
             onCancel={async () => {
               await guard(async () => {
                 setCursorLogin(await api.cancelCursorLogin());
-                await refreshStatus();
+                await refreshCursor();
               });
             }}
           />

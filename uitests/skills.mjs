@@ -112,12 +112,12 @@ try {
   }), true);
 
   await page.getByRole("button", { name: "Import a skill" }).click();
-  await page.getByRole("button", { name: "Paste markdown instead" }).click();
+  await page.getByRole("button", { name: "Paste Markdown" }).click();
   await page.locator('textarea[aria-label="Skill markdown"]').fill(SKILL_MD);
   await page.getByRole("button", { name: "Import", exact: true }).click();
   await page.waitForSelector(`.skill-card .name:text-is("${SKILL}")`);
-  check("the imported skill shows its description, not just its name",
-    (await page.locator(".skill-card", { hasText: SKILL }).locator(".desc").innerText()).startsWith("Reads a repository"), true);
+  check("the imported skill's card is its name alone, no description",
+    await page.locator(".skill-card", { hasText: SKILL }).locator(".desc").count(), 0);
 
   check("an import says so, and says nothing was read as written for a chat",
     (await page.locator(".skill-imported-head").innerText()).includes("nothing in it reads as written for a chat"), true);
@@ -128,7 +128,7 @@ try {
   // Imported, never refused, and the lines that will not hold are named on the
   // way in — beside the file the operator just chose.
   await page.getByRole("button", { name: "Import a skill" }).click();
-  await page.getByRole("button", { name: "Paste markdown instead" }).click();
+  await page.getByRole("button", { name: "Paste Markdown" }).click();
   await page.locator('textarea[aria-label="Skill markdown"]').fill(CHATTY_MD);
   await page.getByRole("button", { name: "Import", exact: true }).click();
   await page.waitForSelector(`.skill-card .name:text-is("${CHATTY}")`);
@@ -147,16 +147,19 @@ try {
   await page.locator(".skill-editor .node-log-close").click();
 
   // What makes such a line survivable, in the words the agent actually gets.
-  await page.getByRole("button", { name: "What a machine promises a skill" }).click();
+  const contractButton = page.getByRole("button", { name: "Machine Contract" });
+  await contractButton.click();
   await page.waitForSelector(".machine-contract-text");
   check("the library can show what every worn skill is told",
     (await page.locator(".machine-contract-text").innerText()).includes("There is nobody to ask"), true);
-  await page.getByRole("button", { name: "Hide what a machine promises a skill" }).click();
+  check("the button says it is open", await contractButton.getAttribute("aria-expanded"), "true");
+  await contractButton.click();
+  check("a second press puts it away", await page.locator(".machine-contract-text").count(), 0);
 
   // A second import of the same document is a conflict, and the only place
   // Replace is reachable from.
   await page.getByRole("button", { name: "Import a skill" }).click();
-  await page.getByRole("button", { name: "Paste markdown instead" }).click();
+  await page.getByRole("button", { name: "Paste Markdown" }).click();
   await page.locator('textarea[aria-label="Skill markdown"]').fill(SKILL_MD);
   await page.getByRole("button", { name: "Import", exact: true }).click();
   await page.waitForSelector(".skill-import .error");
@@ -183,8 +186,8 @@ try {
   // System first, then everything by name — so the shipped four are a block
   // at the top and an import has a stable place to start.
   // The knowledge library reuses `.skill-grid` and `.skill-card`, so its cards
-  // are excluded by their own class. The badge sits inside `.name`, so the name
-  // is its first text node, not the element's whole text.
+  // are excluded by their own class. The badge sits on its own line, outside
+  // `.name`, so the name is the element's only text node.
   const order = await page
     .locator(".skill-grid .skill-card:not(.knowledge-card) .name")
     .evaluateAll((els) => els.map((el) => el.firstChild.textContent.trim()));

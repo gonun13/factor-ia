@@ -19,6 +19,7 @@ import type {
   LibraryFactorySummary,
   LoginState,
   Project,
+  ProviderStatus,
   NodeEventPage,
   Run,
   Skill,
@@ -216,6 +217,9 @@ export const api = {
      stage 5's, and a login has a handful of state changes over a minute of
      human time. */
   agentStatus: () => request<AgentStatus>("/api/agent/status"),
+  /** One provider's account and model listing, without waiting on the other. */
+  providerStatus: (provider: "claude" | "cursor") =>
+    request<ProviderStatus>(`/api/agent/${provider}/status`),
   loginState: () => request<LoginState>("/api/agent/login"),
   /** Starts a sign-in, or joins the one already running (single-flight). */
   beginLogin: () => request<LoginState>("/api/agent/login", { method: "POST" }),
