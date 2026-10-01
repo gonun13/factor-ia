@@ -13,7 +13,8 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from factoria import config, orchestrator, store
+from factoria.infrastructure import config, store
+from factoria.services import orchestrator
 from factoria.main import app
 
 

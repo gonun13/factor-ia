@@ -117,7 +117,7 @@ updated: 2026-09-16T10:18:44Z
 ## Research · lap 1
 
 ### Layout
-`backend/factoria/orchestrator.py:899` — the node dispatch…
+`backend/factoria/services/orchestrator.py:899` — the node dispatch…
 ```
 
 `sections`, `bytes` and `truncated` are there so a reader can decide whether to
@@ -229,7 +229,7 @@ everything else it made ([`factories.md`](factories.md)).
 
 | | |
 |---|---|
-| The document, the contract, the pointer | `backend/factoria/memory.py` |
+| The document, the contract, the pointer | `backend/factoria/services/memory.py` |
 | Belts vs wires — the split everything reads | `models.split_edges`, `ATTACHED_TYPES` |
 | Filing an answer | `orchestrator._file_memories`, called from `_run_agent` |
 | The contract, the pointer, the granted directory | `orchestrator._run_agent`, via `_memory_neighbours` |

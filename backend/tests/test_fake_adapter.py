@@ -13,10 +13,10 @@ import time
 
 import pytest
 
-from factoria.agent import FakeAdapter, RunConfig
-from factoria.agent.adapter import AgentAdapter, AgentRun
-from factoria.agent.claude import ClaudeAdapter
-from factoria.agent.events import EVENT_TYPES
+from factoria.infrastructure.agent import FakeAdapter, RunConfig
+from factoria.domain.agent.adapter import AgentAdapter, AgentRun
+from factoria.infrastructure.agent.claude import ClaudeAdapter
+from factoria.domain.agent.events import EVENT_TYPES
 
 
 def drain(run) -> list:

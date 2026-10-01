@@ -10,15 +10,16 @@ from typing import AsyncIterator
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 
-from . import __version__, config, skills
-from .api import router as api_router
-from .knowledge import store as knowledge_store
-from .knowledge_api import router as knowledge_router
-from .orchestrator import get_orchestrator
-from .runs_api import router as runs_router
-from .security import RequestGateMiddleware
-from .settings_api import router as settings_router
-from .skills_api import router as skills_router
+from . import __version__
+from .infrastructure import config, skills
+from .infrastructure.http.api import router as api_router
+from .infrastructure.knowledge import store as knowledge_store
+from .infrastructure.http.knowledge_api import router as knowledge_router
+from .services.orchestrator import get_orchestrator
+from .infrastructure.http.runs_api import router as runs_router
+from .infrastructure.http.security import RequestGateMiddleware
+from .infrastructure.http.settings_api import router as settings_router
+from .infrastructure.http.skills_api import router as skills_router
 
 log = logging.getLogger("factoria")
 

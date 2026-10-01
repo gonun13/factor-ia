@@ -19,8 +19,9 @@ from pathlib import Path
 
 import pytest
 
-from factoria import gitwork, runcheck, worktree
-from factoria.models import (
+from factoria.infrastructure import gitwork, worktree
+from factoria.services import runcheck
+from factoria.domain.models import (
     Codebase,
     Edge,
     Factory,
@@ -29,9 +30,9 @@ from factoria.models import (
     Project,
     RunDecision,
 )
-from factoria.orchestrator import Orchestrator, prd_title
-from factoria.runlog import run_dir
-from factoria.store import Store
+from factoria.services.orchestrator import Orchestrator, prd_title
+from factoria.infrastructure.runlog import run_dir
+from factoria.infrastructure.store import Store
 
 from .conftest import git, make_git_repo
 
@@ -205,7 +206,7 @@ def test_submitting_to_a_node_that_is_not_waiting_is_a_conflict(
 
     async def scenario():
         run = await orch.start("demo", "main")
-        from factoria.orchestrator import RunConflict
+        from factoria.services.orchestrator import RunConflict
 
         with pytest.raises(RunConflict):
             await orch.submit_input(run.id, "hello", node_id="n-agent")
@@ -633,7 +634,7 @@ def test_a_kind_this_version_does_not_know_is_refused_by_name(repo: Path) -> Non
 def test_an_agent_with_no_kind_on_disk_is_a_worker():
     """What an agent has always done is work, so that is what a file written
     before kinds existed must keep meaning."""
-    from factoria.models import node_kind
+    from factoria.domain.models import node_kind
 
     assert node_kind(NodeDefinition(type="agent")) == "worker"
     assert node_kind(NodeDefinition(type="agent", config={"kind": "reviewer"})) == "reviewer"
@@ -642,7 +643,7 @@ def test_an_agent_with_no_kind_on_disk_is_a_worker():
 def test_only_a_reviewer_and_a_human_node_have_two_ways_out():
     """The question is about the node, not its type: a worker and a reviewer are
     both agents and answer it differently."""
-    from factoria.models import has_outcome_ports
+    from factoria.domain.models import has_outcome_ports
 
     assert has_outcome_ports(NodeDefinition(type="agent", config={"kind": "reviewer"}))
     assert has_outcome_ports(NodeDefinition(type="human"))

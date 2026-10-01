@@ -17,12 +17,12 @@ from pathlib import Path
 
 import pytest
 
-from factoria import runcheck
-from factoria.models import Edge, Factory, Node, NodeDefinition, Project
-from factoria.orchestrator import Orchestrator
-from factoria.store import Store
+from factoria.services import runcheck
+from factoria.domain.models import Edge, Factory, Node, NodeDefinition, Project
+from factoria.services.orchestrator import Orchestrator
+from factoria.infrastructure.store import Store
 
-from factoria.runlog import RunLog
+from factoria.infrastructure.runlog import RunLog
 
 from .conftest import make_git_repo
 
@@ -230,7 +230,7 @@ def test_a_join_waits_for_the_branch_that_will_never_arrive_to_be_ruled_out(
     assert run.status == "succeeded", run.detail
     assert statuses(run)["n-out"] == "succeeded"
 
-    from factoria.runlog import RunLog
+    from factoria.infrastructure.runlog import RunLog
 
     started = [
         event

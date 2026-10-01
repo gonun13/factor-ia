@@ -8,11 +8,11 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from factoria import config
-from factoria.agent import cursor_login
-from factoria.agent.cursor import CursorAdapter
-from factoria.models import Node, NodeDefinition, ProjectSettings
-from factoria.orchestrator import adapter_for, adapter_name_for
+from factoria.infrastructure import config
+from factoria.infrastructure.agent import cursor_login
+from factoria.infrastructure.agent.cursor import CursorAdapter
+from factoria.domain.models import Node, NodeDefinition, ProjectSettings
+from factoria.services.orchestrator import adapter_for, adapter_name_for
 
 STUB = Path(__file__).parent / "stub_cursor_cli.py"
 CLAUDE_STUB = Path(__file__).parent / "stub_auth_cli.py"

@@ -17,13 +17,14 @@ from pathlib import Path
 
 import pytest
 
-from factoria import memory, skills, worktree
-from factoria.agent.adapter import RunConfig
-from factoria.agent.fake import FakeAdapter, FakeRun
-from factoria.models import Edge, Factory, Node, NodeDefinition
-from factoria.orchestrator import Orchestrator
-from factoria.runlog import RunLog
-from factoria.store import Store
+from factoria.services import memory
+from factoria.infrastructure import skills, worktree
+from factoria.domain.agent.adapter import RunConfig
+from factoria.infrastructure.agent.fake import FakeAdapter, FakeRun
+from factoria.domain.models import Edge, Factory, Node, NodeDefinition
+from factoria.services.orchestrator import Orchestrator
+from factoria.infrastructure.runlog import RunLog
+from factoria.infrastructure.store import Store
 
 from .test_routing import agent, belt, drive, node, project, repo, orch, save, statuses  # noqa: F401
 
@@ -283,7 +284,7 @@ def test_a_memory_nobody_opened_is_offered_and_not_read(
 
 def _follows_its_pointer(monkeypatch, *, times: int) -> None:
     """Make every fake run open the first directory it was granted."""
-    from factoria.agent import events as ev
+    from factoria.domain.agent import events as ev
 
     real = FakeRun.__aiter__
 
@@ -589,7 +590,7 @@ def test_a_failed_run_keeps_its_memory_and_the_summary_says_where(
     assert run.memory[0].kept is True
     assert memory_file(run).exists()
 
-    from factoria import summary
+    from factoria.infrastructure import summary
 
     rendered = summary.render(run)
     assert "## What it remembered" in rendered

@@ -26,18 +26,18 @@ from types import SimpleNamespace
 
 import pytest
 
-from factoria import worktree
-from factoria.agent.adapter import RunConfig
-from factoria.agent.claude import DENIED_TOOLS, build_argv
-from factoria.agent.fake import FakeAdapter
-from factoria import skills
-from factoria.knowledge import filing as knowledge_filing
-from factoria.knowledge import mcp as knowledge_mcp
-from factoria.models import Codebase, Edge, Factory, Node, NodeDefinition
-from factoria import runcheck
-from factoria.orchestrator import Orchestrator
-from factoria.runlog import RunLog
-from factoria.store import Store
+from factoria.infrastructure import worktree
+from factoria.domain.agent.adapter import RunConfig
+from factoria.infrastructure.agent.claude import DENIED_TOOLS, build_argv
+from factoria.infrastructure.agent.fake import FakeAdapter
+from factoria.infrastructure import skills
+from factoria.domain.knowledge import filing as knowledge_filing
+from factoria.infrastructure.knowledge import mcp as knowledge_mcp
+from factoria.domain.models import Codebase, Edge, Factory, Node, NodeDefinition
+from factoria.services import runcheck
+from factoria.services.orchestrator import Orchestrator
+from factoria.infrastructure.runlog import RunLog
+from factoria.infrastructure.store import Store
 
 from .test_routing import agent, belt, drive, node, project, repo, orch, save, statuses  # noqa: F401
 
@@ -505,8 +505,8 @@ def test_a_filing_that_fails_fails_the_node(
     """**The inverse of memory, now on the path that actually writes.** A
     machine that reports success while the base recorded nothing hands the next
     project a gap that reads as "no decision was made"."""
-    from factoria.knowledge.markdown import MarkdownAdapter
-    from factoria.knowledge.store import KnowledgeTooLarge
+    from factoria.infrastructure.knowledge.markdown import MarkdownAdapter
+    from factoria.infrastructure.knowledge.store import KnowledgeTooLarge
 
     def boom(self, root, path, content):
         raise KnowledgeTooLarge("this entry would put the base past its budget")

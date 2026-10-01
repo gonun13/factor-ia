@@ -23,9 +23,9 @@ from pathlib import Path
 
 import pytest
 
-from factoria.agent import ask_mcp
-from factoria.agent.adapter import RunConfig
-from factoria.agent.cursor import CursorRun
+from factoria.infrastructure.agent import ask_mcp
+from factoria.domain.agent.adapter import RunConfig
+from factoria.infrastructure.agent.cursor import CursorRun
 
 
 @pytest.fixture
@@ -202,7 +202,7 @@ def test_a_socket_that_is_not_there_is_reported_not_raised_at_the_protocol(tmp_p
 def test_the_tool_advertises_the_same_questionnaire_shape_claude_uses() -> None:
     """One question shape for both providers, which is why
     `questions.parse_questions` reads both without a branch."""
-    from factoria.questions import parse_questions
+    from factoria.domain.questions import parse_questions
 
     schema = ask_mcp.TOOL_SCHEMA["inputSchema"]["properties"]["questions"]
     item = schema["items"]["properties"]
@@ -244,8 +244,8 @@ def test_a_scope_spawn_mounts_the_ask_server_and_approves_it(sockdir, monkeypatc
     """
     import json
 
-    from factoria.agent import cursor_config
-    from factoria.agent.cursor import build_argv
+    from factoria.infrastructure.agent import cursor_config
+    from factoria.infrastructure.agent.cursor import build_argv
 
     run = make_run()
     assert run._config.mcp_servers == {}
@@ -255,7 +255,7 @@ def test_a_scope_spawn_mounts_the_ask_server_and_approves_it(sockdir, monkeypatc
         servers = {
             ask_mcp.SERVER_NAME: {
                 "command": "python3",
-                "args": ["-m", "factoria.agent.ask_mcp"],
+                "args": ["-m", "factoria.infrastructure.agent.ask_mcp"],
                 "env": {ask_mcp.SOCKET_ENV: socket_path},
             }
         }

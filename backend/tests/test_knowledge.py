@@ -14,16 +14,18 @@ from pathlib import Path
 
 import pytest
 
-from factoria.knowledge import filing, index, store as knowledge
-from factoria.knowledge.markdown import MarkdownAdapter
-from factoria.knowledge.store import (
+from factoria.domain.knowledge import filing
+from factoria.services.knowledge import index
+from factoria.infrastructure.knowledge import store as knowledge
+from factoria.infrastructure.knowledge.markdown import MarkdownAdapter
+from factoria.infrastructure.knowledge.store import (
     KnowledgeConflict,
     KnowledgeInvalid,
     KnowledgeNotFound,
     KnowledgeStale,
     KnowledgeTooLarge,
 )
-from factoria.paths import PathEscape
+from factoria.infrastructure.paths import PathEscape
 
 MANIFEST = """---
 id: engineering-principles
@@ -385,7 +387,7 @@ def test_a_file_over_budget_is_refused_not_truncated(base: Path) -> None:
 
 def test_a_base_over_budget_is_refused(base: Path, monkeypatch) -> None:
     monkeypatch.setattr(knowledge, "BASE_MAX_BYTES", 200)
-    import factoria.knowledge.markdown as md
+    import factoria.infrastructure.knowledge.markdown as md
 
     monkeypatch.setattr(md, "BASE_MAX_BYTES", 200)
     with pytest.raises(KnowledgeTooLarge, match="past its"):

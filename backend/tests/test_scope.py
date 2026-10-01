@@ -19,11 +19,11 @@ from pathlib import Path
 
 import pytest
 
-from factoria import skills
-from factoria.agent.adapter import RunConfig
-from factoria.agent.claude import build_argv
-from factoria.agent.fake import FakeAdapter
-from factoria.models import (
+from factoria.infrastructure import skills
+from factoria.domain.agent.adapter import RunConfig
+from factoria.infrastructure.agent.claude import build_argv
+from factoria.infrastructure.agent.fake import FakeAdapter
+from factoria.domain.models import (
     Edge,
     Factory,
     Node,
@@ -31,11 +31,11 @@ from factoria.models import (
     Project,
     RunAnswer,
 )
-from factoria.orchestrator import Orchestrator, RunConflict
-from factoria.questions import parse_questions
-from factoria.runcheck import run_problems
-from factoria.runlog import RunLog
-from factoria.store import Store
+from factoria.services.orchestrator import Orchestrator, RunConflict
+from factoria.domain.questions import parse_questions
+from factoria.services.runcheck import run_problems
+from factoria.infrastructure.runlog import RunLog
+from factoria.infrastructure.store import Store
 
 from .conftest import make_git_repo
 
@@ -421,8 +421,8 @@ def test_a_tool_that_is_not_a_question_is_denied_with_a_reason(
 ) -> None:
     """A denial with no reason is a session that retries the same call until it
     runs out of turns."""
-    from factoria.agent import events as ev
-    from factoria.orchestrator import ScopeQuestion  # noqa: F401  (documents the pair)
+    from factoria.domain.agent import events as ev
+    from factoria.services.orchestrator import ScopeQuestion  # noqa: F401  (documents the pair)
 
     save(test_store, *line())
 

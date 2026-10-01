@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from factoria import gitwork
+from factoria.infrastructure import gitwork
 
 from .conftest import git, make_git_repo
 

@@ -25,7 +25,7 @@ from pathlib import Path
 
 import pytest
 
-from factoria.agent import cli, login
+from factoria.infrastructure.agent import cli, login
 
 STUB = Path(__file__).parent / "stub_auth_cli.py"
 FIXTURES = Path(__file__).parent / "fixtures"

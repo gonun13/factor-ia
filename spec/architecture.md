@@ -25,37 +25,42 @@ browser  ──HTTP/SSE──▶  FastAPI  ──subprocess──▶  provider C
 ## Layout
 
 ```
-backend/     FastAPI app, uv-managed  (factoria.main:app)
-             models.py  data model · paths.py  containment check
-             discovery.py  codebase scan · store.py  atomic JSON store
-             api.py  REST · security.py  Host and Origin gate · tests/
-             orchestrator.py  the walk, the state machine, cancel, the sweep
-             expand.py  factory nodes opened into one flat graph; a factory's
-                        own rules; the simulation harness
-             gitwork.py  every git command, behind an allowlist
-             worktree.py  one worktree per run, and its cleanup policy
-             housekeeping.py  that policy applied later, as a preview
-             memory.py  run memory: the document, the contract, the pointer
-             summary.py  /data/runs/<id>/summary.md
-             runcheck.py  graph validation and run preconditions
-             runevents.py  the event envelope
-             runlog.py  /data/runs, events.jsonl, the bus · runs_api.py  SSE
-             scrub.py  token-shaped-string scrubbing · sshkeys.py  the git key
-             settings_api.py  account, sign-in, ssh key
-             skills.py  the workspace's standing instructions, as files
-             skills_api.py  import, list, delete/revert
-             machine.py  what a machine promises a skill, and the lint that reads one
+backend/     FastAPI app, uv-managed  (factoria.main:app) · tests/
+           factoria/  layer-first; domain/ imports nothing outside itself
+             main.py  the app: routers, lifespan, the built frontend
              system_skills/  the ones a node type is hardwired to, shipped
              system_knowledge/  the base the product ships, seeded into _knowledge/
-             agent/    the provider CLI subprocess layer
-               adapter.py  the AgentAdapter seam, and the permission-mode gate
-               events.py  the event union
-               claude.py / cursor.py  real adapters · fake.py  the token-free one
-               cursor_config.py  a Cursor spawn's own HOME: mcp.json, cli.json
-               ask_mcp.py  the MCP server a Cursor scope node asks through
-               normalize.py / cursor_normalize.py  stream-json -> events
-               proc.py  spawn/killpg
-               cli.py  version, auth status, initialize · login.py  sign-in
+             domain/  entities, contracts, rules — no I/O, no framework
+               models.py  data model · runevents.py  the event envelope
+               graph.py  the line's topology: loops, what follows, the order
+               machine.py  what a machine promises a skill, and the lint that reads one
+               agent/adapter.py  the AgentAdapter seam, and the permission-mode gate
+               agent/events.py  the event union
+             services/  the run, and the rules it applies across entities
+               orchestrator.py  the walk, the state machine, cancel, the sweep
+               expand.py  factory nodes opened into one flat graph; a factory's
+                          own rules; the simulation harness
+               runcheck.py  graph validation and run preconditions
+               memory.py  run memory: the document, the contract, the pointer
+               housekeeping.py  the cleanup policy applied later, as a preview
+             infrastructure/  everything that touches the world outside
+               paths.py  containment check · discovery.py  codebase scan
+               store.py  atomic JSON store · summary.py  /data/runs/<id>/summary.md
+               runlog.py  /data/runs, events.jsonl, the bus
+               gitwork.py  every git command, behind an allowlist
+               worktree.py  one worktree per run, and its cleanup policy
+               scrub.py  token-shaped-string scrubbing · sshkeys.py  the git key
+               skills.py  the workspace's standing instructions, as files
+               http/  api.py  REST · runs_api.py  SSE · security.py  Host and
+                      Origin gate · settings_api.py  account, sign-in, ssh key ·
+                      skills_api.py  import, list, delete/revert
+               agent/  the provider CLI subprocess layer
+                 claude.py / cursor.py  real adapters · fake.py  the token-free one
+                 cursor_config.py  a Cursor spawn's own HOME: mcp.json, cli.json
+                 ask_mcp.py  the MCP server a Cursor scope node asks through
+                 normalize.py / cursor_normalize.py  stream-json -> events
+                 proc.py  spawn/killpg
+                 cli.py  version, auth status, initialize · login.py  sign-in
 frontend/    Vite + React + TypeScript + React Flow v12, built at image build time
              screens/  project list · GraphEditor (the one canvas) wrapped as
                        ProjectCanvas and FactoryEditor · RunBox · SimulateBox

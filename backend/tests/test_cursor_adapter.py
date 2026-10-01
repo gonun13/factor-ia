@@ -9,8 +9,8 @@ from pathlib import Path
 
 import pytest
 
-from factoria.agent.adapter import RunConfig
-from factoria.agent.cursor import CursorAdapter, build_argv, compose_prompt
+from factoria.domain.agent.adapter import RunConfig
+from factoria.infrastructure.agent.cursor import CursorAdapter, build_argv, compose_prompt
 
 STUB = Path(__file__).parent / "stub_cursor_cli.py"
 
@@ -121,7 +121,7 @@ def test_plan_mode_is_read_only_and_never_forced() -> None:
 
 
 def test_a_dangerous_mode_is_refused_without_the_opt_in() -> None:
-    from factoria.agent.adapter import PermissionDenied
+    from factoria.domain.agent.adapter import PermissionDenied
 
     with pytest.raises(PermissionDenied):
         build_argv(
@@ -153,7 +153,7 @@ def test_mcp_servers_are_approved_up_front() -> None:
 def test_the_spawn_home_carries_the_policy_and_the_servers(tmp_path: Path) -> None:
     import json
 
-    from factoria.agent import cursor_config
+    from factoria.infrastructure.agent import cursor_config
 
     home = cursor_config.write_home(
         tmp_path / "home",
@@ -175,7 +175,7 @@ def test_the_spawn_home_carries_the_policy_and_the_servers(tmp_path: Path) -> No
 
 
 def test_a_spawn_with_no_servers_writes_no_mcp_config(tmp_path: Path) -> None:
-    from factoria.agent import cursor_config
+    from factoria.infrastructure.agent import cursor_config
 
     home = cursor_config.write_home(tmp_path / "home")
     assert (home / ".cursor" / "cli.json").exists()
@@ -184,8 +184,8 @@ def test_a_spawn_with_no_servers_writes_no_mcp_config(tmp_path: Path) -> None:
 
 
 def test_the_spawn_env_splits_home_from_the_credential(tmp_path: Path) -> None:
-    from factoria import config as cfg
-    from factoria.agent import cursor_config
+    from factoria.infrastructure import config as cfg
+    from factoria.infrastructure.agent import cursor_config
 
     env = cursor_config.spawn_env(tmp_path / "home")
     assert env["HOME"] == str(tmp_path / "home")
@@ -207,7 +207,7 @@ def test_mcp_servers_can_import_this_package(tmp_path: Path) -> None:
     """
     import json
 
-    from factoria.agent import cursor_config
+    from factoria.infrastructure.agent import cursor_config
 
     home = cursor_config.write_home(
         tmp_path / "home",
@@ -220,7 +220,7 @@ def test_mcp_servers_can_import_this_package(tmp_path: Path) -> None:
 
 
 def test_an_explicit_pythonpath_on_a_server_is_kept() -> None:
-    from factoria.agent import cursor_config
+    from factoria.infrastructure.agent import cursor_config
 
     out = cursor_config.with_package_path(
         {"other": {"command": "node", "env": {"PYTHONPATH": "/opt/theirs"}}}

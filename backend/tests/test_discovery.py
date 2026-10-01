@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from factoria.discovery import discover_codebases, find_codebase
+from factoria.infrastructure.discovery import discover_codebases, find_codebase
 
 from .conftest import make_git_repo
 

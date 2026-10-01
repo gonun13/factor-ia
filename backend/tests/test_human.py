@@ -15,11 +15,11 @@ from pathlib import Path
 
 import pytest
 
-from factoria import runcheck
-from factoria.models import Edge, Factory, Node, NodeDefinition, Project, RunDecision
-from factoria.orchestrator import Orchestrator, RunConflict
-from factoria.runlog import RunLog
-from factoria.store import Store
+from factoria.services import runcheck
+from factoria.domain.models import Edge, Factory, Node, NodeDefinition, Project, RunDecision
+from factoria.services.orchestrator import Orchestrator, RunConflict
+from factoria.infrastructure.runlog import RunLog
+from factoria.infrastructure.store import Store
 
 from .conftest import make_git_repo
 

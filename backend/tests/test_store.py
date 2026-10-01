@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from factoria.models import (
+from factoria.domain.models import (
     Edge,
     Factory,
     Node,
@@ -18,8 +18,8 @@ from factoria.models import (
     Project,
     ProjectSettings,
 )
-from factoria.paths import PathEscape
-from factoria.store import Conflict, Corrupt, NotFound, Store
+from factoria.infrastructure.paths import PathEscape
+from factoria.infrastructure.store import Conflict, Corrupt, NotFound, Store
 
 
 def three_node_graph(project_id: str = "demo") -> Factory:
@@ -289,7 +289,7 @@ def test_a_belt_drawn_before_ports_existed_still_loads_and_means_success(
     file already had (`source_handle`), so `schema_version` did not move and a
     factory written before any of it existed reads back unchanged — with its
     belts meaning exactly what they always meant."""
-    from factoria.models import edge_outcome
+    from factoria.domain.models import edge_outcome
 
     test_store.create_project(Project(id="demo", name="Demo"))
     path = test_store.factory_path("demo", "main")
@@ -321,7 +321,7 @@ def test_a_port_survives_a_save_and_is_readable_in_the_file(
 ) -> None:
     """The fail belt is a thing a reviewer reads in a pull request, so it has to
     be a word in the file and not a positional accident."""
-    from factoria.models import Edge, Node, NodeDefinition
+    from factoria.domain.models import Edge, Node, NodeDefinition
 
     test_store.create_project(Project(id="demo", name="Demo"))
     factory = test_store.get_factory("demo", "main")
@@ -341,8 +341,8 @@ def test_a_port_survives_a_save_and_is_readable_in_the_file(
 def test_a_lap_counter_round_trips_without_a_schema_bump(data_dir: Path) -> None:
     """A loop is a counter on a record, not a new file format — the same bargain
     `source_handle` took when ports arrived."""
-    from factoria.models import NodeRun, Run, SCHEMA_VERSION
-    from factoria.runlog import RunStore
+    from factoria.domain.models import NodeRun, Run, SCHEMA_VERSION
+    from factoria.infrastructure.runlog import RunStore
 
     run = Run(
         id="run-lap",

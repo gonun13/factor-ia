@@ -14,8 +14,8 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from factoria import expand, runcheck
-from factoria.models import (
+from factoria.services import expand, runcheck
+from factoria.domain.models import (
     CONNECTORS,
     Edge,
     Factory,
@@ -24,7 +24,7 @@ from factoria.models import (
     Project,
     connector_id,
 )
-from factoria.store import Conflict, Store
+from factoria.infrastructure.store import Conflict, Store
 
 from .conftest import make_git_repo
 from .test_routing import agent, belt, node, project, repo, save  # noqa: F401
@@ -509,7 +509,7 @@ def test_a_base_selected_by_the_project_and_a_factory_is_one_shelf(
 
 
 def _problems(test_store: Store, main: Factory) -> list[str]:
-    from factoria.discovery import discover_codebases
+    from factoria.infrastructure.discovery import discover_codebases
 
     _, problems = expand.project_problems(main, test_store.get_library_factory, discover_codebases())
     return problems

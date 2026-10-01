@@ -12,9 +12,9 @@ from pathlib import Path
 
 import pytest
 
-from factoria import skills
-from factoria.paths import PathEscape
-from factoria.skills import SkillConflict, SkillInvalid, SkillNotFound
+from factoria.infrastructure import skills
+from factoria.infrastructure.paths import PathEscape
+from factoria.infrastructure.skills import SkillConflict, SkillInvalid, SkillNotFound
 
 # The sibling `agent-skills` repo's shape, which the format is copied from.
 TEMPLATE = """---

@@ -16,11 +16,11 @@ from pathlib import Path
 
 import pytest
 
-from factoria.models import Edge, Node, NodeDefinition, Run
-from factoria.orchestrator import Orchestrator, RunBusy, RunConflict
-from factoria.runcheck import NotRunnable
-from factoria.runlog import RunLog, RunStore
-from factoria.store import Store
+from factoria.domain.models import Edge, Node, NodeDefinition, Run
+from factoria.services.orchestrator import Orchestrator, RunBusy, RunConflict
+from factoria.services.runcheck import NotRunnable
+from factoria.infrastructure.runlog import RunLog, RunStore
+from factoria.infrastructure.store import Store
 
 from .conftest import git, make_git_repo
 from .test_factories import (
@@ -296,7 +296,7 @@ def test_a_resume_is_refused_once_a_factory_node_no_longer_opens(
 
 def test_a_simulation_files_into_a_base_under_the_factorys_name() -> None:
     """With no project, a filing is made under the factory's id."""
-    from factoria.orchestrator import _filing_owner
+    from factoria.services.orchestrator import _filing_owner
 
     assert _filing_owner(Run(id="r", project_id="acme", factory_id="main")) == "acme"
     assert _filing_owner(Run(id="r", project_id=None, factory_id="review", kind="simulation")) == "review"

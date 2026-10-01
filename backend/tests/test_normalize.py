@@ -11,8 +11,8 @@ from pathlib import Path
 
 import pytest
 
-from factoria.agent.events import EVENT_TYPES
-from factoria.agent.normalize import StreamNormalizer
+from factoria.domain.agent.events import EVENT_TYPES
+from factoria.infrastructure.agent.normalize import StreamNormalizer
 
 FIXTURES = Path(__file__).parent / "fixtures"
 

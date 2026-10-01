@@ -13,7 +13,7 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from factoria.knowledge import store as knowledge
+from factoria.infrastructure.knowledge import store as knowledge
 
 MANIFEST = """---
 id: acme-api
@@ -351,7 +351,7 @@ def test_a_save_is_refused_while_another_writer_holds_the_base(
 ) -> None:
     """Contention is reported, not queued — a save that blocked would be a
     spinner nobody can explain."""
-    from factoria.knowledge import store as knowledge
+    from factoria.infrastructure.knowledge import store as knowledge
 
     root = seeded(client, workspace)
     was = (root / "timeline.md").read_text()
@@ -395,7 +395,8 @@ def test_saving_refreshes_what_the_next_spawn_is_told(
 ) -> None:
     """The contents list is built off the walk, so an edit here must not serve
     yesterday's table of contents."""
-    from factoria.knowledge import index, store as knowledge
+    from factoria.services.knowledge import index
+    from factoria.infrastructure.knowledge import store as knowledge
 
     root = seeded(client, workspace)
     index.forget()
@@ -469,7 +470,7 @@ def test_removing_the_last_entry_in_a_folder_takes_the_folder(
 def test_removing_is_refused_while_another_writer_holds_the_base(
     client: TestClient, workspace: Path
 ) -> None:
-    from factoria.knowledge import store as knowledge
+    from factoria.infrastructure.knowledge import store as knowledge
 
     root = seeded(client, workspace)
     lock = knowledge.base_lock("acme-api")
@@ -485,7 +486,8 @@ def test_removing_is_refused_while_another_writer_holds_the_base(
 def test_removing_refreshes_what_the_next_spawn_is_told(
     client: TestClient, workspace: Path
 ) -> None:
-    from factoria.knowledge import index, store as knowledge
+    from factoria.services.knowledge import index
+    from factoria.infrastructure.knowledge import store as knowledge
 
     root = seeded(client, workspace)
     index.forget()
@@ -501,7 +503,7 @@ def test_no_agent_can_delete_from_a_base(client: TestClient) -> None:
     """Not a refusal in the server — the capability was never built on that
     side. A machine that could delete from a source of truth could delete the
     entry that contradicts it."""
-    from factoria.knowledge import mcp
+    from factoria.infrastructure.knowledge import mcp
 
     assert "knowledge_remove" not in mcp.ALL_TOOLS
     assert not any("remove" in name for name in mcp.TOOL_SCHEMAS)
@@ -690,7 +692,7 @@ def test_editing_the_prose_refreshes_what_the_next_spawn_is_told(
     something it is no longer called."""
     seeded(client, workspace)
     root = workspace / "_knowledge" / "acme-api"
-    from factoria.knowledge import index as knowledge_index
+    from factoria.services.knowledge import index as knowledge_index
 
     base = knowledge.get_base("acme-api")
     assert "acme-api" in knowledge_index.base_block(base, root, contributes=False)

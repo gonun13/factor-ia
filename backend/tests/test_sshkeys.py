@@ -17,8 +17,8 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from factoria import config, sshkeys
-from factoria.agent import login
+from factoria.infrastructure import config, sshkeys
+from factoria.infrastructure.agent import login
 
 pytestmark = pytest.mark.skipif(
     shutil.which("ssh-keygen") is None, reason="ssh-keygen not available"
@@ -149,7 +149,7 @@ def test_no_endpoint_anywhere_returns_the_private_key(
 
 def test_a_leaked_private_key_would_be_scrubbed_on_the_way_out(agent_home: Path) -> None:
     """Belt and braces: if one ever reached a string, the scrubber catches it."""
-    from factoria.scrub import scrub_text
+    from factoria.infrastructure.scrub import scrub_text
 
     asyncio.run(sshkeys.generate())
     private = (agent_home / ".ssh" / "id_ed25519").read_text()

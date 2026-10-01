@@ -4,7 +4,7 @@ The entities, the vocabularies they vary by, and the rules that must hold of
 them. Written for whoever is deciding what a thing *is* before deciding where
 its code goes.
 
-The source of truth is `backend/factoria/models.py`, which carries the same
+The source of truth is `backend/factoria/domain/models.py`, which carries the same
 reasoning in docstrings. This file is the version you can read without opening
 Python, and it is normative: where the two disagree, the model is right and this
 file is a bug.

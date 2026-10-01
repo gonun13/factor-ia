@@ -19,7 +19,7 @@ from pathlib import Path
 
 import pytest
 
-from factoria.knowledge import mcp, store as knowledge
+from factoria.infrastructure.knowledge import mcp, store as knowledge
 
 MANIFEST = """---
 id: {id}

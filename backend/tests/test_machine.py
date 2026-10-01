@@ -15,7 +15,8 @@ from pathlib import Path
 
 import pytest
 
-from factoria import machine, skills, verdict
+from factoria.domain import machine, verdict
+from factoria.infrastructure import skills
 
 SKILL = """---
 name: kickoff

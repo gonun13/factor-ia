@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from factoria.paths import (
+from factoria.infrastructure.paths import (
     PathEscape,
     is_inside_workspace,
     is_safe_name,

@@ -15,8 +15,9 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from factoria import housekeeping, worktree
-from factoria.models import Run, RunWorktree
+from factoria.services import housekeeping
+from factoria.infrastructure import worktree
+from factoria.domain.models import Run, RunWorktree
 
 NOW = datetime(2026, 9, 22, 12, 0, tzinfo=timezone.utc)
 

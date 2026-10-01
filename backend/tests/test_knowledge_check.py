@@ -21,8 +21,8 @@ from pathlib import Path
 
 import pytest
 
-from factoria import runcheck
-from factoria.models import Codebase, Edge, Factory, Node, NodeDefinition
+from factoria.services import runcheck
+from factoria.domain.models import Codebase, Edge, Factory, Node, NodeDefinition
 
 from .test_routing import agent, belt, node, repo  # noqa: F401
 

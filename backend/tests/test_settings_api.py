@@ -12,9 +12,9 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from factoria import config
-from factoria.agent import login
-from factoria.agent.fake import FAKE_MODEL
+from factoria.infrastructure import config
+from factoria.infrastructure.agent import login
+from factoria.infrastructure.agent.fake import FAKE_MODEL
 
 STUB = Path(__file__).parent / "stub_auth_cli.py"
 CURSOR_STUB = Path(__file__).parent / "stub_cursor_cli.py"
@@ -115,7 +115,7 @@ def test_the_ssh_key_lifecycle(stubbed, client: TestClient) -> None:
 def test_a_token_shaped_detail_is_scrubbed_before_it_is_returned(
     stubbed, client: TestClient, monkeypatch
 ) -> None:
-    from factoria.agent import cli
+    from factoria.infrastructure.agent import cli
 
     async def leaky() -> cli.AccountStatus:
         return cli.AccountStatus(detail="failed with sk-ant-oat01-" + "A" * 40)
@@ -161,7 +161,7 @@ async def _refuse() -> None:
 def test_the_claude_check_never_asks_cursor(stubbed, client: TestClient, monkeypatch) -> None:
     """A hanging Cursor CLI must not hold the Claude card at *checking…* —
     which holds only if the Claude route never touches Cursor."""
-    from factoria.agent import cursor_cli
+    from factoria.infrastructure.agent import cursor_cli
 
     monkeypatch.setattr(cursor_cli, "auth_status", _refuse)
     monkeypatch.setattr(cursor_cli, "models_handshake", _refuse)
@@ -169,7 +169,7 @@ def test_the_claude_check_never_asks_cursor(stubbed, client: TestClient, monkeyp
 
 
 def test_the_cursor_check_never_asks_claude(stubbed, client: TestClient, monkeypatch) -> None:
-    from factoria.agent import cli
+    from factoria.infrastructure.agent import cli
 
     monkeypatch.setattr(cli, "auth_status", _refuse)
     monkeypatch.setattr(cli, "handshake", _refuse)
@@ -177,7 +177,7 @@ def test_the_cursor_check_never_asks_claude(stubbed, client: TestClient, monkeyp
 
 
 def test_a_provider_route_scrubs_its_detail_too(stubbed, client: TestClient, monkeypatch) -> None:
-    from factoria.agent import cursor_cli
+    from factoria.infrastructure.agent import cursor_cli
 
     async def leaky() -> cursor_cli.AccountStatus:
         return cursor_cli.AccountStatus(detail="failed with sk-ant-oat01-" + "A" * 40)

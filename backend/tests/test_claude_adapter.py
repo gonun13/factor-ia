@@ -20,9 +20,9 @@ from pathlib import Path
 
 import pytest
 
-from factoria.agent.adapter import RunConfig
-from factoria.agent import cli
-from factoria.agent.claude import ClaudeAdapter, build_argv, prompt_frame
+from factoria.domain.agent.adapter import RunConfig
+from factoria.infrastructure.agent import cli
+from factoria.infrastructure.agent.claude import ClaudeAdapter, build_argv, prompt_frame
 
 FIXTURES = Path(__file__).parent / "fixtures"
 STUB = Path(__file__).parent / "stub_cli.py"
@@ -471,8 +471,8 @@ def test_the_opt_in_makes_the_default_a_mode_that_never_asks() -> None:
     an unattended spawn is a denial of `uv run pytest`. A test that accepted any
     dangerous mode would have passed while the product was still broken.
     """
-    from factoria import config
-    from factoria.agent.adapter import default_permission_mode, resolve_permission_mode
+    from factoria.infrastructure import config
+    from factoria.domain.agent.adapter import default_permission_mode, resolve_permission_mode
 
     assert default_permission_mode(dangerous_allowed=True) == "bypassPermissions"
     assert resolve_permission_mode(None, dangerous_allowed=True) == ("bypassPermissions", True)
@@ -487,7 +487,7 @@ def test_the_opt_in_makes_the_default_a_mode_that_never_asks() -> None:
 def test_without_the_opt_in_the_default_is_unchanged() -> None:
     """A fresh clone behaves exactly as it did before `0022` — the gate closed
     is the whole of what keeps the old fail-closed policy in force."""
-    from factoria.agent.adapter import default_permission_mode, resolve_permission_mode
+    from factoria.domain.agent.adapter import default_permission_mode, resolve_permission_mode
 
     assert default_permission_mode(dangerous_allowed=False) == "acceptEdits"
     assert resolve_permission_mode(None, dangerous_allowed=False) == ("acceptEdits", False)
@@ -497,7 +497,7 @@ def test_an_unknown_mode_names_what_this_container_would_accept() -> None:
     """Failures are sentences: with the gate open the four dangerous modes are
     available, and a message that omits them sends the reader hunting a typo
     that is not there."""
-    from factoria.agent.adapter import PermissionDenied, resolve_permission_mode
+    from factoria.domain.agent.adapter import PermissionDenied, resolve_permission_mode
 
     with pytest.raises(PermissionDenied) as closed:
         resolve_permission_mode("nonsense", dangerous_allowed=False)
@@ -520,7 +520,7 @@ def test_the_permission_gate_is_imported_from_the_seam_not_a_provider() -> None:
     from pathlib import Path
 
     roots = Path(__file__).resolve().parents[1] / "factoria"
-    for rel in ("runcheck.py", "orchestrator.py"):
+    for rel in ("services/runcheck.py", "services/orchestrator.py"):
         tree = ast.parse((roots / rel).read_text())
         from_claude: set[str] = set()
         from_adapter: set[str] = set()

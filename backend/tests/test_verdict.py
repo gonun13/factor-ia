@@ -11,8 +11,8 @@ from __future__ import annotations
 
 import pytest
 
-from factoria import verdict
-from factoria.models import NodeDefinition
+from factoria.domain import verdict
+from factoria.domain.models import NodeDefinition
 
 
 def block(body: str, info: str = "json") -> str:

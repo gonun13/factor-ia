@@ -20,7 +20,7 @@ import sys
 
 import pytest
 
-from factoria.agent import proc
+from factoria.infrastructure.agent import proc
 
 
 async def _spawn(script: str) -> asyncio.subprocess.Process:

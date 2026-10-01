@@ -16,8 +16,8 @@ from pathlib import Path
 
 import pytest
 
-from factoria import gitwork, worktree
-from factoria.models import Codebase
+from factoria.infrastructure import gitwork, worktree
+from factoria.domain.models import Codebase
 
 from .conftest import git, make_git_repo
 

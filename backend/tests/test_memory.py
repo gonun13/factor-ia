@@ -12,9 +12,10 @@ from __future__ import annotations
 
 import pytest
 
-from factoria import memory, skills
-from factoria.memory import MemoryDoc, MemoryError
-from factoria.models import Node, NodeDefinition
+from factoria.services import memory
+from factoria.infrastructure import skills
+from factoria.services.memory import MemoryDoc, MemoryError
+from factoria.domain.models import Node, NodeDefinition
 
 
 def doc(**kwargs) -> MemoryDoc:
@@ -89,7 +90,7 @@ def test_a_whole_document_round_trips():
 
 
 def test_the_memory_path_is_inside_the_run_and_outside_every_worktree(tmp_path):
-    from factoria import worktree
+    from factoria.infrastructure import worktree
 
     path = memory.memory_path("run-1", "codebase-index", tmp_path)
     assert path == tmp_path / "_runs/run-1/_memory/codebase-index/codebase-index.md"

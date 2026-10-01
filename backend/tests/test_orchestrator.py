@@ -13,12 +13,12 @@ from pathlib import Path
 
 import pytest
 
-from factoria import config
-from factoria.models import Edge, Factory, Node, NodeDefinition, ProjectSettings
-from factoria.orchestrator import Orchestrator, RunBusy, RunConflict
-from factoria.runcheck import NotRunnable, run_problems, topological_order
-from factoria.runlog import RunLog, RunStore, run_dir
-from factoria.store import Store
+from factoria.infrastructure import config
+from factoria.domain.models import Edge, Factory, Node, NodeDefinition, ProjectSettings
+from factoria.services.orchestrator import Orchestrator, RunBusy, RunConflict
+from factoria.services.runcheck import NotRunnable, run_problems, topological_order
+from factoria.infrastructure.runlog import RunLog, RunStore, run_dir
+from factoria.infrastructure.store import Store
 
 from .conftest import make_git_repo
 
@@ -42,7 +42,7 @@ def graph(codebase_id: str | None = "project-a") -> tuple[list[Node], list[Edge]
 @pytest.fixture
 def factory(test_store: Store, workspace: Path) -> Factory:
     make_git_repo(workspace / "project-a")
-    from factoria.models import Project
+    from factoria.domain.models import Project
 
     test_store.create_project(Project(id="demo", name="demo"))
     loaded = test_store.get_factory("demo", "main")
@@ -346,7 +346,7 @@ def test_a_graph_that_cannot_run_is_refused_with_reasons(
 
 
 def test_run_preconditions_are_stricter_than_save_time_validation(workspace: Path) -> None:
-    from factoria.api import validate_graph
+    from factoria.infrastructure.http.api import validate_graph
 
     nodes, edges = graph(codebase_id=None)
     # Saving a half-drawn canvas is fine — that is what drawing looks like.
@@ -361,7 +361,7 @@ def test_a_cycle_is_refused_because_the_walk_is_one_pass(workspace: Path) -> Non
     edges.append(Edge(id="e3", source="n-out", target="n-agent"))
     assert topological_order(nodes, edges) is None
     looped = Factory(id="main", project_id="demo", name="main", nodes=nodes, edges=edges)
-    codebases = [__import__("factoria.models", fromlist=["Codebase"]).Codebase(
+    codebases = [__import__("factoria.domain.models", fromlist=["Codebase"]).Codebase(
         id="project-a", name="project-a", path=str(workspace / "project-a")
     )]
     assert any("loop" in problem for problem in run_problems(looped, codebases))
@@ -734,7 +734,7 @@ def _line_of_two(test_store: Store, orch: Orchestrator) -> Factory:
 
 
 def test_downstream_of_is_everything_a_node_could_reach() -> None:
-    from factoria.runcheck import downstream_of
+    from factoria.services.runcheck import downstream_of
 
     nodes = [
         Node(id=n, definition=NodeDefinition(type="agent", label=n))
@@ -869,7 +869,7 @@ def test_a_loop_does_not_drag_the_whole_factory_into_a_restart() -> None:
     "restart the tester" mean "re-run the scoping interview", which is the bug
     this exclusion fixes — measured on the factory the feature was built for.
     """
-    from factoria.runcheck import downstream_of
+    from factoria.services.runcheck import downstream_of
 
     nodes = [
         Node(id="n-in", definition=NodeDefinition(type="input", label="Request")),
@@ -906,7 +906,7 @@ def test_a_cancelled_node_is_not_replayed_as_a_verdict(
     nobody had — found by cancelling a restart mid-interview and watching the
     next restart fail at a node that had never failed.
     """
-    from factoria.orchestrator import CANCELLED, UNFINISHED
+    from factoria.services.orchestrator import CANCELLED, UNFINISHED
 
     assert CANCELLED in UNFINISHED
 
@@ -990,7 +990,7 @@ def test_a_stopped_node_is_not_replayed_as_a_verdict(
     so the detail is the only thing separating "nobody let it finish" from "it
     said no" — and replaying the second when it was the first tells a second
     walk a reviewer rejected work nobody ever judged."""
-    from factoria.orchestrator import STOPPED, UNFINISHED
+    from factoria.services.orchestrator import STOPPED, UNFINISHED
 
     assert STOPPED in UNFINISHED
 

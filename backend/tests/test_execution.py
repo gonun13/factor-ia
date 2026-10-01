@@ -21,21 +21,21 @@ from pathlib import Path
 
 import pytest
 
-from factoria import gitwork, skills, worktree
-from factoria.models import Edge, Factory, Node, NodeDefinition, Project, ProjectSettings
-from factoria.orchestrator import (
+from factoria.infrastructure import gitwork, skills, worktree
+from factoria.domain.models import Edge, Factory, Node, NodeDefinition, Project, ProjectSettings
+from factoria.services.orchestrator import (
     Orchestrator,
     adapter_for,
     adapter_name_for,
     effort_for,
     model_for,
 )
-from factoria.agent.adapter import RunConfig
-from factoria.agent.claude import build_argv
-from factoria.agent.fake import FakeAdapter
-from factoria.runcheck import NotRunnable, run_problems
-from factoria.runlog import RunLog, run_dir
-from factoria.store import Store
+from factoria.domain.agent.adapter import RunConfig
+from factoria.infrastructure.agent.claude import build_argv
+from factoria.infrastructure.agent.fake import FakeAdapter
+from factoria.services.runcheck import NotRunnable, run_problems
+from factoria.infrastructure.runlog import RunLog, run_dir
+from factoria.infrastructure.store import Store
 
 from .conftest import git, make_git_repo
 
@@ -307,8 +307,8 @@ def test_a_run_that_changed_nothing_fails_rather_than_ticking_green(
     # The fake's writes are turned off through the adapter rather than through
     # node config: `write_files` is a property of the fake, not a knob a factory
     # gets to set.
-    from factoria import orchestrator as orch_module
-    from factoria.agent.fake import FakeAdapter
+    from factoria.services import orchestrator as orch_module
+    from factoria.infrastructure.agent.fake import FakeAdapter
 
     original = orch_module.adapter_for
     orch_module.adapter_for = lambda node, settings=None, *, lap=1: FakeAdapter(

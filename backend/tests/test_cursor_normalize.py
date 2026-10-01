@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from factoria.agent.cursor_normalize import CursorStreamNormalizer
+from factoria.infrastructure.agent.cursor_normalize import CursorStreamNormalizer
 
 
 def types_of(events) -> list[str]:

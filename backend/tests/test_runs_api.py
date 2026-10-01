@@ -25,9 +25,9 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from factoria.orchestrator import get_orchestrator
-from factoria.runlog import RunLog, run_dir
-from factoria.runs_api import _stream
+from factoria.services.orchestrator import get_orchestrator
+from factoria.infrastructure.runlog import RunLog, run_dir
+from factoria.infrastructure.http.runs_api import _stream
 
 from .conftest import make_git_repo
 
@@ -824,8 +824,8 @@ def _stored_run(run_id: str, *, status: str, days_ago: int) -> None:
     so a record is all a route test needs."""
     from datetime import timedelta
 
-    from factoria.models import Run, utcnow
-    from factoria.runlog import RunStore
+    from factoria.domain.models import Run, utcnow
+    from factoria.infrastructure.runlog import RunStore
 
     when = utcnow() - timedelta(days=days_ago)
     RunStore().write(

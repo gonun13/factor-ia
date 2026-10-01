@@ -6,7 +6,7 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from factoria import skills
+from factoria.infrastructure import skills
 
 from tests.test_skills import TEMPLATE, write
 
@@ -97,7 +97,7 @@ def test_a_traversing_name_never_leaves_the_workspace(
 def test_an_oversized_import_is_refused_by_the_schema(client: TestClient, workspace: Path) -> None:
     """Capped in the model as well as in `skills.validate`, so the handler
     never holds a body larger than one it would refuse anyway."""
-    from factoria.skills import SKILL_MAX_BYTES
+    from factoria.infrastructure.skills import SKILL_MAX_BYTES
 
     response = client.post("/api/skills", json={"text": "x" * (SKILL_MAX_BYTES + 1)})
     assert response.status_code == 422

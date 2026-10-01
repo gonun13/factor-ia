@@ -9,12 +9,10 @@ def test_graph_validation_does_not_load_the_rest_layer():
     # validation itself pulled in routing or its framework.
     script = """
 import sys
-import factoria.runcheck
+import factoria.services.runcheck
 
 rest_modules = (
-    "fastapi", "starlette", "factoria.api", "factoria.main",
-    "factoria.runs_api", "factoria.settings_api", "factoria.skills_api",
-    "factoria.knowledge_api",
+    "fastapi", "starlette", "factoria.main", "factoria.infrastructure.http",
 )
 loaded = sorted(
     name for name in sys.modules
@@ -31,4 +29,38 @@ assert not loaded, "Graph validation loaded the REST layer: " + ", ".join(loaded
     assert result.returncode == 0, (
         "Graph validation must load without REST routing, FastAPI or Starlette "
         "(spec/architecture.md, The API).\n" + result.stderr
+    )
+
+
+def test_the_domain_imports_nothing_outside_itself():
+    # Read, not imported: a lazy import inside a function is a dependency too,
+    # and only the source shows one that no test happens to execute.
+    import ast
+    from pathlib import Path
+
+    package = Path(__file__).resolve().parents[1] / "factoria"
+    framework = ("fastapi", "starlette", "uvicorn")
+    reached: list[str] = []
+    for path in sorted((package / "domain").rglob("*.py")):
+        here = ".".join(path.relative_to(package.parent).with_suffix("").parts)
+        anchor = here.split(".")[:-1]  # the package a relative import starts from
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if isinstance(node, ast.ImportFrom) and node.level:
+                base = anchor[: len(anchor) - (node.level - 1)]
+                targets = [".".join(base + ([node.module] if node.module else []))]
+            elif isinstance(node, ast.ImportFrom):
+                targets = [node.module or ""]
+            elif isinstance(node, ast.Import):
+                targets = [alias.name for alias in node.names]
+            else:
+                continue
+            for target in targets:
+                outside = target.startswith("factoria") and not target.startswith(
+                    "factoria.domain"
+                )
+                if outside or target.split(".")[0] in framework:
+                    reached.append(f"{here} imports {target}")
+    assert not reached, (
+        "The domain must not reach a service, infrastructure or the web framework "
+        "(spec/architecture.md, Layout):\n" + "\n".join(reached)
     )

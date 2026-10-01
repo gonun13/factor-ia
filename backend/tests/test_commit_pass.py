@@ -18,14 +18,15 @@ from pathlib import Path
 
 import pytest
 
-from factoria import commit_pass, orchestrator as orchestrator_module, skills, worktree
-from factoria.agent import events as ev
-from factoria.agent import fake
-from factoria.agent.fake import FAKE_COMMIT_BODY, FAKE_COMMIT_SUBJECT, NARRATION
-from factoria.models import Edge, Factory, Node, NodeDefinition, Project
-from factoria.orchestrator import Orchestrator
-from factoria.skills import SkillError
-from factoria.store import Store
+from factoria.services import commit_pass, orchestrator as orchestrator_module
+from factoria.infrastructure import skills, worktree
+from factoria.domain.agent import events as ev
+from factoria.infrastructure.agent import fake
+from factoria.infrastructure.agent.fake import FAKE_COMMIT_BODY, FAKE_COMMIT_SUBJECT, NARRATION
+from factoria.domain.models import Edge, Factory, Node, NodeDefinition, Project
+from factoria.services.orchestrator import Orchestrator
+from factoria.infrastructure.skills import SkillError
+from factoria.infrastructure.store import Store
 
 from .conftest import git, make_git_repo
 

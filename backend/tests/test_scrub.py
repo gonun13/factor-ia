@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from factoria.scrub import contains_secret, scrub_text, scrub_value
+from factoria.infrastructure.scrub import contains_secret, scrub_text, scrub_value
 
 SECRETS = [
     ("sk-ant-oat01-" + "A" * 40, "anthropic-key"),
@@ -66,7 +66,7 @@ def test_structure_is_preserved_so_a_scrubbed_event_still_renders() -> None:
 
 def test_an_event_model_round_trips_through_the_scrubber() -> None:
     """The shape stage 5 will use: dump, scrub, write."""
-    from factoria.agent import events as ev
+    from factoria.domain.agent import events as ev
 
     event = ev.ToolEnd(
         session_id="s1", tool_use_id="t1", output="token=sk-ant-oat01-" + "Z" * 40
@@ -84,7 +84,7 @@ def test_a_secret_inside_what_arrived_is_redacted_like_any_other_text() -> None:
     `scrub_value` recurses into the nested `parts` list, and the structure
     survives so the pane still renders.
     """
-    from factoria.runevents import IncomingPart, RunIncomingEvent
+    from factoria.domain.runevents import IncomingPart, RunIncomingEvent
 
     event = RunIncomingEvent(
         run_id="run-1",

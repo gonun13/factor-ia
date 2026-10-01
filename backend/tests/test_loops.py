@@ -19,11 +19,12 @@ from pathlib import Path
 
 import pytest
 
-from factoria import runcheck, verdict
-from factoria.models import Edge, Factory, Node, RunDecision
-from factoria.orchestrator import Orchestrator, RunConflict
-from factoria.runlog import RunLog
-from factoria.store import Store
+from factoria.services import runcheck
+from factoria.domain import verdict
+from factoria.domain.models import Edge, Factory, Node, RunDecision
+from factoria.services.orchestrator import Orchestrator, RunConflict
+from factoria.infrastructure.runlog import RunLog
+from factoria.infrastructure.store import Store
 
 from .test_human import _parked
 from .test_routing import agent, belt, drive, node, project, repo, orch, save, statuses  # noqa: F401
@@ -370,7 +371,7 @@ def test_a_reviewer_looping_back_to_itself_is_still_refused_at_save_time(
     Refused by `validate_graph` since long before loops existed, and now
     genuinely load-bearing rather than merely tidy.
     """
-    from factoria.api import validate_graph
+    from factoria.infrastructure.http.api import validate_graph
 
     nodes = [node("n-in", "input"), reviewer("n-review"), node("n-out", "output")]
     edges = [belt("n-review", "n-review", "fail")]
@@ -460,7 +461,7 @@ def test_a_node_is_handed_each_predecessor_once(
     check runs in a thread before the walk, and `main.json` is a file a person
     edits. Waiving that one problem is how the test stands in that window.
     """
-    from factoria import runcheck as runcheck_module
+    from factoria.services import runcheck as runcheck_module
 
     original = runcheck_module.run_problems
     monkeypatch.setattr(
@@ -468,7 +469,7 @@ def test_a_node_is_handed_each_predecessor_once(
         "run_problems",
         lambda *a, **k: [p for p in original(*a, **k) if "the same thing twice" not in p],
     )
-    from factoria.agent.fake import FakeAdapter
+    from factoria.infrastructure.agent.fake import FakeAdapter
 
     prompts: list[str] = []
     create_run = FakeAdapter.create_run

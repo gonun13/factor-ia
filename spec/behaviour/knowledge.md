@@ -116,7 +116,7 @@ Both are easy to add later and hard to remove once something depends on them.
 ```
 
 A top-level directory beside `_skills/` and `_factories/`, and the bargain is
-`_skills`' bargain, copied deliberately (`backend/factoria/skills.py`):
+`_skills`' bargain, copied deliberately (`backend/factoria/infrastructure/skills.py`):
 
 - **They belong to nothing.** Not to a project, not to a factory, not to an
   agent. A base is created before any project can select it, and deleting a
@@ -208,7 +208,7 @@ is a reasonable answer for a cache and a dishonest one for a source of truth.
 **Managing them** is the skills library's screen and the skills library's API:
 a column on the projects list (beside `frontend/src/screens/ProjectList.tsx`'s
 `skills-section`), served by a fifth router `/api/knowledge` modelled on
-`backend/factoria/skills_api.py` — `POST` to create or import, `DELETE` to
+`backend/factoria/infrastructure/http/skills_api.py` — `POST` to create or import, `DELETE` to
 remove, and nothing fetches a URL.
 
 **No `PUT` on a base, and a `PATCH`.** A base's *identity* — its id, its
@@ -314,7 +314,7 @@ has nowhere to land and cannot be drawn in the first place. Read-only is the
 absence of a drop target rather than a rule somebody has to read.
 
 They follow the `success`/`fail` precedent for everything else — named handles
-in `Edge.source_handle` / `Edge.target_handle` (`backend/factoria/models.py`),
+in `Edge.source_handle` / `Edge.target_handle` (`backend/factoria/domain/models.py`),
 differentiated by colour and side in `nodes.css`, described by a `title=`
 attribute so the description shows on hover and on `:focus-within` and never
 otherwise (commit `9207d6f`). The name rides whichever end the *base* is:
@@ -368,7 +368,7 @@ if it had been dropped off the canvas instead.
 
 This is the section the rest of the document exists for, and it is new ground:
 **factor-ia does not speak MCP today.** The CLI reports `mcp_servers` on
-`session.init` (`backend/factoria/agent/events.py`) and that is the extent of it.
+`session.init` (`backend/factoria/domain/agent/events.py`) and that is the extent of it.
 
 Memory is delivered as a path plus `--add-dir`, which is right for a scratch file
 written whole by one process. It is wrong here. A base is a shared, permanent,
@@ -378,7 +378,7 @@ rules in a prompt, which is where rules go to be ignored.
 
 ### One server, many bases
 
-A single stdio server (`backend/factoria/knowledge/mcp.py`), spawned per run and
+A single stdio server (`backend/factoria/infrastructure/knowledge/mcp.py`), spawned per run and
 handed only the bases that run's nodes were wired to, with each base's
 permissions attached. Every tool takes a `base` argument; **a base this node was
 not wired to is not addressable**, and the server — not the prompt — is what says
@@ -437,7 +437,7 @@ returned half a base would be read as the whole of it.
 
 ### The adapter seam
 
-`KnowledgeAdapter` is a Protocol in the style of `backend/factoria/agent/adapter.py`:
+`KnowledgeAdapter` is a Protocol in the style of `backend/factoria/domain/agent/adapter.py`:
 `list`, `search`, `get`, `append`, `update`, `index`, `remove`. The last two are
 **not tools**: `index` is what the system prompt's contents list is built from,
 and `remove` is the library's delete. `remove` is on the seam rather than an
@@ -652,7 +652,7 @@ The handles on the canvas are a claim about what a machine may do. The thing tha
 
 Where the container carries no dangerous-permissions opt-in the default mode is
 `acceptEdits`, and under it a tool that asks is denied, because nobody is home
-to answer (`backend/factoria/agent/claude.py`). With the opt-in the default is
+to answer (`backend/factoria/infrastructure/agent/claude.py`). With the opt-in the default is
 `bypassPermissions` and nothing asks at all ([`decisions/0022`](../decisions/0022-commands-do-not-ask-inside-the-container.md)),
 which makes the grant below redundant but never wrong — it is passed either
 way, so a base's permissions do not depend on how the container was started.
@@ -679,7 +679,7 @@ call being made, the grant stops a call that was made anyway, and the server is
 the one that has the last word. **The server is authoritative.** If they ever
 disagree, the flag is the bug.
 
-This means `RunConfig` (`backend/factoria/agent/adapter.py`) gains `mcp_servers`,
+This means `RunConfig` (`backend/factoria/domain/agent/adapter.py`) gains `mcp_servers`,
 `allowed_tools` and `disallowed_tools`, and they are **orchestrator policy, never
 node config** — for the identical reason `add_dirs` is. A node that could name
 its own allowed tools would be the hole every other boundary exists to close.
@@ -827,7 +827,7 @@ and gets no card on the timeline.
 
 | | |
 |---|---|
-| The base, the manifest, the budgets | `backend/factoria/knowledge/store.py` |
+| The base, the manifest, the budgets | `backend/factoria/infrastructure/knowledge/store.py` |
 | The adapter Protocol, and the markdown one | `knowledge/adapter.py`, `knowledge/markdown.py` |
 | The index block, the filing contract and the cache | `knowledge/index.py` |
 | Where a filed answer lands, and what it looks like | `knowledge/filing.py` |
@@ -841,7 +841,7 @@ and gets no card on the timeline.
 | The registry, the seed, the protections | `store.SYSTEM_BASES`, `store.ensure_system_bases`, `store.system_files`, `store.KnowledgeProtected` |
 | Where the agent is sent first | `knowledge/index._manifest_line`, `MarkdownAdapter._resolve(writing=True)` |
 | The MCP server and its five tools | `knowledge/mcp.py` |
-| The library API — create and delete a base, save and delete one entry | `backend/factoria/knowledge_api.py`, a fifth router in `main.py` |
+| The library API — create and delete a base, save and delete one entry | `backend/factoria/infrastructure/http/knowledge_api.py`, a fifth router in `main.py` |
 | What both writing verbs may reach | `knowledge_api._content_entry` |
 | The manifest form, and what it cannot express | `knowledge_api.edit_base`, `store.save_manifest` |
 | The form itself | `ProjectList.KnowledgeEditor`'s `.manifest-form`, `api.editKnowledgeBase` |
